@@ -1,0 +1,7 @@
+{
+  "models": {
+    "supporter": "llama3.1:8b",
+    "critic": "gpt-oss:20b",
+    "judge": "llama3.1:8b"
+  }
+}
