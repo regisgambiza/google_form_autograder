@@ -1,4 +1,5 @@
 import json
+import sys
 from form_utils import get_form_structure
 from response_utils import get_responses
 from ai_evaluator import evaluate_answers
@@ -9,18 +10,14 @@ from logger import log
 def extract_form_id(form_url):
     """Extract form ID from a Google Form URL."""
     try:
-        # Handle /d/ (edit form) and /d/e/ (published form) formats
         if "/d/" in form_url:
             form_id = form_url.split("/d/")[1].split("/")[0]
         elif "/d/e/" in form_url:
             form_id = form_url.split("/d/e/")[1].split("/")[0]
         else:
             raise ValueError("URL does not contain '/d/' or '/d/e/'")
-
-        # Log a warning if the URL is not in published form format
         if not form_url.endswith("/viewform"):
             log("WARNING", f"Form URL {form_url} does not end with '/viewform'. Using form ID {form_id}.")
-        
         return form_id
     except IndexError:
         raise ValueError("Invalid URL format: could not extract form ID")
@@ -28,32 +25,30 @@ def extract_form_id(form_url):
         raise ValueError(f"Error extracting form ID: {str(e)}")
 
 def main():
-    # Load the JSON file containing form URLs
+    log("INFO", "Starting script execution...")
     try:
         with open("forms_to_grade.json") as f:
             forms_data = json.load(f)
-        form_urls = forms_data.get("forms", [])
+        form_urls = list(set(forms_data.get("forms", [])))  # Deduplicate URLs
         if not form_urls:
             log("ERROR", "No forms found in forms_to_grade.json. Exiting.")
-            return
-        log("INFO", f"Found {len(form_urls)} forms to process: {form_urls}")
+            sys.exit(1)
+        log("INFO", f"Found {len(form_urls)} unique forms to process: {form_urls}")
     except FileNotFoundError:
         log("ERROR", "forms_to_grade.json not found in project directory. Exiting.")
-        return
+        sys.exit(1)
     except json.JSONDecodeError as e:
         log("ERROR", f"Failed to parse forms_to_grade.json: {e}. Exiting.")
-        return
+        sys.exit(1)
 
     service = get_service()
 
-    # Process each form one at a time
     for form_url in form_urls:
         try:
             form_id = extract_form_id(form_url)
             log("INFO", f"Processing form ID: {form_id} from URL: {form_url}")
 
             form_structure = get_form_structure(service, form_id)
-
             if not form_structure:
                 log("ERROR", f"No text questions found in form {form_id}. Skipping.")
                 continue
@@ -62,7 +57,6 @@ def main():
             for q in form_structure:
                 log("DEBUG", f"Q{q['index']} type = {q['type']}, questionId = {q['questionId']}")
 
-            # Get unique question types (only SHORT_ANSWER and LONG_ANSWER)
             selected_types = sorted(set(q["type"] for q in form_structure))
             log("INFO", f"Automatically processing all question types: {selected_types}")
 
@@ -75,7 +69,6 @@ def main():
                 update_correct_answers(service, form_id, q["itemId"], correct_answers, q["index"])
 
             log("INFO", f"Finished processing form {form_id} successfully.")
-
         except ValueError as e:
             log("ERROR", f"Error processing form {form_url}: {str(e)}. Skipping to next form.")
             continue
@@ -83,7 +76,9 @@ def main():
             log("ERROR", f"Unexpected error processing form {form_url}: {str(e)}. Skipping to next form.")
             continue
 
-    log("INFO", "All forms processed successfully.")
+    log("INFO", "All forms processed successfully. Script execution complete.")
+    sys.exit(0)
 
 if __name__ == "__main__":
+    log("INFO", "Script invoked as main program.")
     main()
