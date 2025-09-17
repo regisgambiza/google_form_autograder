@@ -60,15 +60,29 @@ def main():
             selected_types = sorted(set(q["type"] for q in form_structure))
             log("INFO", f"Automatically processing all question types: {selected_types}")
 
+            form_duplicates = []  # collect all duplicates for this form
+
             for q in form_structure:
                 if q["type"] not in selected_types:
                     continue
                 log("INFO", f"Processing Q{q['index']} ({q['type']}), Item ID={q['itemId']}, Question ID={q['questionId']}")
                 responses = get_responses(service, form_id, q["questionId"])
                 correct_answers = evaluate_answers(q, responses)
-                update_correct_answers(service, form_id, q["itemId"], correct_answers, q["index"])
+                log("DEBUG", f"Correct answers from evaluate_answers for QID {q['questionId']}: {correct_answers}")
+                
+                if not correct_answers:
+                    log("INFO", f"No correct answers returned for Q{q['index']} "
+                                f"(QID {q['questionId']}), skipping update_correct_answers.")
+                    continue
 
+                duplicates = update_correct_answers(service, form_id, q["itemId"], correct_answers, q["index"])
+                if duplicates:
+                    form_duplicates.extend(duplicates)
+
+            # Print the whole list of duplicates for this form
             log("INFO", f"Finished processing form {form_id} successfully.")
+            print(f"\n=== Duplicate answers across form {form_id}: {form_duplicates} ===\n")
+
         except ValueError as e:
             log("ERROR", f"Error processing form {form_url}: {str(e)}. Skipping to next form.")
             continue

@@ -43,17 +43,12 @@ def clean_expr(expr: str) -> str:
     if not expr:
         return ""
     expr = str(expr)
-    # Normalize unicode multiplication and spaces
     expr = expr.replace("×", "*").replace("·", "*")
     expr = expr.replace(" ", "")
-    # Normalize case
     expr = expr.lower()
-    # Insert * between number and variable (e.g., 2x -> 2*x)
-    expr = re.sub(r'(\\d)([a-z])', r'\\1*\\2', expr)
-    # Insert * between closing paren and variable or number, e.g. (x+1)2 -> (x+1)*2
-    expr = re.sub(r'(\\))([0-9a-z])', r'\\1*\\2', expr)
+    expr = re.sub(r'(\d)([a-z])', r'\1*\2', expr)
+    expr = re.sub(r'(\))([0-9a-z])', r'\1*\2', expr)
     return expr.strip()
-
 
 def algebra_equal(a, b):
     try:
@@ -92,12 +87,10 @@ DO NOT return fewer or more than {len(answers)} decisions.
             text = response['message']['content']
             text = ''.join(c for c in text if unicodedata.category(c)[0] != 'C').strip()
             
-            # Parse JSON response
             decisions = json.loads(text)
             if not isinstance(decisions, list):
                 raise ValueError("Model response is not a list")
 
-            # Fix length mismatch gracefully
             if len(decisions) < len(answers):
                 log("WARNING", f"Model {model} returned {len(decisions)} decisions, expected {len(answers)}. Padding with NO.")
                 while len(decisions) < len(answers):
@@ -137,13 +130,25 @@ def evaluate_answers_batch(question, responses):
     if not responses:
         return []
 
+    # Filter out low-quality answers (e.g., too short or non-meaningful)
+    filtered_out = [ans for ans in responses if not (len(str(ans).strip()) > 2 and str(ans).strip().lower() not in ["idk", "k"])]
+    filtered_responses = [ans for ans in responses if ans not in filtered_out]
+
+    log("DEBUG", f"Filtered out {len(filtered_out)} low-quality answers: {filtered_out}")
+    log("DEBUG", f"Remaining after filter: {len(filtered_responses)}")
+
     # Deduplicate answers but keep first occurrence order
     seen = set()
     unique_answers = []
-    for ans in responses:
+    duplicates = []
+    for ans in filtered_responses:
         if ans not in seen:
             seen.add(ans)
             unique_answers.append(ans)
+        else:
+            duplicates.append(ans)
+
+    log("DEBUG", f"Duplicates {len(duplicates)} {duplicates}")
 
     answer_map = {str(i): ans for i, ans in enumerate(unique_answers, 1)}
     log("DEBUG", f"Processing {len(unique_answers)} unique answers in batch")
@@ -166,12 +171,11 @@ def evaluate_answers_batch(question, responses):
     log("DEBUG", f"Split {len(unique_answers)} answers into {len(answer_batches)} batches")
 
     # Get votes for all answers from each model
-    all_votes = [[] for _ in unique_answers]  # List to store votes for each answer
+    all_votes = [[] for _ in unique_answers]
     for batch_idx, answer_batch in enumerate(answer_batches):
         log("DEBUG", f"Processing batch {batch_idx + 1}/{len(answer_batches)} with {len(answer_batch)} answers")
         for model in judges:
             votes = get_model_vote(model, question, answer_batch, LENIENCY)
-            # Map batch votes to overall answer indices
             batch_start_idx = batch_idx * BATCH_SIZE_LIMIT
             for i, vote in enumerate(votes):
                 all_votes[batch_start_idx + i].append(vote)
@@ -181,14 +185,12 @@ def evaluate_answers_batch(question, responses):
         ans_num = parse_number_if_possible(ans)
         log("DEBUG", f"Checking answer {idx} ({ans}) parsed_num={ans_num}")
 
-        # Collect votes for this answer
         votes = all_votes[int(idx)-1]
         vote_decisions = [v[0] for v in votes]
         yes_count = vote_decisions.count("YES")
         n_judges = len(judges)
         log("DEBUG", f"Opinions for {idx} ({ans}): {vote_decisions}")
 
-        # Local similarity
         local_similarity = 0.0
         if expected_raw is not None:
             if expected_num is not None and ans_num is not None:
@@ -201,13 +203,11 @@ def evaluate_answers_batch(question, responses):
             else:
                 local_similarity = normalized_similarity(ans_norm, expected_norm)
             
-            # Algebraic equivalence check
             if algebra_equal(ans, expected_raw):
                 local_similarity = 1.0
 
             log("DEBUG", f"Local similarity (vs expected): {local_similarity:.3f}")
 
-        # Numeric veto
         numeric_veto = False
         if expected_num is not None and ans_num is not None:
             abs_diff = abs(ans_num - expected_num)
@@ -215,7 +215,6 @@ def evaluate_answers_batch(question, responses):
                 numeric_veto = True
                 log("DEBUG", f"Numeric veto triggered for {idx} ({ans}): diff={abs_diff}")
 
-        # Decision
         decision = False
         if LENIENCY == "extreme":
             decision = yes_count >= 1 or local_similarity >= SIMILARITY_ACCEPT_THRESH["extreme"]
