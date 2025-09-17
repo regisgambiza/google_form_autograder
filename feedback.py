@@ -2,6 +2,11 @@ import os
 import json
 from datetime import datetime
 from logger import log
+import re
+
+def sanitize_filename(name: str) -> str:
+    """Remove illegal characters so the title can be safely used as a filename."""
+    return re.sub(r'[\\/*?:"<>|]', "", name).strip()
 import ollama
 
 # Load config for models
@@ -73,7 +78,7 @@ def generate_question_feedback(question, responses, correct_answers):
 
 
 
-def generate_form_feedback(form_id, form_questions):
+def generate_form_feedback(form_id, form_title, form_questions):
     """
     Generate a concise, learner-focused feedback report.
     Shows question, description, a single canonical correct answer, and a step-by-step explanation from Ollama.
@@ -84,8 +89,10 @@ def generate_form_feedback(form_id, form_questions):
     if not os.path.exists(feedback_dir):
         os.makedirs(feedback_dir)
         log("INFO", "Created Feedback directory.")
-    
-    report_filename = f"feedback_form_{form_id}.md"
+
+    safe_title = sanitize_filename(form_title)
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    report_filename = f"{safe_title}_{timestamp}.md"
     report_path = os.path.join(feedback_dir, report_filename)
     
     content = ""

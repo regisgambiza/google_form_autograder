@@ -76,7 +76,16 @@ def main():
                     "responses": responses,
                     "correct_answers": correct_answers
                 }]
-                report_path = generate_form_feedback(form_id, question_data)
+                # Fetch form title for filename
+                form_title = None
+                try:
+                    form_data = service.forms().get(formId=form_id).execute()
+                    form_title = form_data.get("info", {}).get("title", f"feedback_form_{form_id}")
+                except Exception as e:
+                    log("WARNING", f"Could not fetch form title for {form_id}: {e}")
+                    form_title = f"feedback_form_{form_id}"
+
+                report_path = generate_form_feedback(form_id, form_title, question_data)
                 if report_path:
                     log("INFO", f"Feedback report for Q{q['index']} generated at {report_path}")
                 else:
