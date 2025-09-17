@@ -6,6 +6,7 @@ from ai_evaluator import evaluate_answers
 from updater import update_correct_answers
 from auth import get_service
 from logger import log
+from feedback import generate_form_feedback
 
 def extract_form_id(form_url):
     """Extract form ID from a Google Form URL."""
@@ -69,14 +70,26 @@ def main():
                 correct_answers = evaluate_answers(q, responses)
                 log("DEBUG", f"Correct answers from evaluate_answers for QID {q['questionId']}: {correct_answers}")
                 
-                if not correct_answers:
+                # Generate feedback report for this question
+                question_data = [{
+                    "question": q,
+                    "responses": responses,
+                    "correct_answers": correct_answers
+                }]
+                report_path = generate_form_feedback(form_id, question_data)
+                if report_path:
+                    log("INFO", f"Feedback report for Q{q['index']} generated at {report_path}")
+                else:
+                    log("ERROR", f"Failed to generate feedback report for Q{q['index']} in form {form_id}")
+
+                # Update correct answers (even if empty, feedback is generated above)
+                if correct_answers:
+                    duplicates = update_correct_answers(service, form_id, q["itemId"], correct_answers, q["index"])
+                    if duplicates:
+                        form_duplicates.extend(duplicates)
+                else:
                     log("INFO", f"No correct answers returned for Q{q['index']} "
                                 f"(QID {q['questionId']}), skipping update_correct_answers.")
-                    continue
-
-                duplicates = update_correct_answers(service, form_id, q["itemId"], correct_answers, q["index"])
-                if duplicates:
-                    form_duplicates.extend(duplicates)
 
             # Print the whole list of duplicates for this form
             log("INFO", f"Finished processing form {form_id} successfully.")
