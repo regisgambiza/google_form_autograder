@@ -9,7 +9,10 @@ with open("config.json") as f:
     config = json.load(f)
 
 MODELS = config["models"]
-FEEDBACK_MODEL = MODELS.get("feedback", "llama3.1")  # Default to llama3.1 or first judge model if not specified
+FEEDBACK_MODEL = MODELS.get("judge", "gpt-oss:20b")
+if isinstance(FEEDBACK_MODEL, list):
+    FEEDBACK_MODEL = FEEDBACK_MODEL[0]
+
 
 def generate_question_feedback(question, responses, correct_answers):
     """
@@ -17,19 +20,20 @@ def generate_question_feedback(question, responses, correct_answers):
     Returns a markdown-formatted string.
     """
     log("DEBUG", f"Generating feedback for Q{question.get('index', '?')}")
-    
+
     if not responses:
         return "## No Responses\nNo responses collected for this question."
-    
-    # Prepare data summary
+
+    # Prepare response summary
     num_responses = len(responses)
     num_correct = len(correct_answers) if correct_answers else 0
     unique_responses = list(set(responses))
     response_counts = {ans: responses.count(ans) for ans in unique_responses}
-    
     correct_str = ", ".join(correct_answers) if correct_answers else "No correct answers identified"
-    responses_str = "\n".join([f"- {ans} ({count} responses)" for ans, count in sorted(response_counts.items(), key=lambda x: x[1], reverse=True)])
-    
+    responses_str = "\n".join(
+        [f"- {ans} ({count} responses)" for ans, count in sorted(response_counts.items(), key=lambda x: x[1], reverse=True)]
+    )
+
     prompt = f"""
 Question: {question.get('title', 'Untitled')}
 Description: {question.get('description', 'N/A')}
@@ -48,14 +52,26 @@ Generate helpful, encouraging feedback for learners. Focus on:
 Keep it concise (200-300 words), engaging, and suitable for students.
 Format as markdown with headings: ## Key Concepts, ## Common Challenges, ## Tips to Improve, ## Keep Going!
 """
-    
+
     try:
         response = ollama.chat(model=FEEDBACK_MODEL, messages=[{"role": "user", "content": prompt}])
-        feedback = response['message']['content'].strip()
-        # Clean up any non-printable chars
+
+        # Some Ollama versions return 'message', others stream chunks in 'messages'
+        feedback = None
+        if "message" in response and "content" in response["message"]:
+            feedback = response["message"]["content"]
+        elif "messages" in response and isinstance(response["messages"], list):
+            # take last message
+            feedback = response["messages"][-1].get("content", "")
+        else:
+            log("ERROR", f"Unexpected Ollama response format: {response}")
+            return f"## Feedback Generation Error\nOllama returned unexpected format.\n\n**Correct Answers:** {correct_str}\n\n**Responses:**\n{responses_str}"
+
+        feedback = feedback.strip()
         feedback = ''.join(c for c in feedback if c.isprintable() or c in '\n\t')
         log("DEBUG", f"Feedback generated successfully for Q{question.get('index', '?')}")
         return feedback
+
     except Exception as e:
         log("ERROR", f"Failed to generate feedback for Q{question.get('index', '?')}: {e}")
         return f"## Feedback Generation Error\nUnable to generate AI feedback. Please review responses manually.\n\n**Correct Answers:** {correct_str}\n\n**Responses:**\n{responses_str}"
