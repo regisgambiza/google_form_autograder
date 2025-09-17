@@ -130,9 +130,49 @@ def evaluate_answers_batch(question, responses):
     if not responses:
         return []
 
-    # Filter out low-quality answers (e.g., too short or non-meaningful)
-    filtered_out = [ans for ans in responses if not (len(str(ans).strip()) > 2 and str(ans).strip().lower() not in ["idk", "k"])]
-    filtered_responses = [ans for ans in responses if ans not in filtered_out]
+    # Define low-quality answers to filter out (non-mathematical)
+    low_quality_answers = {"idk", "k", "n/a", "na", "none", ""}
+
+    # Get expected answer for context, if available
+    expected_raw = question.get("expected", None)
+    expected_norm = normalize_text(expected_raw) if expected_raw is not None else None
+    expected_num = parse_number_if_possible(expected_raw) if expected_raw is not None else None
+
+    # Define valid short mathematical answers (extend as needed)
+    valid_math_terms = {
+        "x", "y", "z", "a", "b", "c",  # Common variables
+        "pi", "e", "i",  # Mathematical constants
+        "sin", "cos", "tan", "log", "ln"  # Common functions
+    }
+
+    # Filter out low-quality answers but preserve short mathematical answers
+    filtered_out = []
+    filtered_responses = []
+    for ans in responses:
+        ans_str = str(ans).strip()
+        ans_norm = normalize_text(ans_str)
+        ans_len = len(ans_str)
+
+        # Skip empty answers or explicitly low-quality answers
+        if ans_len == 0 or ans_norm in low_quality_answers:
+            filtered_out.append(ans)
+            continue
+
+        # Allow short answers if they are:
+        # 1. Numeric (e.g., "42", "0", "-1")
+        # 2. Common mathematical terms (e.g., "x", "pi")
+        # 3. Similar to the expected answer (if provided)
+        is_numeric = parse_number_if_possible(ans_str) is not None
+        is_math_term = ans_norm in valid_math_terms
+        is_similar_to_expected = (
+            expected_norm is not None and
+            normalized_similarity(ans_norm, expected_norm) >= SIMILARITY_ACCEPT_THRESH[LENIENCY]
+        ) if expected_norm else False
+
+        if ans_len <= 2 and not (is_numeric or is_math_term or is_similar_to_expected):
+            filtered_out.append(ans)
+        else:
+            filtered_responses.append(ans)
 
     log("DEBUG", f"Filtered out {len(filtered_out)} low-quality answers: {filtered_out}")
     log("DEBUG", f"Remaining after filter: {len(filtered_responses)}")
