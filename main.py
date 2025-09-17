@@ -33,7 +33,6 @@ def main():
         if not form_urls:
             log("ERROR", "No forms found in forms_to_grade.json. Exiting.")
             sys.exit(1)
-        log("INFO", f"Found {len(form_urls)} unique forms to process: {form_urls}")
     except FileNotFoundError:
         log("ERROR", "forms_to_grade.json not found in project directory. Exiting.")
         sys.exit(1)

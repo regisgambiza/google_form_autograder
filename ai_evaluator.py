@@ -126,56 +126,12 @@ DO NOT return fewer or more than {len(answers)} decisions.
 # --- Main evaluator ---
 
 def evaluate_answers_batch(question, responses):
-    log("DEBUG", f"Evaluating Q{question.get('index','?')} with leniency={LENIENCY} and judges={MODELS['judge']}")
+    log("DEBUG", f"Evaluating Q{question.get('index','?')} (leniency={LENIENCY})")
     if not responses:
         return []
 
-    # Define low-quality answers to filter out (non-mathematical)
-    low_quality_answers = {"idk", "k", "n/a", "na", "none", ""}
-
-    # Get expected answer for context, if available
-    expected_raw = question.get("expected", None)
-    expected_norm = normalize_text(expected_raw) if expected_raw is not None else None
-    expected_num = parse_number_if_possible(expected_raw) if expected_raw is not None else None
-
-    # Define valid short mathematical answers (extend as needed)
-    valid_math_terms = {
-        "x", "y", "z", "a", "b", "c",  # Common variables
-        "pi", "e", "i",  # Mathematical constants
-        "sin", "cos", "tan", "log", "ln"  # Common functions
-    }
-
-    # Filter out low-quality answers but preserve short mathematical answers
-    filtered_out = []
-    filtered_responses = []
-    for ans in responses:
-        ans_str = str(ans).strip()
-        ans_norm = normalize_text(ans_str)
-        ans_len = len(ans_str)
-
-        # Skip empty answers or explicitly low-quality answers
-        if ans_len == 0 or ans_norm in low_quality_answers:
-            filtered_out.append(ans)
-            continue
-
-        # Allow short answers if they are:
-        # 1. Numeric (e.g., "42", "0", "-1")
-        # 2. Common mathematical terms (e.g., "x", "pi")
-        # 3. Similar to the expected answer (if provided)
-        is_numeric = parse_number_if_possible(ans_str) is not None
-        is_math_term = ans_norm in valid_math_terms
-        is_similar_to_expected = (
-            expected_norm is not None and
-            normalized_similarity(ans_norm, expected_norm) >= SIMILARITY_ACCEPT_THRESH[LENIENCY]
-        ) if expected_norm else False
-
-        if ans_len <= 2 and not (is_numeric or is_math_term or is_similar_to_expected):
-            filtered_out.append(ans)
-        else:
-            filtered_responses.append(ans)
-
-    log("DEBUG", f"Filtered out {len(filtered_out)} low-quality answers: {filtered_out}")
-    log("DEBUG", f"Remaining after filter: {len(filtered_responses)}")
+    # No filtering; use all responses directly
+    filtered_responses = responses
 
     # Deduplicate answers but keep first occurrence order
     seen = set()
@@ -188,10 +144,10 @@ def evaluate_answers_batch(question, responses):
         else:
             duplicates.append(ans)
 
-    log("DEBUG", f"Duplicates {len(duplicates)} {duplicates}")
+    log("DEBUG", f"Found {len(duplicates)} duplicates")
 
     answer_map = {str(i): ans for i, ans in enumerate(unique_answers, 1)}
-    log("DEBUG", f"Processing {len(unique_answers)} unique answers in batch")
+    log("DEBUG", f"Processing {len(unique_answers)} unique answers")
     judges = MODELS["judge"]
     if not isinstance(judges, list):
         judges = [judges]
@@ -202,18 +158,19 @@ def evaluate_answers_batch(question, responses):
     NUMERIC_VETO_ABS = {"extreme": 1e9, "lenient": 5.0, "balanced": 1.0, "strict": 0.001}
     SIMILARITY_ACCEPT_THRESH = {"extreme": 0.2, "lenient": 0.5, "balanced": 0.75, "strict": 0.9}
 
+    # Get expected answer for context, if available
     expected_raw = question.get("expected", None)
-    expected_num = parse_number_if_possible(expected_raw) if expected_raw is not None else None
     expected_norm = normalize_text(expected_raw) if expected_raw is not None else None
+    expected_num = parse_number_if_possible(expected_raw) if expected_raw is not None else None
 
     # Split answers into batches if necessary
     answer_batches = [unique_answers[i:i + BATCH_SIZE_LIMIT] for i in range(0, len(unique_answers), BATCH_SIZE_LIMIT)]
-    log("DEBUG", f"Split {len(unique_answers)} answers into {len(answer_batches)} batches")
+    log("DEBUG", f"Split into {len(answer_batches)} batches")
 
     # Get votes for all answers from each model
     all_votes = [[] for _ in unique_answers]
     for batch_idx, answer_batch in enumerate(answer_batches):
-        log("DEBUG", f"Processing batch {batch_idx + 1}/{len(answer_batches)} with {len(answer_batch)} answers")
+        log("DEBUG", f"Batch {batch_idx + 1}/{len(answer_batches)}: {len(answer_batch)} answers")
         for model in judges:
             votes = get_model_vote(model, question, answer_batch, LENIENCY)
             batch_start_idx = batch_idx * BATCH_SIZE_LIMIT
@@ -223,13 +180,10 @@ def evaluate_answers_batch(question, responses):
     for idx, ans in answer_map.items():
         ans_norm = normalize_text(ans)
         ans_num = parse_number_if_possible(ans)
-        log("DEBUG", f"Checking answer {idx} ({ans}) parsed_num={ans_num}")
-
         votes = all_votes[int(idx)-1]
         vote_decisions = [v[0] for v in votes]
         yes_count = vote_decisions.count("YES")
-        n_judges = len(judges)
-        log("DEBUG", f"Opinions for {idx} ({ans}): {vote_decisions}")
+        log("DEBUG", f"Answer {idx} ({ans}): {yes_count}/{len(judges)} YES")
 
         local_similarity = 0.0
         if expected_raw is not None:
@@ -246,26 +200,26 @@ def evaluate_answers_batch(question, responses):
             if algebra_equal(ans, expected_raw):
                 local_similarity = 1.0
 
-            log("DEBUG", f"Local similarity (vs expected): {local_similarity:.3f}")
+            log("DEBUG", f"Similarity: {local_similarity:.3f}")
 
         numeric_veto = False
         if expected_num is not None and ans_num is not None:
             abs_diff = abs(ans_num - expected_num)
             if abs_diff > NUMERIC_VETO_ABS.get(LENIENCY, 1.0):
                 numeric_veto = True
-                log("DEBUG", f"Numeric veto triggered for {idx} ({ans}): diff={abs_diff}")
+                log("DEBUG", f"Numeric veto: diff={abs_diff}")
 
         decision = False
         if LENIENCY == "extreme":
             decision = yes_count >= 1 or local_similarity >= SIMILARITY_ACCEPT_THRESH["extreme"]
         elif LENIENCY == "lenient":
-            decision = (yes_count >= ((n_judges // 2) + 1) or 
+            decision = (yes_count >= ((len(judges) // 2) + 1) or 
                         local_similarity >= SIMILARITY_ACCEPT_THRESH["lenient"]) and not numeric_veto
         elif LENIENCY == "balanced":
-            decision = (yes_count == n_judges or 
+            decision = (yes_count == len(judges) or 
                         local_similarity >= SIMILARITY_ACCEPT_THRESH["balanced"]) and not numeric_veto
         else:  # strict
-            decision = (yes_count == n_judges and 
+            decision = (yes_count == len(judges) and 
                         (expected_raw is None or local_similarity >= SIMILARITY_ACCEPT_THRESH["strict"])) and not numeric_veto
 
         if decision:
@@ -274,7 +228,7 @@ def evaluate_answers_batch(question, responses):
         else:
             log("DEBUG", f"Answer {idx} ({ans}) → NO")
 
-    log("DEBUG", f"Final accepted answers: {accepted}")
+    log("DEBUG", f"Accepted: {len(accepted)} answers")
     return accepted
 
 # --- Compatibility alias ---

@@ -5,9 +5,6 @@ def get_form_structure(service, form_id):
     form = service.forms().get(formId=form_id).execute()
     questions = []
     
-    # Log the full form structure for debugging
-    log("DEBUG", f"Full form items: {form.get('items', [])}")
-    
     for form_index, item in enumerate(form.get("items", [])):
         # Skip items that are page breaks or lack questionItem
         if "pageBreakItem" in item:
