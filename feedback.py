@@ -91,8 +91,7 @@ def generate_form_feedback(form_id, form_title, form_questions):
         log("INFO", "Created Feedback directory.")
 
     safe_title = sanitize_filename(form_title)
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    report_filename = f"{safe_title}_{timestamp}.md"
+    report_filename = f"{safe_title}.md"
     report_path = os.path.join(feedback_dir, report_filename)
     
     content = ""
