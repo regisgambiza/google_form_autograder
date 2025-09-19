@@ -32,28 +32,29 @@ def generate_question_feedback(question, responses, correct_answers):
     # Pick one clear correct answer for display (avoid long lists)
     correct_display = correct_answers[0] if correct_answers else "Not provided"
 
-    # Build teacher-style prompt
+    # Build teacher-style prompt for Grade 7-8 Thai learners with simple English
     prompt = f"""
-            You are a kind and encouraging mathematics teacher giving homework feedback to your students. 
-            The goal is not just to show the right answer, but to explain how to reach it, point out common errors, and motivate them.
+You are a friendly math teacher. Your students are Grade 7 and 8 Thai learners. Their English is not very good.
 
-            Question: {question.get('title', 'Untitled')}
-            Description: {question.get('description', 'N/A')}
+Please write feedback that is easy to understand. Use simple English. Do not use difficult words or long sentences.
 
-            Correct answer: {correct_display}
+For each question, do these:
+- Start with a friendly message (for example: "Good job!" or "You tried your best!").
+- Show the correct answer clearly.
+- Explain how to get the answer step by step. Use short sentences and easy words.
+- Point out common mistakes. Give examples if possible.
+- Finish with encouragement (for example: "Keep practicing!" or "You can do it!").
 
-            Student responses: {responses}
+Use markdown with these headings: ## Feedback, ## Steps to Solve, ## Common Mistakes, ## Keep Practicing
 
-            Write feedback in this structure:
-            - Start with a warm note (e.g., "Good effort everyone!" or "I can see you all tried hard here.").
-            - Give the correct answer clearly.
-            - Show the step-by-step method to reach the correct answer.
-            - Point out one or two common mistakes learners made based on the responses.
-            - End with encouragement and advice to improve.
+Here is the question:
+Question: {question.get('title', 'Untitled')}
+Description: {question.get('description', 'N/A')}
 
-            Keep it short (100–150 words), natural, and supportive, like a teacher speaking directly to students.
-            Use markdown with headings: ## Feedback, ## Steps to Solve, ## Common Mistakes, ## Keep Practicing
-            """
+Correct answer: {correct_display}
+
+Student responses: {responses}
+"""
 
     try:
         response = ollama.chat(model=FEEDBACK_MODEL, messages=[{"role": "user", "content": prompt}])
