@@ -9,19 +9,16 @@ import ollama
 with open("config.json") as f:
     config = json.load(f)
 
-MODELS = config["models"]
-FEEDBACK_MODEL = MODELS.get("judge", "gpt-oss:20b")
-if isinstance(FEEDBACK_MODEL, list):
-    FEEDBACK_MODEL = FEEDBACK_MODEL[0]
+MODELS = config["models"].get("judge", ["deepseek-r1:32b", "gpt-oss:20b", "gemma2:9b"])
 
-BATCH_SIZE_LIMIT = 1  # Process one question at a time to avoid context confusion and hallucinations
+BATCH_SIZE_LIMIT = 1  # Process one question at a time to avoid confusion
 
 def sanitize_filename(name: str) -> str:
-    """Remove illegal characters so the title can be safely used as a filename."""
+    """Remove illegal characters for safe filenames."""
     return re.sub(r'[\\/*?:"<>|]', "", name).strip()
 
 def get_default_feedback(q_data, form_title):
-    """Generate default feedback with an explanation of how to attempt the question."""
+    """Generate fallback feedback if models fail."""
     question = q_data['question']
     q_index = question.get('index', '?')
     q_title = question.get('title', 'Untitled')
@@ -30,71 +27,64 @@ def get_default_feedback(q_data, form_title):
     responses = q_data.get('responses', [])
     canonical_answer = correct_answers[0] if correct_answers else "Not provided"
 
-    explanation = "No specific explanation available. Approach the question as follows:\n"
+    explanation = "No specific explanation available. Try this:\n"
     if q_type in ["MULTIPLE_CHOICE", "DROPDOWN"]:
         explanation += (
-            "- Read the question and description carefully.\n"
-            "- Review all options.\n"
-            "- Select the best match based on the correct answer provided.\n"
-            "- Eliminate incorrect options by comparing to the correct one."
+            "- Read the question carefully.\n"
+            "- Check all options.\n"
+            "- Pick the one that matches the correct answer.\n"
+            "- Rule out wrong options."
         )
     elif q_type == "CHECKBOX":
         explanation += (
             "- Read the question carefully.\n"
-            "- Identify all applicable options based on the correct answers.\n"
-            "- Select multiple if needed.\n"
-            "- Verify against the provided correct answers."
+            "- Choose all correct options.\n"
+            "- Check against the correct answers."
         )
     elif q_type in ["SHORT_ANSWER", "LONG_ANSWER"]:
         explanation += (
             f"- Read the question from '{form_title}'.\n"
-            "- Provide a concise response matching the correct answer '{canonical_answer}'.\n"
-            "- Use simple language and check for accuracy.\n"
-            "- If no correct answer is provided, describe the key concept briefly."
+            "- Write a clear answer like '{canonical_answer}'.\n"
+            "- Use simple words and double-check.\n"
+            "- If no correct answer, explain the main idea."
         )
     else:
         explanation += (
-            "- Understand the question in the context of 2D/3D shapes.\n"
-            "- Refer to the correct answer for guidance.\n"
-            "- Explain properties or calculations step-by-step."
+            "- Think about 2D/3D shapes.\n"
+            "- Use the correct answer as a guide.\n"
+            "- Explain steps clearly."
         )
 
-    response_summary = f"({len(responses)} responses collected.)" if responses else "(No responses collected.)"
+    response_summary = f"({len(responses)} responses)" if responses else "(No responses)"
     
     return f"""**Correct Answer:** {canonical_answer} {response_summary}
 **Explanation / Steps:**
 {explanation}
 ## Feedback
-Good effort on this question from {form_title}! Review the correct answer for better understanding.
+Nice try on this question from {form_title}! Look at the correct answer to learn more.
 ## Common Mistakes
-- Misinterpreting the question type.
-- Not aligning with the provided correct answer.
-- Overcomplicating simple concepts in shapes.
+- Misunderstanding the question type.
+- Not matching the correct answer.
+- Making shapes too complicated.
 ## Keep Practicing
-Practice similar questions on 2D and 3D shapes to build confidence. Focus on the key properties mentioned.
+Practice more 2D/3D shape questions. Focus on their properties.
 ---"""
 
-def generate_question_feedback_batch(form_title, questions_batch):
-    """
-    Generate feedback for a batch of questions using Ollama. Now processes one at a time to minimize hallucinations.
-    Returns a list of markdown-formatted feedback strings, one per question.
-    """
-    feedback_list = []
-    for idx, q_data in enumerate(questions_batch):
-        question = q_data['question']
-        responses = q_data.get('responses', [])
-        correct_answers = q_data.get('correct_answers', [])
-        q_index = question.get('index', '?')
-        q_title = question.get('title', 'Untitled')
-        q_type = question.get('type', 'Unknown')
-        q_desc = question.get('description', 'N/A')
-        correct_display = correct_answers[0] if correct_answers else "Not provided"
+def generate_model_discussion(q_data, model, form_title):
+    """Get one model's input on the correct answer and steps."""
+    question = q_data['question']
+    responses = q_data.get('responses', [])
+    correct_answers = q_data.get('correct_answers', [])
+    q_index = question.get('index', '?')
+    q_title = question.get('title', 'Untitled')
+    q_type = question.get('type', 'Unknown')
+    q_desc = question.get('description', 'N/A')
+    correct_display = correct_answers[0] if correct_answers else "Not provided"
 
-        # Build individual prompt for this question
-        prompt = f"""
-You are a friendly math teacher for Grade 7-8 Thai learners with basic English skills. This question is from the form '{form_title}' on 2D and 3D shapes.
+    prompt = f"""
+You are a math teacher for Grade 7-8 Thai students with basic English. This is from '{form_title}' about 2D/3D shapes.
 
-IMPORTANT: Base your ENTIRE response STRICTLY on the provided question title, description, correct answer, and student responses. Do NOT use external knowledge, recall other questions, or invent information, calculations, or examples. If the correct answer is 'Not provided', give a general step-by-step approach to solving similar questions without specifics. Repeat: Use ONLY the given details.
+Use ONLY the given details. Do NOT add outside info or examples.
 
 Question Index: {q_index}
 Title: {q_title}
@@ -103,48 +93,86 @@ Description: {q_desc}
 Correct Answer: {correct_display}
 Student Responses: {responses}
 
-Write feedback in simple English using this EXACT markdown format. Start directly with the sections below:
+Suggest:
+- Correct Answer (confirm or fix based on given data)
+- Explanation / Steps (short, simple sentences)
 
-**Correct Answer:** {correct_display}
+Use this format:
+**Proposed Correct Answer:** [Your answer]
+**Proposed Explanation / Steps:**
+[Simple steps to solve.]
+---
+"""
+    try:
+        response = ollama.chat(model=model, messages=[{"role": "user", "content": prompt}])
+        raw_response = response["message"]["content"].strip()
+        log("DEBUG", f"Discussion from {model} for Q{q_index}: {raw_response[:200]}...")
+        return raw_response
+    except Exception as e:
+        log("ERROR", f"Failed discussion from {model} for Q{q_index}: {e}")
+        return "No response from this model."
+
+def generate_question_feedback_batch(form_title, questions_batch):
+    """Generate feedback using model discussions."""
+    feedback_list = []
+    for q_data in questions_batch:
+        q_index = q_data['question'].get('index', '?')
+
+        # Get discussion from all models
+        discussions = {model: generate_model_discussion(q_data, model, form_title) for model in MODELS}
+
+        # Combine discussions with the first model
+        primary_model = MODELS[0]
+        synthesis_prompt = f"""
+You are a math teacher for Grade 7-8 Thai students with basic English. Combine these model discussions into one clear feedback report.
+
+Question Details:
+- Title: {q_data['question'].get('title', 'Untitled')}
+- Type: {q_data['question'].get('type', 'Unknown')}
+- Description: {q_data['question'].get('description', 'N/A')}
+- Correct Answer: {q_data.get('correct_answers', [])[0] if q_data.get('correct_answers') else "Not provided"}
+- Student Responses: {q_data.get('responses', [])}
+
+Discussions:
+{'\n\n'.join([f"From {model}: {output}" for model, output in discussions.items()])}
+
+Use the given correct answer first. If models disagree, pick the answer most agree on. Choose the clearest steps. Write in simple English.
+
+Use this format:
+**Correct Answer:** [Combined answer]
 **Explanation / Steps:**
-[Explain how to arrive at the correct answer using ONLY the provided information. Use short, simple sentences. If no correct answer, describe general steps for this question type in shapes context.]
+[Clear steps in short sentences.]
 ## Feedback
-[Write a short, friendly, encouraging feedback based on the responses and correct answer.]
+[Short, encouraging feedback.]
 ## Common Mistakes
-[List 2-3 common mistakes as bullet points, based ONLY on the provided responses and correct answer.]
+[List 2-3 mistakes from responses or discussions.]
 ## Keep Practicing
-[Give 1-2 sentences of encouragement with a simple tip related to the question.]
-
+[1-2 sentences with a tip.]
 ---
 """
         try:
-            response = ollama.chat(model=FEEDBACK_MODEL, messages=[{"role": "user", "content": prompt}])
-            raw_response = response["message"]["content"]
-            log("DEBUG", f"Raw AI response for Q{q_index}: {raw_response[:200]}...")  # Log first 200 chars
-            feedback = raw_response.strip()
+            response = ollama.chat(model=primary_model, messages=[{"role": "user", "content": synthesis_prompt}])
+            feedback = response["message"]["content"].strip()
+            log("DEBUG", f"Synthesis from {primary_model} for Q{q_index}: {feedback[:200]}...")
             
-            # Validate format: should start with **Correct Answer:**
+            # Check if feedback follows the format
             if not feedback.startswith("**Correct Answer:**"):
-                log("WARNING", f"Invalid format for Q{q_index}. Using default feedback.")
+                log("WARNING", f"Invalid format for Q{q_index}. Using default.")
                 feedback = get_default_feedback(q_data, form_title)
             else:
-                # Clean up any extra text
                 feedback = re.sub(r'^.*?(\*\*Correct Answer:\*\*.*)', r'\1', feedback, flags=re.DOTALL).strip()
             
             feedback_list.append(feedback)
             log("DEBUG", f"Feedback generated for Q{q_index}")
         except Exception as e:
-            log("ERROR", f"Failed to generate feedback for Q{q_index}: {e}. Using default.")
+            log("ERROR", f"Failed to synthesize feedback for Q{q_index}: {e}. Using default.")
             feedback_list.append(get_default_feedback(q_data, form_title))
     
     return feedback_list
 
 def generate_form_feedback(form_id, form_title, form_questions):
-    """
-    Generate a feedback report for all questions, sorted by index, in a single file.
-    Handles all question types with individual AI requests to prevent hallucinations.
-    """
-    log("INFO", f"Generating feedback report for form {form_id} - {form_title}")
+    """Generate a feedback report for all questions."""
+    log("INFO", f"Creating feedback report for form {form_id} - {form_title}")
 
     feedback_dir = "Feedback"
     if not os.path.exists(feedback_dir):
@@ -157,15 +185,13 @@ def generate_form_feedback(form_id, form_title, form_questions):
 
     content = f"# Feedback for {form_title}\n\n"
 
-    # Sort questions by index
     sorted_questions = sorted(form_questions, key=lambda x: x["question"]["index"])
-    log("DEBUG", f"Sorted question indices: {[q['question']['index'] for q in sorted_questions]}")
+    log("DEBUG", f"Sorted questions: {[q['question']['index'] for q in sorted_questions]}")
 
-    # Process questions individually (BATCH_SIZE_LIMIT=1)
     question_batches = [sorted_questions[i:i + BATCH_SIZE_LIMIT] for i in range(0, len(sorted_questions), BATCH_SIZE_LIMIT)]
-    log("DEBUG", f"Split {len(sorted_questions)} questions into {len(question_batches)} individual calls")
+    log("DEBUG", f"Split {len(sorted_questions)} questions into {len(question_batches)} calls")
 
-    for batch_idx, batch in enumerate(question_batches):
+    for batch in question_batches:
         log("DEBUG", f"Processing question {batch[0]['question']['index']}")
         feedback_list = generate_question_feedback_batch(form_title, batch)
         for q_data, feedback in zip(batch, feedback_list):
@@ -174,7 +200,6 @@ def generate_form_feedback(form_id, form_title, form_questions):
             q_title = question.get('title', 'Untitled')
             q_type = question.get('type', 'Unknown')
 
-            # Add question header once
             content += f"## Question {q_index}: {q_title} ({q_type})\n"
             if question.get('description'):
                 content += f"**Description:** {question['description']}\n"
