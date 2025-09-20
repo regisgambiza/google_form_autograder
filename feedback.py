@@ -14,13 +14,13 @@ FEEDBACK_MODEL = MODELS.get("judge", "gpt-oss:20b")
 if isinstance(FEEDBACK_MODEL, list):
     FEEDBACK_MODEL = FEEDBACK_MODEL[0]
 
-BATCH_SIZE_LIMIT = 10  # Maximum questions per batch for AI requests
+BATCH_SIZE_LIMIT = 1  # Process one question at a time to avoid context confusion and hallucinations
 
 def sanitize_filename(name: str) -> str:
     """Remove illegal characters so the title can be safely used as a filename."""
     return re.sub(r'[\\/*?:"<>|]', "", name).strip()
 
-def get_default_feedback(q_data):
+def get_default_feedback(q_data, form_title):
     """Generate default feedback with an explanation of how to attempt the question."""
     question = q_data['question']
     q_index = question.get('index', '?')
@@ -30,58 +30,56 @@ def get_default_feedback(q_data):
     responses = q_data.get('responses', [])
     canonical_answer = correct_answers[0] if correct_answers else "Not provided"
 
-    explanation = "No AI-generated explanation available.\n"
+    explanation = "No specific explanation available. Approach the question as follows:\n"
     if q_type in ["MULTIPLE_CHOICE", "DROPDOWN"]:
-        explanation = (
-            "- Read the question carefully.\n"
-            "- Look at all the options provided.\n"
-            "- Choose the option that best answers the question.\n"
-            "- Check your answer to make sure it makes sense."
+        explanation += (
+            "- Read the question and description carefully.\n"
+            "- Review all options.\n"
+            "- Select the best match based on the correct answer provided.\n"
+            "- Eliminate incorrect options by comparing to the correct one."
         )
     elif q_type == "CHECKBOX":
-        explanation = (
+        explanation += (
             "- Read the question carefully.\n"
-            "- Select all options that apply to the question.\n"
-            "- Make sure you understand what the question is asking.\n"
-            "- Review your choices to ensure they are correct."
+            "- Identify all applicable options based on the correct answers.\n"
+            "- Select multiple if needed.\n"
+            "- Verify against the provided correct answers."
         )
     elif q_type in ["SHORT_ANSWER", "LONG_ANSWER"]:
-        explanation = (
-            "- Read the question carefully.\n"
-            "- Write a clear and concise answer.\n"
-            "- Make sure your answer directly addresses the question.\n"
-            "- Check your spelling and grammar."
+        explanation += (
+            f"- Read the question from '{form_title}'.\n"
+            "- Provide a concise response matching the correct answer '{canonical_answer}'.\n"
+            "- Use simple language and check for accuracy.\n"
+            "- If no correct answer is provided, describe the key concept briefly."
         )
     else:
-        explanation = (
-            "- Understand what the question is asking.\n"
-            "- Provide a clear and complete response.\n"
-            "- Double-check your answer for accuracy."
+        explanation += (
+            "- Understand the question in the context of 2D/3D shapes.\n"
+            "- Refer to the correct answer for guidance.\n"
+            "- Explain properties or calculations step-by-step."
         )
 
-    response_summary = f"- {len(responses)} responses collected.\n" if responses else "- No responses collected.\n"
+    response_summary = f"({len(responses)} responses collected.)" if responses else "(No responses collected.)"
     
-    return f"""**Correct Answer:** {canonical_answer}
+    return f"""**Correct Answer:** {canonical_answer} {response_summary}
 **Explanation / Steps:**
 {explanation}
 ## Feedback
-Good effort! Keep practicing to improve your understanding.
+Good effort on this question from {form_title}! Review the correct answer for better understanding.
 ## Common Mistakes
-- Not reading the question carefully.
-- Choosing answers without checking all options.
+- Misinterpreting the question type.
+- Not aligning with the provided correct answer.
+- Overcomplicating simple concepts in shapes.
 ## Keep Practicing
-Try similar questions to get better! Review the correct answer to understand why it is right.
+Practice similar questions on 2D and 3D shapes to build confidence. Focus on the key properties mentioned.
 ---"""
 
-def generate_question_feedback_batch(questions_batch):
+def generate_question_feedback_batch(form_title, questions_batch):
     """
-    Generate feedback for a batch of questions using Ollama in a single API call.
+    Generate feedback for a batch of questions using Ollama. Now processes one at a time to minimize hallucinations.
     Returns a list of markdown-formatted feedback strings, one per question.
     """
-    log("DEBUG", f"Generating feedback for batch of {len(questions_batch)} questions")
-    log("DEBUG", f"Question indices in batch: {[q['question'].get('index', '?') for q in questions_batch]}")
-
-    prompt = ""
+    feedback_list = []
     for idx, q_data in enumerate(questions_batch):
         question = q_data['question']
         responses = q_data.get('responses', [])
@@ -92,8 +90,12 @@ def generate_question_feedback_batch(questions_batch):
         q_desc = question.get('description', 'N/A')
         correct_display = correct_answers[0] if correct_answers else "Not provided"
 
-        prompt += f"""
-Question {idx + 1}/{len(questions_batch)}:
+        # Build individual prompt for this question
+        prompt = f"""
+You are a friendly math teacher for Grade 7-8 Thai learners with basic English skills. This question is from the form '{form_title}' on 2D and 3D shapes.
+
+IMPORTANT: Base your ENTIRE response STRICTLY on the provided question title, description, correct answer, and student responses. Do NOT use external knowledge, recall other questions, or invent information, calculations, or examples. If the correct answer is 'Not provided', give a general step-by-step approach to solving similar questions without specifics. Repeat: Use ONLY the given details.
+
 Question Index: {q_index}
 Title: {q_title}
 Type: {q_type}
@@ -101,58 +103,48 @@ Description: {q_desc}
 Correct Answer: {correct_display}
 Student Responses: {responses}
 
-You are a friendly math teacher for Grade 7-8 Thai learners with basic English skills.
-Write feedback in simple English using this markdown format:
+Write feedback in simple English using this EXACT markdown format. Start directly with the sections below:
 
 **Correct Answer:** {correct_display}
 **Explanation / Steps:**
-[Explain how to get the answer in short, simple sentences.]
+[Explain how to arrive at the correct answer using ONLY the provided information. Use short, simple sentences. If no correct answer, describe general steps for this question type in shapes context.]
 ## Feedback
-[Write a short, friendly feedback.]
+[Write a short, friendly, encouraging feedback based on the responses and correct answer.]
 ## Common Mistakes
-[List common mistakes as bullet points.]
+[List 2-3 common mistakes as bullet points, based ONLY on the provided responses and correct answer.]
 ## Keep Practicing
-[Give encouragement and a tip.]
+[Give 1-2 sentences of encouragement with a simple tip related to the question.]
 
 ---
 """
-    prompt += f"""
-Return a JSON array with exactly {len(questions_batch)} elements, each containing the markdown feedback for the corresponding question in order.
-Example: ["markdown for Q1", "markdown for Q2", ...]
-DO NOT include any additional text outside the JSON array.
-"""
-
-    try:
-        response = ollama.chat(model=FEEDBACK_MODEL, messages=[{"role": "user", "content": prompt}])
-        raw_response = response["message"]["content"]
-        log("DEBUG", f"Raw AI response: {raw_response}")
-        feedback_list = json.loads(raw_response)
-        
-        if not isinstance(feedback_list, list):
-            log("ERROR", "AI response is not a list. Using default feedback.")
-            return [get_default_feedback(q_data) for q_data in questions_batch]
-        
-        if len(feedback_list) != len(questions_batch):
-            log("WARNING", f"Expected {len(questions_batch)} feedback entries, got {len(feedback_list)}. Using default feedback for missing entries.")
-            feedback_list = feedback_list + [get_default_feedback(q_data) for q_data in questions_batch[len(feedback_list):]]
-        
-        for i, feedback in enumerate(feedback_list):
-            if not isinstance(feedback, str) or not feedback.strip():
-                log("WARNING", f"Invalid feedback for question {questions_batch[i]['question'].get('index', '?')}. Using default feedback.")
-                feedback_list[i] = get_default_feedback(questions_batch[i])
-        
-        log("DEBUG", f"Feedback generated for batch of {len(questions_batch)} questions")
-        return feedback_list
-    except Exception as e:
-        log("ERROR", f"Failed to generate batch feedback: {e}. Using default feedback.")
-        return [get_default_feedback(q_data) for q_data in questions_batch]
+        try:
+            response = ollama.chat(model=FEEDBACK_MODEL, messages=[{"role": "user", "content": prompt}])
+            raw_response = response["message"]["content"]
+            log("DEBUG", f"Raw AI response for Q{q_index}: {raw_response[:200]}...")  # Log first 200 chars
+            feedback = raw_response.strip()
+            
+            # Validate format: should start with **Correct Answer:**
+            if not feedback.startswith("**Correct Answer:**"):
+                log("WARNING", f"Invalid format for Q{q_index}. Using default feedback.")
+                feedback = get_default_feedback(q_data, form_title)
+            else:
+                # Clean up any extra text
+                feedback = re.sub(r'^.*?(\*\*Correct Answer:\*\*.*)', r'\1', feedback, flags=re.DOTALL).strip()
+            
+            feedback_list.append(feedback)
+            log("DEBUG", f"Feedback generated for Q{q_index}")
+        except Exception as e:
+            log("ERROR", f"Failed to generate feedback for Q{q_index}: {e}. Using default.")
+            feedback_list.append(get_default_feedback(q_data, form_title))
+    
+    return feedback_list
 
 def generate_form_feedback(form_id, form_title, form_questions):
     """
     Generate a feedback report for all questions, sorted by index, in a single file.
-    Handles all question types with batched AI requests.
+    Handles all question types with individual AI requests to prevent hallucinations.
     """
-    log("INFO", f"Generating feedback report for form {form_id}")
+    log("INFO", f"Generating feedback report for form {form_id} - {form_title}")
 
     feedback_dir = "Feedback"
     if not os.path.exists(feedback_dir):
@@ -169,20 +161,18 @@ def generate_form_feedback(form_id, form_title, form_questions):
     sorted_questions = sorted(form_questions, key=lambda x: x["question"]["index"])
     log("DEBUG", f"Sorted question indices: {[q['question']['index'] for q in sorted_questions]}")
 
-    # Process questions in batches
+    # Process questions individually (BATCH_SIZE_LIMIT=1)
     question_batches = [sorted_questions[i:i + BATCH_SIZE_LIMIT] for i in range(0, len(sorted_questions), BATCH_SIZE_LIMIT)]
-    log("DEBUG", f"Split {len(sorted_questions)} questions into {len(question_batches)} batches")
+    log("DEBUG", f"Split {len(sorted_questions)} questions into {len(question_batches)} individual calls")
 
     for batch_idx, batch in enumerate(question_batches):
-        log("DEBUG", f"Processing batch {batch_idx + 1}/{len(question_batches)} with {len(batch)} questions")
-        feedback_list = generate_question_feedback_batch(batch)
+        log("DEBUG", f"Processing question {batch[0]['question']['index']}")
+        feedback_list = generate_question_feedback_batch(form_title, batch)
         for q_data, feedback in zip(batch, feedback_list):
             question = q_data['question']
             q_index = question.get('index', '?')
             q_title = question.get('title', 'Untitled')
             q_type = question.get('type', 'Unknown')
-            correct_answers = q_data.get('correct_answers', [])
-            canonical_answer = correct_answers[0] if correct_answers else "Not provided"
 
             # Add question header once
             content += f"## Question {q_index}: {q_title} ({q_type})\n"
