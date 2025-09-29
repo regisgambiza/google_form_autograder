@@ -17,11 +17,12 @@ BATCH_SIZE_LIMIT = 20  # Maximum answers per batch to avoid token limits
 # --- Helpers ---
 
 def normalize_text(s):
+    """Normalize text by removing control characters and extra whitespace."""
     if not s:
         return ""
     s = str(s)
-    s = ''.join(c for c in s if unicodedata.category(c)[0] != 'C')
-    s = re.sub(r'\s+', ' ', s)
+    s = ''.join(c for c in s if unicodedata.category(c)[0] != 'C')  # Remove control chars
+    s = re.sub(r'\s+', ' ', s)  # Normalize whitespace
     return s.strip().lower()
 
 def parse_number_if_possible(s):
@@ -66,17 +67,27 @@ def get_model_vote(model, question, answers, leniency, retries=3):
 Question: {question.get("title")}
 
 Answers to evaluate (exactly {len(answers)} answers):
-{'\n'.join([f"Answer {i}: {ans}" for i, ans in enumerate(answers, 1)])}
+{chr(10).join([f"Answer {i}: {ans}" for i, ans in enumerate(answers, 1)])}
 
-Be {leniency.upper()} in judging correctness:
+Be {leniency.upper()} in judging correctness, ignoring any units (e.g., 'c', 'degrees', '°C'):
 - EXTREME: Always YES unless totally unrelated nonsense.
-- LENIENT: Accept if partially correct or similar.
-- BALANCED: Accept if very similar or matches exactly.
-- STRICT: Only accept if exact and precise.
+- LENIENT: Accept if partially correct or similar, ignoring units.
+- BALANCED: Accept if very similar or matches the core value, ignoring units.
+- STRICT: Only accept if the core value matches exactly, ignoring units.
 
-Return ONLY a JSON array with exactly {len(answers)} elements, each being {{"decision": "YES" or "NO"}} corresponding to each answer in order.
-DO NOT use <think> tags, reasoning, explanations, or any text outside the JSON array. Start directly with [.
-Example: [{{"decision": "YES"}}, {{"decision": "NO"}}]
+Return your answer in **EXACTLY** this format:
+
+[
+  {{"decision": "YES"}},
+  {{"decision": "NO"}},
+  ...
+]
+
+- The array MUST contain exactly {len(answers)} objects.
+- Each object MUST have only the key "decision".
+- "decision" MUST be either "YES" or "NO".
+- Do NOT include any explanations, reasoning, text, or extra arrays.
+- Do NOT output more or fewer than {len(answers)} objects.
 """
 
     for attempt in range(1, retries + 1):
@@ -84,17 +95,28 @@ Example: [{{"decision": "YES"}}, {{"decision": "NO"}}]
             response = ollama.chat(model=model, messages=[{"role": "user", "content": prompt}])
             text = response['message']['content']
             text = ''.join(c for c in text if unicodedata.category(c)[0] != 'C').strip()
-            
-            # Strip <think> tags and any text before/after JSON
+
+            # Strip <think> tags
             text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL | re.IGNORECASE)
-            text = re.search(r'\[.*\]', text, re.DOTALL)
-            if text:
-                text = text.group(0).strip()
+
+            # Use non-greedy regex to capture only the first JSON array
+            match = re.search(r'\[.*?\]', text, re.DOTALL)
+            if match:
+                text = match.group(0).strip()
             else:
                 raise ValueError("No JSON array found in response")
-            
-            decisions = json.loads(text)
-            
+
+            try:
+                decisions = json.loads(text)
+            except json.JSONDecodeError:
+                # Try to salvage by splitting multiple arrays
+                if '][' in text:
+                    salvage_text = text.split('][')[0] + ']'
+                    decisions = json.loads(salvage_text)
+                    text = salvage_text
+                else:
+                    raise
+
             # Validate and fix decisions
             if len(decisions) != len(answers):
                 raise ValueError(f"Expected {len(answers)} decisions, got {len(decisions)}")
@@ -103,56 +125,50 @@ Example: [{{"decision": "YES"}}, {{"decision": "NO"}}]
                 if decision not in ["YES", "NO"]:
                     log("WARNING", f"Invalid decision '{decision}' from {model}. Treating as NO.")
                     d["decision"] = "NO"
-            
+
             return [(d["decision"], text) for d in decisions]
         except Exception as e:
             log("DEBUG", f"Attempt {attempt}/{retries}: Error parsing JSON from {model}: {str(e)}. Raw response: {text[:200]}...")
             if attempt == retries:
                 log("WARNING", f"Max retries reached for {model}. Falling back to NO for all answers.")
                 return [("NO", text) for _ in answers]
-    
+
     return [("NO", "") for _ in answers]
 
+def extract_number(s):
+    """Extract the first numeric value from a string, ignoring units."""
+    if not s:
+        return None
+    # Match number (with optional decimal) and ignore anything after
+    match = re.search(r'-?\d+(\.\d+)?', str(s))
+    return float(match.group()) if match else None
+
 def evaluate_answers_batch(question, answers, expected=None):
-    """Evaluate a batch of answers for a single question."""
+    """Evaluate a batch of answers for a single question, ignoring units."""
     log("DEBUG", f"Evaluating Q{question.get('index', '?')} (leniency={LENIENCY})")
-    
+
     if not answers:
         log("INFO", "No answers to evaluate. Returning empty list.")
         return []
 
-    expected_raw = expected[0] if expected else None
-    expected_norm = normalize_text(expected_raw) if expected_raw else None
-    expected_num = parse_number_if_possible(expected_raw) if expected_raw else None
+    # Expected answer
+    expected_raw = expected[0] if expected and len(expected) > 0 else None
+    expected_num = extract_number(expected_raw) if expected_raw else None
+    log("DEBUG", f"Expected numeric value: {expected_num}")
 
     judges = MODELS.get("judge", ["gpt-oss:20b"])
-    log("DEBUG", f"Found {len(set(answers))} duplicates")
     unique_answers = list(set(answers))
     log("DEBUG", f"Processing {len(unique_answers)} unique answers")
-    
-    SIMILARITY_ACCEPT_THRESH = {
-        "extreme": 0.01,
-        "lenient": 0.3,
-        "balanced": 0.7,
-        "strict": 0.95
-    }
-    NUMERIC_VETO_ABS = {
-        "extreme": 1000.0,
-        "lenient": 1.0,
-        "balanced": 0.5,
-        "strict": 0.001
-    }
 
     accepted = []
-    batches = [unique_answers[i:i + BATCH_SIZE_LIMIT] for i in range(0, len(unique_answers), BATCH_SIZE_LIMIT)]
-    log("DEBUG", f"Split into {len(batches)} batches")
 
+    # --- 1. AI model votes ---
     all_votes = []
+    batches = [unique_answers[i:i + BATCH_SIZE_LIMIT] for i in range(0, len(unique_answers), BATCH_SIZE_LIMIT)]
     for batch_idx, batch in enumerate(batches, 1):
         log("DEBUG", f"Batch {batch_idx}/{len(batches)}: {len(batch)} answers")
         batch_votes = []
         for model in judges:
-            log("DEBUG", f"Sending {len(batch)} answers to {model}: {batch}")
             votes = get_model_vote(model, question, batch, LENIENCY)
             if len(votes) != len(batch):
                 log("ERROR", f"Model {model} returned {len(votes)} votes, expected {len(batch)}. Falling back to NO.")
@@ -161,54 +177,30 @@ def evaluate_answers_batch(question, answers, expected=None):
             log("DEBUG", f"Model {model} processed {len(batch)} answers successfully")
         all_votes.extend(list(zip(*batch_votes)))
 
+    # --- 2. Numeric comparison (ignoring units) ---
     for idx, ans in enumerate(unique_answers, 1):
-        ans_norm = normalize_text(ans)
-        ans_num = parse_number_if_possible(ans)
-        votes = all_votes[int(idx)-1]
+        ans_num = extract_number(ans)
+        votes = all_votes[idx - 1]
         vote_decisions = [v[0] for v in votes]
         yes_count = vote_decisions.count("YES")
         log("DEBUG", f"Answer {idx} ({ans}): {yes_count}/{len(judges)} YES")
 
-        local_similarity = 0.0
-        if expected_raw is not None:
-            if expected_num is not None and ans_num is not None:
-                try:
-                    diff = abs(ans_num - expected_num)
-                    denom = max(abs(expected_num), 1.0)
-                    local_similarity = max(0.0, 1.0 - (diff / (denom + 1e-9)))
-                except Exception:
-                    local_similarity = 0.0
-            else:
-                local_similarity = normalized_similarity(ans_norm, expected_norm)
-            
-            if algebra_equal(ans, expected_raw):
-                local_similarity = 1.0
-
-            log("DEBUG", f"Similarity: {local_similarity:.3f}")
-
-        numeric_veto = False
-        if expected_num is not None and ans_num is not None:
-            abs_diff = abs(ans_num - expected_num)
-            if abs_diff > NUMERIC_VETO_ABS.get(LENIENCY, 1.0):
-                numeric_veto = True
-                log("DEBUG", f"Numeric veto: diff={abs_diff}")
-
         decision = False
-        if LENIENCY == "extreme":
-            decision = yes_count >= 1 or local_similarity >= SIMILARITY_ACCEPT_THRESH["extreme"]
-        elif LENIENCY == "lenient":
-            decision = (yes_count >= ((len(judges) // 2) + 1) or 
-                        local_similarity >= SIMILARITY_ACCEPT_THRESH["lenient"]) and not numeric_veto
-        elif LENIENCY == "balanced":
-            decision = (yes_count == len(judges) or 
-                        local_similarity >= SIMILARITY_ACCEPT_THRESH["balanced"]) and not numeric_veto
-        else:  # strict
-            decision = (yes_count == len(judges) and 
-                        (expected_raw is None or local_similarity >= SIMILARITY_ACCEPT_THRESH["strict"])) and not numeric_veto
+
+        # Case A: Numeric match (ignore units)
+        if expected_num is not None and ans_num is not None:
+            if abs(ans_num - expected_num) < 1e-6:
+                decision = True
+                log("DEBUG", f"Answer {idx} ({ans}) → YES (numeric match: {ans_num} vs {expected_num})")
+
+        # Case B: Fallback to AI votes for non-numeric answers
+        if not decision:
+            if yes_count >= ((len(judges) // 2) + 1):
+                decision = True
+                log("DEBUG", f"Answer {idx} ({ans}) → YES (AI vote)")
 
         if decision:
             accepted.append(ans)
-            log("DEBUG", f"Answer {idx} ({ans}) → YES")
         else:
             log("DEBUG", f"Answer {idx} ({ans}) → NO")
 
