@@ -1,6 +1,6 @@
 {
   "models": {
-    "judge": ["gpt-oss:20b","deepseek-r1:14b", "gemma2:9b"]
+    "judge": ["gpt-oss:20b","mathstral:7b", "qwen2-math:7b", "t1c/deepseek-math-7b-rl:latest", "wizard-math:latest"]
   },
   "leniency": "lenient",
   "leniency_note": "options: extreme, lenient, balanced, strict"

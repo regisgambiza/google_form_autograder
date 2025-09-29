@@ -57,7 +57,7 @@ def algebra_equal(a, b):
     except Exception:
         return False
 
-def get_model_vote(model, question, answers, leniency, retries=1):
+def get_model_vote(model, question, answers, leniency, retries=3):
     """
     Send a batch of answers for a question to the model and get decisions for all.
     Returns a list of (decision, raw_response) tuples, one for each answer.
@@ -75,109 +75,93 @@ Be {leniency.upper()} in judging correctness:
 - STRICT: Only accept if exact and precise.
 
 Return ONLY a JSON array with exactly {len(answers)} elements, each being {{"decision": "YES" or "NO"}} corresponding to each answer in order.
-Example: [{{"decision": "YES"}}, {{"decision": "NO"}}, {{"decision": "YES"}}]
-DO NOT include any additional text, explanations, or comments outside the JSON array.
-DO NOT return fewer or more than {len(answers)} decisions.
+DO NOT use <think> tags, reasoning, explanations, or any text outside the JSON array. Start directly with [.
+Example: [{{"decision": "YES"}}, {{"decision": "NO"}}]
 """
-    log("DEBUG", f"Sending {len(answers)} answers to {model}: {[ans for ans in answers]}")
-    attempt = 0
-    while attempt <= retries:
+
+    for attempt in range(1, retries + 1):
         try:
             response = ollama.chat(model=model, messages=[{"role": "user", "content": prompt}])
             text = response['message']['content']
             text = ''.join(c for c in text if unicodedata.category(c)[0] != 'C').strip()
             
+            # Strip <think> tags and any text before/after JSON
+            text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL | re.IGNORECASE)
+            text = re.search(r'\[.*\]', text, re.DOTALL)
+            if text:
+                text = text.group(0).strip()
+            else:
+                raise ValueError("No JSON array found in response")
+            
             decisions = json.loads(text)
-            if not isinstance(decisions, list):
-                raise ValueError("Model response is not a list")
-
-            if len(decisions) < len(answers):
-                log("WARNING", f"Model {model} returned {len(decisions)} decisions, expected {len(answers)}. Padding with NO.")
-                while len(decisions) < len(answers):
-                    decisions.append({"decision": "NO"})
-            elif len(decisions) > len(answers):
-                log("WARNING", f"Model {model} returned {len(decisions)} decisions, expected {len(answers)}. Trimming extra entries.")
-                decisions = decisions[:len(answers)]
-
+            
+            # Validate and fix decisions
+            if len(decisions) != len(answers):
+                raise ValueError(f"Expected {len(answers)} decisions, got {len(decisions)}")
             for d in decisions:
-                if not isinstance(d, dict) or "decision" not in d or d["decision"] not in ["YES", "NO"]:
-                    raise ValueError("Invalid decision format in model response")
-            log("DEBUG", f"Model {model} processed {len(answers)} answers successfully")
+                decision = d.get("decision", "NO").upper()
+                if decision not in ["YES", "NO"]:
+                    log("WARNING", f"Invalid decision '{decision}' from {model}. Treating as NO.")
+                    d["decision"] = "NO"
+            
             return [(d["decision"], text) for d in decisions]
-        except json.JSONDecodeError as e:
-            log("DEBUG", f"Attempt {attempt+1}/{retries+1}: Error parsing JSON from {model}: {e}. Raw response: {text}")
-            attempt += 1
-            if attempt > retries:
-                log("WARNING", f"Max retries reached for {model}. Falling back to NO for all answers.")
-                return [("NO", text) for _ in answers]
-        except ValueError as e:
-            log("DEBUG", f"Attempt {attempt+1}/{retries+1}: Invalid response format from {model}: {e}. Raw response: {text}")
-            attempt += 1
-            if attempt > retries:
-                log("WARNING", f"Max retries reached for {model}. Falling back to NO for all answers.")
-                return [("NO", text) for _ in answers]
         except Exception as e:
-            log("DEBUG", f"Attempt {attempt+1}/{retries+1}: Error calling {model}: {e}")
-            attempt += 1
-            if attempt > retries:
+            log("DEBUG", f"Attempt {attempt}/{retries}: Error parsing JSON from {model}: {str(e)}. Raw response: {text[:200]}...")
+            if attempt == retries:
                 log("WARNING", f"Max retries reached for {model}. Falling back to NO for all answers.")
                 return [("NO", text) for _ in answers]
+    
+    return [("NO", "") for _ in answers]
 
-# --- Main evaluator ---
-
-def evaluate_answers_batch(question, responses):
-    log("DEBUG", f"Evaluating Q{question.get('index','?')} (leniency={LENIENCY})")
-    if not responses:
+def evaluate_answers_batch(question, answers, expected=None):
+    """Evaluate a batch of answers for a single question."""
+    log("DEBUG", f"Evaluating Q{question.get('index', '?')} (leniency={LENIENCY})")
+    
+    if not answers:
+        log("INFO", "No answers to evaluate. Returning empty list.")
         return []
 
-    # No filtering; use all responses directly
-    filtered_responses = responses
+    expected_raw = expected[0] if expected else None
+    expected_norm = normalize_text(expected_raw) if expected_raw else None
+    expected_num = parse_number_if_possible(expected_raw) if expected_raw else None
 
-    # Deduplicate answers but keep first occurrence order
-    seen = set()
-    unique_answers = []
-    duplicates = []
-    for ans in filtered_responses:
-        if ans not in seen:
-            seen.add(ans)
-            unique_answers.append(ans)
-        else:
-            duplicates.append(ans)
-
-    log("DEBUG", f"Found {len(duplicates)} duplicates")
-
-    answer_map = {str(i): ans for i, ans in enumerate(unique_answers, 1)}
+    judges = MODELS.get("judge", ["gpt-oss:20b"])
+    log("DEBUG", f"Found {len(set(answers))} duplicates")
+    unique_answers = list(set(answers))
     log("DEBUG", f"Processing {len(unique_answers)} unique answers")
-    judges = MODELS["judge"]
-    if not isinstance(judges, list):
-        judges = [judges]
+    
+    SIMILARITY_ACCEPT_THRESH = {
+        "extreme": 0.01,
+        "lenient": 0.3,
+        "balanced": 0.7,
+        "strict": 0.95
+    }
+    NUMERIC_VETO_ABS = {
+        "extreme": 1000.0,
+        "lenient": 1.0,
+        "balanced": 0.5,
+        "strict": 0.001
+    }
 
     accepted = []
+    batches = [unique_answers[i:i + BATCH_SIZE_LIMIT] for i in range(0, len(unique_answers), BATCH_SIZE_LIMIT)]
+    log("DEBUG", f"Split into {len(batches)} batches")
 
-    # Thresholds
-    NUMERIC_VETO_ABS = {"extreme": 1e9, "lenient": 5.0, "balanced": 1.0, "strict": 0.001}
-    SIMILARITY_ACCEPT_THRESH = {"extreme": 0.2, "lenient": 0.5, "balanced": 0.75, "strict": 0.9}
-
-    # Get expected answer for context, if available
-    expected_raw = question.get("expected", None)
-    expected_norm = normalize_text(expected_raw) if expected_raw is not None else None
-    expected_num = parse_number_if_possible(expected_raw) if expected_raw is not None else None
-
-    # Split answers into batches if necessary
-    answer_batches = [unique_answers[i:i + BATCH_SIZE_LIMIT] for i in range(0, len(unique_answers), BATCH_SIZE_LIMIT)]
-    log("DEBUG", f"Split into {len(answer_batches)} batches")
-
-    # Get votes for all answers from each model
-    all_votes = [[] for _ in unique_answers]
-    for batch_idx, answer_batch in enumerate(answer_batches):
-        log("DEBUG", f"Batch {batch_idx + 1}/{len(answer_batches)}: {len(answer_batch)} answers")
+    all_votes = []
+    for batch_idx, batch in enumerate(batches, 1):
+        log("DEBUG", f"Batch {batch_idx}/{len(batches)}: {len(batch)} answers")
+        batch_votes = []
         for model in judges:
-            votes = get_model_vote(model, question, answer_batch, LENIENCY)
-            batch_start_idx = batch_idx * BATCH_SIZE_LIMIT
-            for i, vote in enumerate(votes):
-                all_votes[batch_start_idx + i].append(vote)
+            log("DEBUG", f"Sending {len(batch)} answers to {model}: {batch}")
+            votes = get_model_vote(model, question, batch, LENIENCY)
+            if len(votes) != len(batch):
+                log("ERROR", f"Model {model} returned {len(votes)} votes, expected {len(batch)}. Falling back to NO.")
+                votes = [("NO", "") for _ in batch]
+            batch_votes.append(votes)
+            log("DEBUG", f"Model {model} processed {len(batch)} answers successfully")
+        all_votes.extend(list(zip(*batch_votes)))
 
-    for idx, ans in answer_map.items():
+    for idx, ans in enumerate(unique_answers, 1):
         ans_norm = normalize_text(ans)
         ans_num = parse_number_if_possible(ans)
         votes = all_votes[int(idx)-1]
