@@ -9,7 +9,7 @@ import ollama
 with open("config.json") as f:
     config = json.load(f)
 
-MODELS = config["models"].get("judge", ["deepseek-r1:32b", "gpt-oss:20b", "gemma2:9b"])
+MODELS = config["models"].get("judge", ["gpt-oss:20b"])
 
 BATCH_SIZE_LIMIT = 1  # Process one question at a time to avoid confusion
 
