@@ -1,6 +1,7 @@
 {
   "models": {
-    "judge": ["gpt-oss:20b","Lazysniper/HorizaEdu:latest", "gemma2:9b"]
+    "judge": [
+      "gpt-oss:20b"]
   },
   "leniency": "lenient",
   "leniency_note": "options: extreme, lenient, balanced, strict"
