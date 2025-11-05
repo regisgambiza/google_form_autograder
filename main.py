@@ -31,9 +31,11 @@ def main():
         with open("forms_to_grade.json") as f:
             forms_data = json.load(f)
         form_urls = list(set(forms_data.get("forms", [])))  # Deduplicate URLs
+        total_forms = len(form_urls)
         if not form_urls:
             log("ERROR", "No forms found in forms_to_grade.json. Exiting.")
             sys.exit(1)
+        print(f"Progress: 0/{total_forms}")  # Initial progress
     except FileNotFoundError:
         log("ERROR", "forms_to_grade.json not found in project directory. Exiting.")
         sys.exit(1)
@@ -43,8 +45,9 @@ def main():
 
     service = get_service()
 
-    for form_url in form_urls:
+    for i, form_url in enumerate(form_urls, 1):
         try:
+            print(f"Progress: {i}/{total_forms}")  # Update progress
             form_id = extract_form_id(form_url)
             log("INFO", f"Processing form ID: {form_id} from URL: {form_url}")
 
