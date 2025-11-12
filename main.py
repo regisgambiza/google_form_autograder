@@ -30,7 +30,18 @@ def main():
     try:
         with open("forms_to_grade.json") as f:
             forms_data = json.load(f)
-        form_urls = list(set(forms_data.get("forms", [])))  # Deduplicate URLs
+        
+        forms_list = forms_data.get("forms", [])
+        form_urls = []
+        for item in forms_list:
+            if isinstance(item, str):
+                form_urls.append(item)
+            elif isinstance(item, dict):
+                url = item.get("url")
+                if url:
+                    form_urls.append(url)
+        
+        form_urls = list(set(form_urls))  # Deduplicate URLs
         total_forms = len(form_urls)
         if not form_urls:
             log("ERROR", "No forms found in forms_to_grade.json. Exiting.")
