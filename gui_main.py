@@ -1,10 +1,11 @@
+# gui_main.py
 import sys
 import os
 import json
 import subprocess
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QPushButton, QLineEdit, QListWidget,
-                             QMessageBox, QProgressBar, QTextEdit, QLabel, QComboBox)
+                             QMessageBox, QProgressBar, QTextEdit, QLabel, QComboBox, QCheckBox)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 
 # Import authenticated Google Forms API client
@@ -78,7 +79,7 @@ class FormManager(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Google Form Manager")
-        self.setGeometry(100, 100, 1200, 800)
+        self.setGeometry(100, 100, 600, 400)
 
         self.grader_thread = None
         self.forms_data = {}  # {url: title}
@@ -109,13 +110,12 @@ class FormManager(QMainWindow):
         # Debug output
         self.debug_output = QTextEdit()
         self.debug_output.setReadOnly(True)
-        self.debug_output.setMinimumHeight(400)
-        self.debug_output.setMaximumHeight(5000)
+        self.debug_output.setMaximumHeight(150)
         layout.addWidget(self.debug_output)
 
         # Finished forms list
         self.finished_list = QListWidget()
-        self.finished_list.setMaximumHeight(50)
+        self.finished_list.setMaximumHeight(100)
         layout.addWidget(self.finished_list)
 
         # URL input
@@ -131,7 +131,6 @@ class FormManager(QMainWindow):
         # Form list
         self.form_list = QListWidget()
         layout.addWidget(self.form_list)
-        self.form_list.setMaximumHeight(150)
         self.load_forms()
 
         # Evaluator selection
@@ -144,15 +143,28 @@ class FormManager(QMainWindow):
         evaluator_layout.addWidget(self.evaluator_combo)
         layout.addLayout(evaluator_layout)
 
-        # Load current evaluator from config
+        # Report option
+        report_layout = QHBoxLayout()
+        report_label = QLabel("Generate Report:")
+        self.report_checkbox = QCheckBox()
+        self.report_checkbox.setChecked(True)
+        self.report_checkbox.stateChanged.connect(self.update_report_option)
+        report_layout.addWidget(report_label)
+        report_layout.addWidget(self.report_checkbox)
+        layout.addLayout(report_layout)
+
+        # Load current settings from config
         try:
             with open("config.json", "r") as f:
                 config = json.load(f)
             evaluator = config.get("evaluator", "ai_evaluator")
             self.evaluator_combo.setCurrentText(evaluator)
+            generate_report = config.get("generate_report", True)
+            self.report_checkbox.setChecked(generate_report)
         except Exception as e:
-            self.debug_output.append(f"Failed to load evaluator from config: {e}")
+            self.debug_output.append(f"Failed to load config: {e}")
             self.evaluator_combo.setCurrentText("ai_evaluator")
+            self.report_checkbox.setChecked(True)
 
         # Control buttons
         button_layout = QHBoxLayout()
@@ -278,6 +290,18 @@ class FormManager(QMainWindow):
                 json.dump(config, f, indent=4)
                 f.truncate()
             self.debug_output.append(f"Updated evaluator to {text}")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to update config: {e}")
+
+    def update_report_option(self, state):
+        try:
+            with open("config.json", "r+") as f:
+                config = json.load(f)
+                config["generate_report"] = bool(state)
+                f.seek(0)
+                json.dump(config, f, indent=4)
+                f.truncate()
+            self.debug_output.append(f"Updated generate_report to {bool(state)}")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to update config: {e}")
 

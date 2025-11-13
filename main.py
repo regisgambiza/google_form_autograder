@@ -1,3 +1,4 @@
+# main.py
 import json
 import sys
 from form_utils import get_form_structure
@@ -11,6 +12,7 @@ from updater import update_correct_answers
 with open("config.json") as f:
     config = json.load(f)
 evaluator_module = config.get("evaluator", "ai_evaluator")
+generate_report = config.get("generate_report", True)
 try:
     exec(f"from {evaluator_module} import evaluate_answers")
 except ImportError as e:
@@ -122,12 +124,15 @@ def main():
             all_questions.sort(key=lambda x: x["question"]["index"])
             log("DEBUG", f"Sorted questions: {[q['question']['index'] for q in all_questions]}")
 
-            # Generate feedback report for all questions
-            report_path = generate_form_feedback(form_id, form_title, all_questions)
-            if report_path:
-                log("INFO", f"Feedback report for all questions generated at {report_path}")
+            # Generate feedback report if enabled
+            if generate_report:
+                report_path = generate_form_feedback(form_id, form_title, all_questions)
+                if report_path:
+                    log("INFO", f"Feedback report for all questions generated at {report_path}")
+                else:
+                    log("ERROR", f"Failed to generate feedback report for form {form_id}")
             else:
-                log("ERROR", f"Failed to generate feedback report for form {form_id}")
+                log("INFO", "Report generation skipped as per configuration.")
 
             # Update correct answers for text questions
             form_duplicates = []
