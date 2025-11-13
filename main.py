@@ -2,11 +2,20 @@ import json
 import sys
 from form_utils import get_form_structure
 from response_utils import get_responses
-from ai_evaluator import evaluate_answers
-from updater import update_correct_answers
 from auth import get_service
 from logger import log
 from feedback import generate_form_feedback
+from updater import update_correct_answers
+
+# Dynamically import evaluator based on config
+with open("config.json") as f:
+    config = json.load(f)
+evaluator_module = config.get("evaluator", "ai_evaluator")
+try:
+    exec(f"from {evaluator_module} import evaluate_answers")
+except ImportError as e:
+    log("ERROR", f"Failed to import evaluator '{evaluator_module}': {e}. Falling back to ai_evaluator.")
+    from ai_evaluator import evaluate_answers
 
 def extract_form_id(form_url):
     """Extract form ID from a Google Form URL."""
@@ -86,20 +95,22 @@ def main():
             all_questions = []
             for q in form_structure:
                 responses = get_responses(service, form_id, q["questionId"])
-                correct_answers = []
+                correct_answers_fetched = []
+                try:
+                    for item in form_data.get("items", []):
+                        if item.get("itemId") == q["itemId"] and "questionItem" in item:
+                            question = item["questionItem"].get("question", {})
+                            if "grading" in question and "correctAnswers" in question["grading"]:
+                                correct_answers_fetched = [ans["value"] for ans in question["grading"]["correctAnswers"].get("answers", [])]
+                            break
+                except Exception as e:
+                    log("WARNING", f"Could not fetch correct answers for Q{q['index']}: {e}")
+                
                 if q["type"] in text_types:
-                    correct_answers = evaluate_answers(q, responses)
+                    correct_answers = evaluate_answers(q, responses, expected=correct_answers_fetched)
                 else:
-                    # Fetch correct answers for non-text questions from grading settings
-                    try:
-                        for item in form_data.get("items", []):
-                            if item.get("itemId") == q["itemId"] and "questionItem" in item:
-                                question = item["questionItem"].get("question", {})
-                                if "grading" in question and "correctAnswers" in question["grading"]:
-                                    correct_answers = [ans["value"] for ans in question["grading"]["correctAnswers"].get("answers", [])]
-                                break
-                    except Exception as e:
-                        log("WARNING", f"Could not fetch correct answers for Q{q['index']}: {e}")
+                    correct_answers = correct_answers_fetched
+                
                 q_data = {
                     "question": q,
                     "responses": responses,

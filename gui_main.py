@@ -4,7 +4,7 @@ import json
 import subprocess
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QPushButton, QLineEdit, QListWidget,
-                             QMessageBox, QProgressBar, QTextEdit, QLabel)
+                             QMessageBox, QProgressBar, QTextEdit, QLabel, QComboBox)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 
 # Import authenticated Google Forms API client
@@ -78,7 +78,7 @@ class FormManager(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Google Form Manager")
-        self.setGeometry(100, 100, 600, 400)
+        self.setGeometry(100, 100, 1200, 800)
 
         self.grader_thread = None
         self.forms_data = {}  # {url: title}
@@ -109,12 +109,13 @@ class FormManager(QMainWindow):
         # Debug output
         self.debug_output = QTextEdit()
         self.debug_output.setReadOnly(True)
-        self.debug_output.setMaximumHeight(150)
+        self.debug_output.setMinimumHeight(400)
+        self.debug_output.setMaximumHeight(5000)
         layout.addWidget(self.debug_output)
 
         # Finished forms list
         self.finished_list = QListWidget()
-        self.finished_list.setMaximumHeight(100)
+        self.finished_list.setMaximumHeight(50)
         layout.addWidget(self.finished_list)
 
         # URL input
@@ -130,7 +131,28 @@ class FormManager(QMainWindow):
         # Form list
         self.form_list = QListWidget()
         layout.addWidget(self.form_list)
+        self.form_list.setMaximumHeight(150)
         self.load_forms()
+
+        # Evaluator selection
+        evaluator_layout = QHBoxLayout()
+        evaluator_label = QLabel("Evaluator:")
+        self.evaluator_combo = QComboBox()
+        self.evaluator_combo.addItems(["ai_evaluator", "ai_evaluator_2"])
+        self.evaluator_combo.currentTextChanged.connect(self.update_evaluator)
+        evaluator_layout.addWidget(evaluator_label)
+        evaluator_layout.addWidget(self.evaluator_combo)
+        layout.addLayout(evaluator_layout)
+
+        # Load current evaluator from config
+        try:
+            with open("config.json", "r") as f:
+                config = json.load(f)
+            evaluator = config.get("evaluator", "ai_evaluator")
+            self.evaluator_combo.setCurrentText(evaluator)
+        except Exception as e:
+            self.debug_output.append(f"Failed to load evaluator from config: {e}")
+            self.evaluator_combo.setCurrentText("ai_evaluator")
 
         # Control buttons
         button_layout = QHBoxLayout()
@@ -206,7 +228,6 @@ class FormManager(QMainWindow):
         except json.JSONDecodeError:
             QMessageBox.critical(self, "Error", "Invalid JSON file format")
 
-
     def save_forms(self):
         data = {"forms": [{"url": url, "title": title} for url, title in self.forms_data.items()]}
         with open("forms_to_grade.json", "w") as f:
@@ -247,6 +268,18 @@ class FormManager(QMainWindow):
                     break
             self.form_list.takeItem(current)
             self.save_forms()
+
+    def update_evaluator(self, text):
+        try:
+            with open("config.json", "r+") as f:
+                config = json.load(f)
+                config["evaluator"] = text
+                f.seek(0)
+                json.dump(config, f, indent=4)
+                f.truncate()
+            self.debug_output.append(f"Updated evaluator to {text}")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to update config: {e}")
 
     # ---------- GRADER ----------
 
