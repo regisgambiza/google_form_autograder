@@ -1,4 +1,4 @@
-# gui_main.py
+
 import sys
 import os
 import json
