@@ -1,12 +1,11 @@
-
 {
-  "models": {
-    "judge": [
-      "gpt-oss:20b"
-    ]
-  },
-  "leniency": "lenient",
-  "leniency_note": "options: extreme, lenient, balanced, strict",
-  "evaluator": "ai_evaluator",
-  "generate_report": true
+    "models": {
+        "judge": [
+            "gpt-oss:20b"
+        ]
+    },
+    "leniency": "lenient",
+    "leniency_note": "options: extreme, lenient, balanced, strict",
+    "evaluator": "ai_evaluator_2",
+    "generate_report": false
 }
