@@ -124,6 +124,10 @@ def main():
             all_questions.sort(key=lambda x: x["question"]["index"])
             log("DEBUG", f"Sorted questions: {[q['question']['index'] for q in all_questions]}")
 
+            # Count total responses for this form
+            total_responses = sum(len(q["responses"]) for q in all_questions)
+            response_count = 0
+
             # Generate feedback report if enabled
             if generate_report:
                 report_path = generate_form_feedback(form_id, form_title, all_questions)
@@ -139,6 +143,10 @@ def main():
             for q_data in all_questions:
                 q = q_data["question"]
                 correct_answers = q_data["correct_answers"]
+                # Track per-response progress
+                response_count += len(q_data["responses"])
+                print(f"FormProgress: {response_count}/{total_responses}")
+                
                 if correct_answers and q["type"] in text_types:
                     duplicates = update_correct_answers(service, form_id, q["itemId"], correct_answers, q["index"])
                     if duplicates:

@@ -18,6 +18,7 @@ from auth import get_service, get_drive_service, get_classroom_service
 class GraderThread(QThread):
     finished = pyqtSignal(bool, str)
     progress = pyqtSignal(int, int)
+    overall_progress = pyqtSignal(int, int)
     debug_message = pyqtSignal(str)
     current_form = pyqtSignal(str)
     finished_form = pyqtSignal(str)
@@ -44,10 +45,19 @@ class GraderThread(QThread):
                 ls = line.strip()
                 self.debug_message.emit(ls)
 
-                if ls.startswith("Progress:"):
+                # Parse per-form progress (responses evaluated in current form)
+                if ls.startswith("FormProgress:"):
                     try:
                         current, total = map(int, ls.split(":")[1].strip().split("/"))
                         self.progress.emit(current, total)
+                    except ValueError:
+                        pass
+
+                # Parse overall progress (forms processed / total forms)
+                if ls.startswith("Progress:"):
+                    try:
+                        current, total = map(int, ls.split(":")[1].strip().split("/"))
+                        self.overall_progress.emit(current, total)
                     except ValueError:
                         pass
 
@@ -108,10 +118,18 @@ class FormManager(QMainWindow):
         self.setCentralWidget(central_widget)
         layout = QVBoxLayout(central_widget)
 
-        # Progress
+        # Overall and per-form Progress
         progress_layout = QHBoxLayout()
-        self.progress_label = QLabel("Progress: 0%")
+        # Overall (forms)
+        self.overall_progress_label = QLabel("Overall: 0%")
+        self.overall_progress_bar = QProgressBar()
+        self.overall_progress_bar.setMaximum(100)
+        progress_layout.addWidget(self.overall_progress_label)
+        progress_layout.addWidget(self.overall_progress_bar)
+        # Per-form (responses)
+        self.progress_label = QLabel("Form: 0%")
         self.progress_bar = QProgressBar()
+        self.progress_bar.setMaximum(100)
         progress_layout.addWidget(self.progress_label)
         progress_layout.addWidget(self.progress_bar)
         layout.addLayout(progress_layout)
@@ -203,6 +221,17 @@ class FormManager(QMainWindow):
         report_layout.addWidget(self.report_checkbox)
         layout.addLayout(report_layout)
 
+        # Leniency selector
+        leniency_layout = QHBoxLayout()
+        leniency_label = QLabel("Leniency:")
+        self.leniency_combo = QComboBox()
+        # Options should match config.json leniency_note
+        self.leniency_combo.addItems(["extreme", "lenient", "balanced", "strict"])
+        self.leniency_combo.currentTextChanged.connect(self.update_leniency)
+        leniency_layout.addWidget(leniency_label)
+        leniency_layout.addWidget(self.leniency_combo)
+        layout.addLayout(leniency_layout)
+
         # Load config
         try:
             with open("config.json", "r") as f:
@@ -214,8 +243,17 @@ class FormManager(QMainWindow):
                     self.evaluator_combo.setCurrentIndex(i)
                     break
             self.report_checkbox.setChecked(config.get("generate_report", True))
-        except:
-            pass
+            # Leniency
+            leniency = config.get("leniency", "lenient")
+            for i in range(self.leniency_combo.count()):
+                if self.leniency_combo.itemText(i) == leniency:
+                    self.leniency_combo.setCurrentIndex(i)
+                    break
+            # Tooltip / note
+            note = config.get("leniency_note", "options: extreme, lenient, balanced, strict")
+            self.leniency_combo.setToolTip(note)
+        except Exception as e:
+            self.debug_output.append(f"Failed to load config: {e}")
 
         # Buttons
         button_layout = QHBoxLayout()
@@ -386,6 +424,14 @@ class FormManager(QMainWindow):
                 f.seek(0); json.dump(c, f, indent=4); f.truncate()
         except: pass
 
+    def update_leniency(self, text):
+        try:
+            with open("config.json", "r+") as f:
+                c = json.load(f)
+                c["leniency"] = text
+                f.seek(0); json.dump(c, f, indent=4); f.truncate()
+        except: pass
+
     def update_report_option(self, state):
         try:
             with open("config.json", "r+") as f:
@@ -403,16 +449,24 @@ class FormManager(QMainWindow):
         self.grader_thread = GraderThread()
         self.grader_thread.finished.connect(self.on_grading_finished)
         self.grader_thread.progress.connect(self.update_progress)
+        self.grader_thread.overall_progress.connect(self.update_overall_progress)
         self.grader_thread.debug_message.connect(self.debug_output.append)
         self.grader_thread.current_form.connect(self.current_label.setText)
         self.grader_thread.finished_form.connect(self.update_finished_form)
         self.grader_thread.start()
 
     def update_progress(self, cur, tot):
-        pct = int(cur/tot*100) if tot else 0
+        # If there are no items to process, treat as complete
+        if not tot:
+            pct = 100
+            self.progress_bar.setValue(pct)
+            self.progress_label.setText("Form: 100% (no responses)")
+            return
+
+        pct = int((cur / tot) * 100)
         self.progress_bar.setValue(pct)
-        self.progress_label.setText(f"Progress: {pct}%")
-        self.in_queue_label.setText(f"In queue: {tot-cur}")
+        self.progress_label.setText(f"Form: {pct}% ({cur}/{tot} responses)")
+        # Do not change in_queue_label here — it's used for overall forms remaining
 
     def update_finished_form(self, form_id):
         self.finished_forms.append(form_id)
@@ -429,6 +483,21 @@ class FormManager(QMainWindow):
                 if not item.text().startswith("Done "):
                     item.setText("Done " + item.text())
                 break
+
+    def update_overall_progress(self, cur, tot):
+        # cur = number of forms processed, tot = total forms
+        if not tot:
+            pct = 100
+            self.overall_progress_bar.setValue(pct)
+            self.overall_progress_label.setText("Overall: 100% (no forms)")
+            self.in_queue_label.setText("In queue: 0")
+            return
+
+        pct = int((cur / tot) * 100)
+        self.overall_progress_bar.setValue(pct)
+        self.overall_progress_label.setText(f"Overall: {pct}% ({cur}/{tot} forms)")
+        remaining = max(0, tot - cur)
+        self.in_queue_label.setText(f"In queue: {remaining} forms")
 
     def on_grading_finished(self, success, msg):
         self.run_button.setEnabled(True)
