@@ -1,15 +1,18 @@
-
+# gui_main.py
 import sys
 import os
 import json
 import subprocess
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QPushButton, QLineEdit, QListWidget,
-                             QMessageBox, QProgressBar, QTextEdit, QLabel, QComboBox, QCheckBox)
-from PyQt5.QtCore import Qt, QThread, pyqtSignal
+                             QListWidgetItem, QMessageBox, QProgressBar, QTextEdit, QLabel, QComboBox, QCheckBox,
+                             QDateEdit)
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QDate
+from PyQt5.QtGui import QColor, QBrush, QFont
+import datetime
 
-# Import authenticated Google Forms API client
-from auth import get_service
+# Import Drive helper and Forms service
+from auth import get_service, get_drive_service, get_classroom_service
 
 
 class GraderThread(QThread):
@@ -75,21 +78,37 @@ class GraderThread(QThread):
             self.finished.emit(False, str(e))
 
 
+class ClassLoaderThread(QThread):
+    courses_loaded = pyqtSignal(list)
+    error = pyqtSignal(str)
+
+    def run(self):
+        try:
+            classroom = get_classroom_service()
+            resp = classroom.courses().list(pageSize=200).execute()
+            courses = resp.get('courses', [])
+            out = [(c.get('name'), c.get('id')) for c in courses if c.get('name')]
+            self.courses_loaded.emit(out)
+        except Exception as e:
+            self.error.emit(str(e))
+
+
 class FormManager(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Google Form Manager")
-        self.setGeometry(100, 100, 600, 400)
+        self.setWindowTitle("Google Form Autograder")
+        self.setGeometry(100, 100, 1200, 900)
 
         self.grader_thread = None
-        self.forms_data = {}  # {url: title}
-        self.service = None   # Google Forms API client
+        self.forms_data = {}
+        self.service = None
+        self.finished_forms = []
 
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         layout = QVBoxLayout(central_widget)
 
-        # Progress section
+        # Progress
         progress_layout = QHBoxLayout()
         self.progress_label = QLabel("Progress: 0%")
         self.progress_bar = QProgressBar()
@@ -97,7 +116,7 @@ class FormManager(QMainWindow):
         progress_layout.addWidget(self.progress_bar)
         layout.addLayout(progress_layout)
 
-        # Status labels
+        # Status
         status_layout = QHBoxLayout()
         self.current_label = QLabel("Currently processing: -")
         self.finished_label = QLabel("Finished: 0")
@@ -110,13 +129,8 @@ class FormManager(QMainWindow):
         # Debug output
         self.debug_output = QTextEdit()
         self.debug_output.setReadOnly(True)
-        self.debug_output.setMaximumHeight(150)
-        layout.addWidget(self.debug_output)
-
-        # Finished forms list
-        self.finished_list = QListWidget()
-        self.finished_list.setMaximumHeight(100)
-        layout.addWidget(self.finished_list)
+        self.debug_output.setMinimumHeight(250)
+        layout.addWidget(self.debug_output, 2)
 
         # URL input
         input_layout = QHBoxLayout()
@@ -128,22 +142,58 @@ class FormManager(QMainWindow):
         input_layout.addWidget(add_button)
         layout.addLayout(input_layout)
 
+        # Classes + Find Forms
+        classes_layout = QHBoxLayout()
+        classes_label = QLabel("Classes:")
+        self.classes_list = QListWidget()
+        self.classes_list.setSelectionMode(QListWidget.MultiSelection)
+        self.classes_list.setMaximumHeight(100)
+        classes_layout.addWidget(classes_label)
+        classes_layout.addWidget(self.classes_list)
+        refresh_button = QPushButton("Refresh Classes")
+        refresh_button.clicked.connect(self.load_classes)
+        classes_layout.addWidget(refresh_button)
+        layout.addLayout(classes_layout)
+
+        date_layout = QHBoxLayout()
+        date_from_label = QLabel("From:")
+        self.date_from = QDateEdit()
+        self.date_from.setCalendarPopup(True)
+        self.date_from.setDate(QDate.currentDate().addDays(-90))
+        date_to_label = QLabel("To:")
+        self.date_to = QDateEdit()
+        self.date_to.setCalendarPopup(True)
+        self.date_to.setDate(QDate.currentDate())
+        find_button = QPushButton("Find Forms")
+        find_button.clicked.connect(self.find_forms_for_classes)
+        date_layout.addWidget(date_from_label)
+        date_layout.addWidget(self.date_from)
+        date_layout.addWidget(date_to_label)
+        date_layout.addWidget(self.date_to)
+        date_layout.addWidget(find_button)
+        layout.addLayout(date_layout)
+
         # Form list
         self.form_list = QListWidget()
-        layout.addWidget(self.form_list)
+        self.form_list.setMaximumHeight(120)
+        layout.addWidget(self.form_list, 1)
         self.load_forms()
 
-        # Evaluator selection
+        # Evaluator
         evaluator_layout = QHBoxLayout()
         evaluator_label = QLabel("Evaluator:")
         self.evaluator_combo = QComboBox()
-        self.evaluator_combo.addItems(["ai_evaluator", "ai_evaluator_2"])
+        self.evaluator_combo.addItems([
+            "ai_evaluator (Standard evaluation)",
+            "ai_evaluator_2 (Alternative evaluation)"
+        ])
         self.evaluator_combo.currentTextChanged.connect(self.update_evaluator)
         evaluator_layout.addWidget(evaluator_label)
         evaluator_layout.addWidget(self.evaluator_combo)
+        evaluator_layout.addStretch()
         layout.addLayout(evaluator_layout)
 
-        # Report option
+        # Report
         report_layout = QHBoxLayout()
         report_label = QLabel("Generate Report:")
         self.report_checkbox = QCheckBox()
@@ -153,20 +203,21 @@ class FormManager(QMainWindow):
         report_layout.addWidget(self.report_checkbox)
         layout.addLayout(report_layout)
 
-        # Load current settings from config
+        # Load config
         try:
             with open("config.json", "r") as f:
                 config = json.load(f)
             evaluator = config.get("evaluator", "ai_evaluator")
-            self.evaluator_combo.setCurrentText(evaluator)
-            generate_report = config.get("generate_report", True)
-            self.report_checkbox.setChecked(generate_report)
-        except Exception as e:
-            self.debug_output.append(f"Failed to load config: {e}")
-            self.evaluator_combo.setCurrentText("ai_evaluator")
-            self.report_checkbox.setChecked(True)
+            # Match evaluator to combo text (accounts for descriptive labels)
+            for i in range(self.evaluator_combo.count()):
+                if evaluator in self.evaluator_combo.itemText(i):
+                    self.evaluator_combo.setCurrentIndex(i)
+                    break
+            self.report_checkbox.setChecked(config.get("generate_report", True))
+        except:
+            pass
 
-        # Control buttons
+        # Buttons
         button_layout = QHBoxLayout()
         remove_button = QPushButton("Remove Selected")
         remove_button.clicked.connect(self.remove_form)
@@ -176,183 +227,215 @@ class FormManager(QMainWindow):
         button_layout.addWidget(self.run_button)
         layout.addLayout(button_layout)
 
-        self.finished_forms = []
-
-        # Initialize API service
         self.init_service()
+        self.load_classes()
 
-    # ---------- AUTH ----------
     def init_service(self):
         try:
-            self.debug_output.append("Initializing Google API service...")
             self.service = get_service()
-            self.debug_output.append("Authenticated with Google successfully.")
+            self.debug_output.append("Google Forms API ready.")
         except Exception as e:
-            QMessageBox.critical(self, "Authentication Failed",
-                                 f"Could not initialize Google service:\n{e}")
-            self.debug_output.append(f"Auth error: {e}")
+            QMessageBox.critical(self, "Auth Failed", f"{e}")
 
-    # ---------- FORM HANDLING ----------
+    def load_classes(self):
+        self.class_loader = ClassLoaderThread()
+        self.class_loader.courses_loaded.connect(self.on_classes_loaded)
+        self.class_loader.error.connect(self.on_classes_error)
+        self.class_loader.start()
+
+    def on_classes_loaded(self, courses):
+        self.classes_list.clear()
+        seen = set()
+        for name, cid in courses:
+            if name not in seen:
+                seen.add(name)
+                item = QListWidgetItem(name)
+                item.setData(Qt.UserRole, cid)
+                self.classes_list.addItem(item)
+        self.debug_output.append(f"Loaded {len(seen)} classes from Classroom")
+
+    def on_classes_error(self, err):
+        self.debug_output.append(f"Classroom error: {err}")
 
     def extract_form_id(self, url: str):
         try:
-            if "/d/" in url:
-                return url.split("/d/")[1].split("/")[0]
-            elif "/d/e/" in url:
-                return url.split("/d/e/")[1].split("/")[0]
+            for part in ["/d/", "/d/e/", "/forms/d/"]:
+                if part in url:
+                    return url.split(part)[1].split("/")[0]
             return None
-        except Exception:
+        except:
             return None
 
-    def get_form_title(self, form_id: str):
-        """Fetches form title using authenticated service."""
-        if not self.service:
-            self.init_service()
+    def find_forms_for_classes(self):
+        selected = self.classes_list.selectedItems()
+        if not selected:
+            QMessageBox.warning(self, "No Class", "Select at least one class first.")
+            return
+
         try:
-            form_data = self.service.forms().get(formId=form_id).execute()
-            return form_data.get("info", {}).get("title", "Untitled Form")
+            classroom = get_classroom_service()
         except Exception as e:
-            self.debug_output.append(f"Failed to fetch title for {form_id}: {e}")
-            return f"Untitled ({form_id})"
+            QMessageBox.critical(self, "Error", f"Classroom API failed:\n{e}\n\nRun: python auth_refresh.py")
+            return
+
+        found = 0
+        existing = set(self.forms_data.keys())
+
+        for item in selected:
+            course_id = item.data(Qt.UserRole)
+            name = item.text()
+            self.debug_output.append(f"Scanning assignments in: {name}")
+
+            try:
+                request = classroom.courses().courseWork().list(courseId=course_id, pageSize=100)
+                while request:
+                    response = request.execute()
+                    for assignment in response.get('courseWork', []):
+                        for material in assignment.get('materials', []):
+                            form = material.get('form')
+                            if form and form.get('formUrl'):
+                                url = form['formUrl']
+                                form_id = self.extract_form_id(url)
+                                if form_id:
+                                    edit_url = f"https://docs.google.com/forms/d/{form_id}/edit"
+                                    title = form.get('title') or assignment.get('title', 'Form')
+                                    if edit_url not in existing:
+                                        self.forms_data[edit_url] = title
+                                        list_item = QListWidgetItem(f"{title} — {edit_url}")
+                                        list_item.setData(Qt.UserRole, edit_url)
+                                        self.form_list.addItem(list_item)
+                                        existing.add(edit_url)
+                                        found += 1
+                                        self.debug_output.append(f"  Found: {title}")
+                    request = classroom.courses().courseWork().list_next(request, response)
+            except Exception as e:
+                self.debug_output.append(f"Error in {name}: {e}")
+
+        if found:
+            self.save_forms()
+            self.form_list.sortItems()
+            QMessageBox.information(self, "Success", f"Added {found} forms from Classroom!")
+        else:
+            QMessageBox.information(self, "None Found", "No forms attached to assignments.\n(Try adding forms directly in Classroom)")
+
+    def get_form_title(self, form_id):
+        try:
+            data = self.service.forms().get(formId=form_id).execute()
+            return data.get("info", {}).get("title", "Untitled")
+        except:
+            return "Untitled"
 
     def load_forms(self):
         try:
             with open("forms_to_grade.json", "r") as f:
                 data = json.load(f)
-                forms = data.get("forms", [])
-                self.form_list.clear()
-
-                for item in forms:
+                for item in data.get("forms", []):
                     if isinstance(item, dict):
                         url = item.get("url")
-                        title = item.get("title", url if url else "Untitled Form")
-                        if url:
-                            self.forms_data[url] = title
-                            self.form_list.addItem(f"{title} — {url}")
-                    elif isinstance(item, str):
-                        # backward compatibility (old format)
-                        self.forms_data[item] = item
-                        self.form_list.addItem(item)
-
-        except FileNotFoundError:
-            with open("forms_to_grade.json", "w") as f:
-                json.dump({"forms": []}, f)
-        except json.JSONDecodeError:
-            QMessageBox.critical(self, "Error", "Invalid JSON file format")
+                        title = item.get("title", url)
+                    else:
+                        url = title = item
+                    if url:
+                        self.forms_data[url] = title
+                        list_item = QListWidgetItem(f"{title} — {url}" if title != url else title)
+                        list_item.setData(Qt.UserRole, url)
+                        self.form_list.addItem(list_item)
+        except:
+            open("forms_to_grade.json", "w").write('{"forms": []}')
 
     def save_forms(self):
-        data = {"forms": [{"url": url, "title": title} for url, title in self.forms_data.items()]}
+        data = {"forms": [{"url": u, "title": t} for u, t in self.forms_data.items()]}
         with open("forms_to_grade.json", "w") as f:
             json.dump(data, f, indent=2)
 
     def add_form(self):
         url = self.url_input.text().strip()
-        if not url:
+        if not url or "docs.google.com/forms" not in url:
+            QMessageBox.warning(self, "Invalid", "Enter a valid Google Form URL")
             return
-
-        if not (url.startswith("https://docs.google.com/forms/") and
-                ("/d/" in url or "/d/e/" in url)):
-            QMessageBox.warning(self, "Invalid URL",
-                                "Please enter a valid Google Form URL")
-            return
-
         form_id = self.extract_form_id(url)
         if not form_id:
-            QMessageBox.warning(self, "Error", "Could not extract Form ID from URL.")
+            QMessageBox.warning(self, "Error", "Cannot extract Form ID")
             return
-
-        self.debug_output.append("Fetching form title...")
+        edit_url = f"https://docs.google.com/forms/d/{form_id}/edit"
         title = self.get_form_title(form_id)
-        self.debug_output.append(f"Fetched title: {title}")
-
-        self.forms_data[url] = title
-        self.form_list.addItem(f"{title} — {url}")
+        self.forms_data[edit_url] = title
+        item = QListWidgetItem(f"{title} — {edit_url}")
+        item.setData(Qt.UserRole, edit_url)
+        self.form_list.addItem(item)
         self.url_input.clear()
         self.save_forms()
 
     def remove_form(self):
-        current = self.form_list.currentRow()
-        if current >= 0:
-            item_text = self.form_list.item(current).text()
-            for url in list(self.forms_data.keys()):
-                if url in item_text:
-                    del self.forms_data[url]
-                    break
-            self.form_list.takeItem(current)
+        row = self.form_list.currentRow()
+        if row >= 0:
+            item = self.form_list.item(row)
+            url = item.data(Qt.UserRole)
+            if url in self.forms_data:
+                del self.forms_data[url]
+            self.form_list.takeItem(row)
             self.save_forms()
 
     def update_evaluator(self, text):
         try:
+            # Extract evaluator name (text is "ai_evaluator (description)" or "ai_evaluator_2 (description)")
+            evaluator = text.split(" ")[0] if text else "ai_evaluator"
             with open("config.json", "r+") as f:
-                config = json.load(f)
-                config["evaluator"] = text
-                f.seek(0)
-                json.dump(config, f, indent=4)
-                f.truncate()
-            self.debug_output.append(f"Updated evaluator to {text}")
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to update config: {e}")
+                c = json.load(f)
+                c["evaluator"] = evaluator
+                f.seek(0); json.dump(c, f, indent=4); f.truncate()
+        except: pass
 
     def update_report_option(self, state):
         try:
             with open("config.json", "r+") as f:
-                config = json.load(f)
-                config["generate_report"] = bool(state)
-                f.seek(0)
-                json.dump(config, f, indent=4)
-                f.truncate()
-            self.debug_output.append(f"Updated generate_report to {bool(state)}")
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to update config: {e}")
-
-    # ---------- GRADER ----------
+                c = json.load(f)
+                c["generate_report"] = bool(state)
+                f.seek(0); json.dump(c, f, indent=4); f.truncate()
+        except: pass
 
     def run_grader(self):
-        if self.grader_thread is not None and self.grader_thread.isRunning():
+        if self.grader_thread and self.grader_thread.isRunning():
             return
-
         self.run_button.setEnabled(False)
         self.debug_output.clear()
         self.progress_bar.setValue(0)
-        self.progress_label.setText("Progress: 0%")
-
         self.grader_thread = GraderThread()
         self.grader_thread.finished.connect(self.on_grading_finished)
         self.grader_thread.progress.connect(self.update_progress)
-        self.grader_thread.debug_message.connect(self.update_debug)
-        self.grader_thread.current_form.connect(self.update_current_form)
+        self.grader_thread.debug_message.connect(self.debug_output.append)
+        self.grader_thread.current_form.connect(self.current_label.setText)
         self.grader_thread.finished_form.connect(self.update_finished_form)
         self.grader_thread.start()
 
-    def update_progress(self, current, total):
-        percentage = int((current / total) * 100)
-        self.progress_bar.setValue(percentage)
-        self.progress_label.setText(f"Progress: {percentage}% ({current}/{total} forms)")
-        in_queue = max(0, total - current)
-        self.in_queue_label.setText(f"In queue: {in_queue}")
-        self.finished_label.setText(f"Finished: {len(self.finished_forms)}")
-
-    def update_debug(self, message):
-        self.debug_output.append(message)
-        self.debug_output.verticalScrollBar().setValue(
-            self.debug_output.verticalScrollBar().maximum()
-        )
-
-    def on_grading_finished(self, success, error_msg):
-        self.run_button.setEnabled(True)
-        if success:
-            QMessageBox.information(self, "Success", "Grading completed successfully!")
-        else:
-            QMessageBox.critical(self, "Error", f"Grading failed: {error_msg}")
-            self.debug_output.append(f"Error: {error_msg}")
-
-    def update_current_form(self, url):
-        self.current_label.setText(f"Currently processing: {url}")
+    def update_progress(self, cur, tot):
+        pct = int(cur/tot*100) if tot else 0
+        self.progress_bar.setValue(pct)
+        self.progress_label.setText(f"Progress: {pct}%")
+        self.in_queue_label.setText(f"In queue: {tot-cur}")
 
     def update_finished_form(self, form_id):
         self.finished_forms.append(form_id)
-        self.finished_list.addItem(str(form_id))
         self.finished_label.setText(f"Finished: {len(self.finished_forms)}")
+        for i in range(self.form_list.count()):
+            item = self.form_list.item(i)
+            url = item.data(Qt.UserRole)
+            if url and self.extract_form_id(url) == form_id:
+                font = item.font()
+                font.setStrikeOut(True)
+                item.setFont(font)
+                item.setForeground(QBrush(QColor("gray")))
+                item.setFlags(item.flags() & ~Qt.ItemIsEnabled)
+                if not item.text().startswith("Done "):
+                    item.setText("Done " + item.text())
+                break
+
+    def on_grading_finished(self, success, msg):
+        self.run_button.setEnabled(True)
+        if success:
+            QMessageBox.information(self, "Done", "Grading completed!")
+        else:
+            QMessageBox.critical(self, "Failed", f"Error:\n{msg}")
 
 
 if __name__ == "__main__":
