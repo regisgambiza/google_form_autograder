@@ -1,7 +1,7 @@
 {
     "models": {
         "judge": [
-            "llama3:8b"
+            "deepseek-r1:8b"
         ]
     },
     "leniency": "lenient",

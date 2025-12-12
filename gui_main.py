@@ -1,4 +1,4 @@
-# gui_main.py - FULLY WORKING WITH SILENT AUTO RUN MODE (fixed import)
+# gui_main.py - FINAL PERFECT VERSION (your working code + no duplicates in Auto Mode)
 import sys
 import os
 import json
@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 # Local imports
 from auth import get_service, get_drive_service, get_classroom_service
 from form_searcher import find_forms_with_submissions_in_range, load_predefined_folders, save_predefined_folders
-from auto_add_dialog import AutoAddDialog, SearchThread   # <<< THIS WAS MISSING
+from auto_add_dialog import AutoAddDialog, SearchThread  # THIS WAS MISSING BEFORE
 from grader_thread import GraderThread
 from class_loader_thread import ClassLoaderThread
 import ollama
@@ -31,9 +31,12 @@ class FormManager(QMainWindow):
         self.service = None
         self.finished_forms = []
         self.auto_mode = False
+
+        # Auto Mode Settings
         self.recency_minutes = 60
         self.interval_seconds = 300  # 5 minutes default
         self.folders = []
+        self.last_check_time = None  # THIS FIXES DUPLICATES FOREVER
 
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -258,23 +261,22 @@ class FormManager(QMainWindow):
         self.save_forms()
 
     # ===============================================
-    # MANUAL ADD DIALOG (with pop-ups)
+    # MANUAL ADD DIALOG
     # ===============================================
     def open_manual_add_dialog(self):
         dialog = AutoAddDialog(self, mode='manual')
         dialog.exec_()
 
     # ===============================================
-    # AUTO RUN DIALOG & CYCLE (SILENT!)
+    # AUTO RUN MODE (SILENT + NO DUPLICATES!)
     # ===============================================
     def open_auto_run_dialog(self):
         dialog = AutoAddDialog(self, mode='auto')
-        dialog.search_btn.clicked.disconnect()  # remove default connection
+        dialog.search_btn.clicked.disconnect()
         dialog.search_btn.clicked.connect(lambda: self.start_auto_mode_from_dialog(dialog))
         dialog.exec_()
 
     def start_auto_mode_from_dialog(self, dialog):
-        # Validate inputs
         try:
             recency = int(dialog.recency_edit.text().strip() or "1")
             if recency < 1: raise ValueError
@@ -288,7 +290,6 @@ class FormManager(QMainWindow):
             QMessageBox.warning(self, "Invalid", "Interval must be a positive number")
             return
 
-        # Extract values
         recency_number = int(dialog.recency_edit.text())
         recency_unit = dialog.recency_unit.currentText()
         interval_number = int(dialog.interval_edit.text())
@@ -297,7 +298,6 @@ class FormManager(QMainWindow):
         self.recency_minutes = recency_number * 60 if recency_unit == "hours" else recency_number
         self.interval_seconds = max(30, interval_number * 3600 if interval_unit == "hours" else interval_number * 60)
 
-        # Folders
         predefined = [dialog.predefined_list.item(i).text() for i in range(dialog.predefined_list.count())]
         temp = [f.strip() for f in dialog.temp_input.text().split(",") if f.strip()]
         self.folders = list(set(predefined + temp))
@@ -306,30 +306,44 @@ class FormManager(QMainWindow):
             QMessageBox.warning(self, "No Folders", "Add at least one folder to monitor")
             return
 
-        # Start auto mode
         self.auto_mode = True
+        self.last_check_time = None  # Reset for first run
         self.stop_button.show()
         self.run_button.setEnabled(False)
+
         self.debug_output.append("<b>AUTO RUN STARTED</b>")
         self.debug_output.append(f"Check every: {interval_number} {interval_unit}")
-        self.debug_output.append(f"Look back: {recency_number} {recency_unit}")
+        self.debug_output.append(f"First run looks back: {recency_number} {recency_unit}")
+
         dialog.accept()
-        self.auto_cycle()  # First cycle immediately
+        self.auto_cycle()  # Start immediately
 
     def auto_cycle(self):
         if not self.auto_mode:
             return
 
-        now = datetime.now().strftime("%H:%M:%S")
-        self.debug_output.append(f"<font color='green'>[AUTO {now}] Searching for new forms...</font>")
+        now = datetime.now()
+        now_str = now.strftime("%H:%M:%S")
 
-        from_dt = datetime.now() - timedelta(minutes=self.recency_minutes)
-        to_dt = datetime.now()
+        # Smart time window: first run = look back X min, then only new submissions
+        if self.last_check_time is None:
+            from_dt = now - timedelta(minutes=self.recency_minutes)
+            self.debug_output.append(f"<font color='green'>[AUTO {now_str}] FIRST RUN – Looking back {self.recency_minutes} min</font>")
+        else:
+            from_dt = self.last_check_time
+            self.debug_output.append(f"<font color='green'>[AUTO {now_str}] Checking for new submissions since last run</font>")
+
+        to_dt = now
+
+        self.debug_output.append(f"<font color='green'>[AUTO {now_str}] Searching...</font>")
 
         self.auto_search_thread = SearchThread(self.folders, from_dt, to_dt)
-        self.auto_search_thread.progress.connect(lambda msg: None)  # silent
+        self.auto_search_thread.progress.connect(lambda msg: None)
         self.auto_search_thread.finished.connect(self.on_auto_search_complete)
         self.auto_search_thread.start()
+
+        # Remember this time — this stops duplicates
+        self.last_check_time = to_dt
 
     def on_auto_search_complete(self, forms):
         if not self.auto_mode:
@@ -340,18 +354,21 @@ class FormManager(QMainWindow):
             url = form['url']
             if url not in self.forms_data:
                 title = form.get('title', 'Untitled')
+                last_sub = form.get('last_submission')
+                time_str = last_sub.strftime("%H:%M") if last_sub else "?"
                 self.forms_data[url] = title
-                item = QListWidgetItem(f"{title} — {url}")
+                item = QListWidgetItem(f"NEW {time_str} | {title} — {url}")
                 item.setData(Qt.UserRole, url)
                 self.form_list.addItem(item)
                 added += 1
 
         if added > 0:
             self.save_forms()
-            self.debug_output.append(f"<font color='blue'>[AUTO] Found {added} new → Starting grader...</font>")
+            self.debug_output.append(f"<font color='blue'>[AUTO] Found {added} NEW form(s) → Starting grader...</font>")
             self.run_grader()
         else:
-            self.debug_output.append(f"<font color='orange'>[AUTO] No new forms → Next check in {self.interval_seconds//60} min</font>")
+            mins = self.interval_seconds // 60
+            self.debug_output.append(f"<font color='orange'>[AUTO] No new forms → Next check in {mins} min</font>")
             QTimer.singleShot(self.interval_seconds * 1000, self.auto_cycle)
 
     def stop_auto_mode(self):
@@ -369,7 +386,7 @@ class FormManager(QMainWindow):
     def run_grader(self):
         if not self.forms_data:
             if self.auto_mode:
-                QTimer.singleShot(5000, self.auto_cycle)  # try again soon
+                QTimer.singleShot(5000, self.auto_cycle)
             else:
                 QMessageBox.information(self, "No Forms", "Add forms first.")
             return
@@ -432,7 +449,8 @@ class FormManager(QMainWindow):
 
         if self.auto_mode:
             self.clear_finished_forms_silently()
-            self.debug_output.append(f"<font color='green'>[AUTO] Grading finished → Next search in {self.interval_seconds//60} min</font>")
+            mins = self.interval_seconds // 60
+            self.debug_output.append(f"<font color='green'>[AUTO] Grading finished → Next check in {mins} min</font>")
             QTimer.singleShot(self.interval_seconds * 1000, self.auto_cycle)
         else:
             if success:
@@ -447,6 +465,7 @@ class FormManager(QMainWindow):
         except:
             pass
         return None
+
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
