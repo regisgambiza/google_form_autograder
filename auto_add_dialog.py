@@ -1,0 +1,149 @@
+# auto_add_dialog.py (Modified with missing imports)
+from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLineEdit, QListWidget, QLabel, QDateEdit, QMessageBox, QProgressDialog)
+from PyQt5.QtCore import Qt, QDate, QThread, pyqtSignal
+from form_searcher import load_predefined_folders, save_predefined_folders
+
+class SearchThread(QThread):
+    progress = pyqtSignal(str)
+    finished = pyqtSignal(list)
+
+    def __init__(self, folder_identifiers, from_date, to_date):
+        super().__init__()
+        self.folder_identifiers = folder_identifiers
+        self.from_date = from_date
+        self.to_date = to_date
+
+    def run(self):
+        forms = find_forms_with_submissions_in_range(
+            self.folder_identifiers, 
+            self.from_date, 
+            self.to_date, 
+            progress_callback=self.progress.emit
+        )
+        self.finished.emit(forms)
+
+class AutoAddDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Auto Add Forms")
+        self.setGeometry(200, 200, 600, 400)
+
+        layout = QVBoxLayout(self)
+
+        # Predefined folders
+        predefined_layout = QVBoxLayout()
+        predefined_label = QLabel("Predefined Folders:")
+        predefined_layout.addWidget(predefined_label)
+        self.predefined_list = QListWidget()
+        predefined_layout.addWidget(self.predefined_list)
+
+        btn_layout = QHBoxLayout()
+        add_predefined_btn = QPushButton("Add to Predefined")
+        add_predefined_btn.clicked.connect(self.add_to_predefined)
+        remove_predefined_btn = QPushButton("Remove Selected")
+        remove_predefined_btn.clicked.connect(self.remove_from_predefined)
+        btn_layout.addWidget(add_predefined_btn)
+        btn_layout.addWidget(remove_predefined_btn)
+        predefined_layout.addLayout(btn_layout)
+
+        layout.addLayout(predefined_layout)
+
+        # Temporary folders input
+        self.temp_input = QLineEdit()
+        self.temp_input.setPlaceholderText("Enter folder names/IDs/URLs separated by commas...")
+        layout.addWidget(self.temp_input)
+
+        # Date range
+        date_layout = QHBoxLayout()
+        from_label = QLabel("From:")
+        self.from_date = QDateEdit()
+        self.from_date.setDate(QDate.currentDate().addDays(-7))
+        to_label = QLabel("To:")
+        self.to_date = QDateEdit()
+        self.to_date.setDate(QDate.currentDate())
+        date_layout.addWidget(from_label)
+        date_layout.addWidget(self.from_date)
+        date_layout.addWidget(to_label)
+        date_layout.addWidget(self.to_date)
+        layout.addLayout(date_layout)
+
+        # Search button
+        search_btn = QPushButton("Search and Add Forms")
+        search_btn.clicked.connect(self.search_and_add)
+        layout.addWidget(search_btn)
+
+        self.load_predefined()
+
+    def load_predefined(self):
+        self.predefined_list.clear()
+        folders = load_predefined_folders()
+        for folder in folders:
+            self.predefined_list.addItem(folder)
+
+    def add_to_predefined(self):
+        text = self.temp_input.text().strip()
+        if not text:
+            return
+        new_folders = [f.strip() for f in text.split(',') if f.strip()]
+        existing = [self.predefined_list.item(i).text() for i in range(self.predefined_list.count())]
+        folders = existing + [f for f in new_folders if f not in existing]
+        save_predefined_folders(folders)
+        self.load_predefined()
+        self.temp_input.clear()
+
+    def remove_from_predefined(self):
+        selected = self.predefined_list.selectedItems()
+        if not selected:
+            return
+        folders = [self.predefined_list.item(i).text() for i in range(self.predefined_list.count()) if not self.predefined_list.item(i).isSelected()]
+        save_predefined_folders(folders)
+        self.load_predefined()
+
+    def search_and_add(self):
+        # Get all folders: predefined + temporary
+        predefined = [self.predefined_list.item(i).text() for i in range(self.predefined_list.count())]
+        temp_text = self.temp_input.text().strip()
+        temp = [f.strip() for f in temp_text.split(',') if f.strip()]
+        all_folders = list(set(predefined + temp))
+
+        if not all_folders:
+            QMessageBox.warning(self, "No Folders", "Add at least one folder.")
+            return
+
+        from_dt = self.from_date.date().toPyDate()
+        to_dt = self.to_date.date().toPyDate()
+
+        # Show progress dialog
+        self.progress_dialog = QProgressDialog("Initializing search...", "Cancel", 0, 0, self)
+        self.progress_dialog.setWindowModality(Qt.WindowModal)
+        self.progress_dialog.setMinimumDuration(0)
+        self.progress_dialog.show()
+
+        # Start search thread
+        self.search_thread = SearchThread(all_folders, from_dt, to_dt)
+        self.search_thread.progress.connect(self.progress_dialog.setLabelText)
+        self.search_thread.finished.connect(self.on_search_finished)
+        self.search_thread.start()
+
+    def on_search_finished(self, forms):
+        self.progress_dialog.close()
+
+        if not forms:
+            QMessageBox.information(self, "No Forms", "No forms found with submissions in the date range.")
+            return
+
+        # Add to parent's form list
+        parent = self.parent()
+        for form in forms:
+            url = form['url']
+            title = form['title']
+            last_sub = form.get('last_submission')
+            last_str = last_sub.strftime("%Y-%m-%d") if last_sub else "None"
+            display_text = f"{title} (Last submission: {last_str}) — {url}"
+            if url not in parent.forms_data:
+                parent.forms_data[url] = title
+                item = QListWidgetItem(display_text)
+                item.setData(Qt.UserRole, url)
+                parent.form_list.addItem(item)
+        parent.save_forms()
+        self.accept()
