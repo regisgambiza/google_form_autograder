@@ -1,6 +1,6 @@
 # form_searcher.py (Modified)
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from auth import get_drive_service, get_service
 from logger import log
 
@@ -56,8 +56,8 @@ def get_last_submission_time(form_id, progress_callback=None):
         log("ERROR", f"Error fetching responses for form {form_id}: {e}")
         return None
 
-def find_forms_in_folder(folder_id, from_date, to_date, visited=None, progress_callback=None):
-    """Recursively find forms in a folder and subfolders that had submissions in the date range."""
+def find_forms_in_folder(folder_id, from_dt, to_dt, visited=None, progress_callback=None):
+    """Recursively find forms in a folder and subfolders that had submissions in the datetime range."""
     if visited is None:
         visited = set()
     if folder_id in visited:
@@ -81,7 +81,9 @@ def find_forms_in_folder(folder_id, from_date, to_date, visited=None, progress_c
         if progress_callback:
             progress_callback(f"Checking form: {title} ({form_id})")
         last_ts = get_last_submission_time(form_id)
-        if last_ts and from_date <= last_ts.date() <= to_date:
+        if last_ts:
+            last_ts = last_ts.replace(tzinfo=None)
+        if last_ts and from_dt <= last_ts <= to_dt:
             edit_url = f"https://docs.google.com/forms/d/{form_id}/edit"
             matching_forms.append({'url': edit_url, 'title': title, 'last_submission': last_ts})
 
@@ -93,13 +95,13 @@ def find_forms_in_folder(folder_id, from_date, to_date, visited=None, progress_c
         sub_id = subfolder['id']
         if progress_callback:
             progress_callback(f"Entering subfolder {sub_id}")
-        sub_forms = find_forms_in_folder(sub_id, from_date, to_date, visited, progress_callback)
+        sub_forms = find_forms_in_folder(sub_id, from_dt, to_dt, visited, progress_callback)
         matching_forms.extend(sub_forms)
 
     return matching_forms
 
-def find_forms_with_submissions_in_range(folder_identifiers, from_date, to_date, progress_callback=None):
-    """Main function to find forms based on folders and date range."""
+def find_forms_with_submissions_in_range(folder_identifiers, from_dt, to_dt, progress_callback=None):
+    """Main function to find forms based on folders and datetime range."""
     all_folder_ids = set()
     for ident in folder_identifiers:
         if progress_callback:
@@ -111,7 +113,7 @@ def find_forms_with_submissions_in_range(folder_identifiers, from_date, to_date,
     for folder_id in all_folder_ids:
         if progress_callback:
             progress_callback(f"Starting search in root folder {folder_id}")
-        forms = find_forms_in_folder(folder_id, from_date, to_date, progress_callback=progress_callback)
+        forms = find_forms_in_folder(folder_id, from_dt, to_dt, progress_callback=progress_callback)
         all_forms.extend(forms)
     
     # Deduplicate by URL

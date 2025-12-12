@@ -1,8 +1,9 @@
-# grader_thread.py (New file for modularization)
+# grader_thread.py - FIXED (no more "text" unbound error)
 import sys
 import os
 import subprocess
 from PyQt5.QtCore import QThread, pyqtSignal
+
 
 class GraderThread(QThread):
     finished = pyqtSignal(bool, str)
@@ -28,50 +29,52 @@ class GraderThread(QThread):
                 env=my_env
             )
 
-            for line in iter(process.stdout.readline, ''):
+            # Read stdout line by line (real-time
+            for line in process.stdout:
                 if not line:
                     continue
                 ls = line.strip()
                 self.debug_message.emit(ls)
 
-                # Parse per-form progress (responses evaluated in current form)
+                # Parse progress messages from main.py
                 if ls.startswith("FormProgress:"):
                     try:
                         current, total = map(int, ls.split(":")[1].strip().split("/"))
                         self.progress.emit(current, total)
-                    except ValueError:
+                    except:
                         pass
 
-                # Parse overall progress (forms processed / total forms)
                 if ls.startswith("Progress:"):
                     try:
                         current, total = map(int, ls.split(":")[1].strip().split("/"))
                         self.overall_progress.emit(current, total)
-                    except ValueError:
+                    except:
                         pass
 
                 if "Processing form ID:" in ls and "from URL:" in ls:
                     try:
                         url = ls.split("from URL:", 1)[1].strip()
                         self.current_form.emit(url)
-                    except Exception:
+                    except:
                         pass
 
                 if "Finished processing form" in ls:
                     try:
-                        remainder = ls.split("Finished processing form", 1)[1].strip()
-                        form_id = remainder.split()[0]
+                        form_id = ls.split("Finished processing form", 1)[1].strip().split()[0]
                         self.finished_form.emit(form_id)
-                    except Exception:
+                    except:
                         pass
 
+            # Wait for process to finish
             process.wait()
 
+            # === SUCCESS / FAILURE HANDLING ===
             if process.returncode == 0:
                 self.finished.emit(True, "")
             else:
-                error = process.stderr.read()
-                self.finished.emit(False, error)
+                # Properly read stderr only when there is an error
+                error_output = process.stderr.read() if process.stderr else ""
+                self.finished.emit(False, error_output.strip() or "Unknown error (return code != 0)")
 
         except Exception as e:
-            self.finished.emit(False, str(e))
+            self.finished.emit(False, f"Thread crashed: {str(e)}")

@@ -1,5 +1,5 @@
+# response_utils.py - FINAL FIXED VERSION (no 'text' variable anywhere)
 from logger import log
-import json
 
 def get_responses(service, form_id, question_id):
     """
@@ -13,60 +13,50 @@ def get_responses(service, form_id, question_id):
     found_with_answers = 0
 
     try:
-        # Handle pagination to ensure all responses are fetched
+        # Handle pagination to get ALL responses
         while True:
-            # Fetch responses with pagination
             result = service.forms().responses().list(
                 formId=form_id,
                 pageToken=next_page_token
             ).execute()
-            
+
             responses = result.get("responses", [])
             total_responses += len(responses)
-            log("DEBUG", f"Fetched {len(responses)} responses. Total so far: {total_responses}")
-            
+            log("DEBUG", f"Fetched {len(responses)} responses (total so far: {total_responses})")
+
             for resp in responses:
                 resp_id = resp.get("responseId", "unknown")
                 ans_dict = resp.get("answers", {})
-                
-                if not ans_dict:
-                    log("DEBUG", f"Response {resp_id}: No answers present.")
-                    continue
-                
+
                 if question_id not in ans_dict:
-                    log("DEBUG", f"Response {resp_id}: Question ID {question_id} not found. Present IDs: {list(ans_dict.keys())}")
-                    continue
-                
-                # Extract answers for the question
+                    continue  # This student didn't answer this question
+
                 q_ans = ans_dict[question_id]
-                
-                # Handle text answers
+
+                # Text answers (short/long answer)
                 if "textAnswers" in q_ans:
-                    text_answers = q_ans.get("textAnswers", {}).get("answers", [])
-                    for ans in text_answers:
+                    for ans in q_ans["textAnswers"].get("answers", []):
                         value = ans.get("value")
                         if value is not None:
-                            answers.append(value)
-                            log("DEBUG", f"Response {resp_id}: Found text answer '{value}' for QID {question_id}")
+                            answers.append(value.strip())
                             found_with_answers += 1
-                
-                # Handle choice answers (multiple choice)
+
+                # Choice answers (multiple choice, checkbox, dropdown)
                 if "choiceAnswers" in q_ans:
-                    choice_answers = q_ans.get("choiceAnswers", {}).get("answers", [])
-                    for ans in choice_answers:
+                    for ans in q_ans["choiceAnswers"].get("answers", []):
                         value = ans.get("value")
                         if value is not None:
-                            answers.append(value)
-                            log("DEBUG", f"Response {resp_id}: Found choice answer '{value}' for QID {question_id}")
+                            answers.append(value.strip())
                             found_with_answers += 1
-            
+
             next_page_token = result.get("nextPageToken")
             if not next_page_token:
-                break  # Exit loop when no more pages
+                break
 
-        log("INFO", f"Processed {total_responses} responses. Found {found_with_answers} answers for QID {question_id}.")
+        log("INFO", f"Finished: {total_responses} total responses → {found_with_answers} answers for QID {question_id}")
         return answers
 
     except Exception as e:
-        log("ERROR", f"Error fetching or processing responses: {e}")
+        # THIS IS THE ONLY EXCEPT BLOCK — SAFE AND CLEAN
+        log("ERROR", f"Failed to fetch responses for form {form_id}, question {question_id}: {str(e)}")
         return []
