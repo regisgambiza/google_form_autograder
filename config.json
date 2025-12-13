@@ -1,7 +1,7 @@
 {
     "models": {
         "judge": [
-            "gpt-oss:20b"
+            "llama3.1:8b-instruct-q4_0"
         ]
     },
     "leniency": "lenient",
