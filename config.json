@@ -1,7 +1,7 @@
 {
     "models": {
         "judge": [
-            "deepseek-r1:8b"
+            "gpt-oss:20b"
         ]
     },
     "leniency": "lenient",

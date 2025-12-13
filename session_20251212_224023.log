@@ -1,0 +1,27 @@
+[22:40:23] === GUI Session Started at 2025-12-12 22:40:23.266401 ===
+[22:40:31] AUTO RUN STARTED
+[22:40:31] Lookback: 35 hours
+[22:40:31] Check every: 1 minutes
+[22:40:31] Folders: ['https://drive.google.com/drive/folders/188WQoohhwTm8m0qhrzFj4VJrGVOdXpwW?usp=drive_link']
+[22:40:31] [AUTO 22:40:31] FIRST RUN – Looking back 2100 min
+[22:40:31] Search progress: Parsing identifier: https://drive.google.com/drive/folders/188WQoohhwTm8m0qhrzFj4VJrGVOdXpwW?usp=drive_link
+[22:40:32] Search progress: Starting search in root folder 188WQoohhwTm8m0qhrzFj4VJrGVOdXpwW
+[22:40:32] Search progress: Processing folder 188WQoohhwTm8m0qhrzFj4VJrGVOdXpwW
+[22:40:33] Search progress: Checking form: Exercise 1 (1qsVaoYw9hH6hpt2Q0vopKQZ7ra3neiWR4B7PgzMXN44)
+[22:40:40] Search progress: Checking form: Exercise 2 (1LQpqlP_rSsS5Mk59Lj99lQsfGaMcPw_rnKOu_hSeoqk)
+[22:40:43] Search progress: Checking form: Chapter 13: Calculations (1v9mdepNCJDtQ7YhYsGzlnSGixzDSuvYQy4l3LKoyT_M)
+[22:40:46] Search progress: Checking form: Consolidation Exercise (13zfDaLZcQnNejYLVbXMoDc8VBlu4h1l1zupQvWsCJkM)
+[22:40:49] Search progress: Checking form: Ch 13:Grade 7 Test (1W5-BpAhgB1audOoYjxDjZYMUixTz7J1WWjvP700EJsI)
+[22:40:52] Search progress: Entering subfolder 1bzVcFv4yeBVPvlwHx0JmiVql1qgoDRUuCwg1sPqsErZSjJcag9eTYNjRikaeW30lExVs_zBe
+[22:40:52] Search progress: Processing folder 1bzVcFv4yeBVPvlwHx0JmiVql1qgoDRUuCwg1sPqsErZSjJcag9eTYNjRikaeW30lExVs_zBe
+[22:40:54] Search progress: Entering subfolder 1klQ-Ia01T_kgum8xFt_9jKeynPgYNk3KBwr4l7B0AowJDB06nfmHHRpALLfQQk6YbggjAmqw
+[22:40:54] Search progress: Processing folder 1klQ-Ia01T_kgum8xFt_9jKeynPgYNk3KBwr4l7B0AowJDB06nfmHHRpALLfQQk6YbggjAmqw
+[22:40:56] Search progress: Entering subfolder 12Wr6p7Cg3eYayTqdoeKxKpPsC8pzhlevbzafy8ku6hKIC5b0A5QF4T1peqC_2ft67TVzht7V
+[22:40:56] Search progress: Processing folder 12Wr6p7Cg3eYayTqdoeKxKpPsC8pzhlevbzafy8ku6hKIC5b0A5QF4T1peqC_2ft67TVzht7V
+[22:40:57] Search progress: Entering subfolder 16x-84-sV6UDEifmVHChepn1MxSmbXWw8BKCu3hpbrzGg3PsLSKcB6M-9_ESiCAu92h4io0b5
+[22:40:57] Search progress: Processing folder 16x-84-sV6UDEifmVHChepn1MxSmbXWw8BKCu3hpbrzGg3PsLSKcB6M-9_ESiCAu92h4io0b5
+[22:40:59] Search progress: Search complete
+[22:40:59] [AUTO] Found 2 new form(s) → Starting grading...
+[22:41:10] Grading completed successfully!
+[22:41:10] [AUTO] Grading done → Next check in 1 min
+[22:41:23] === GUI Session Ended ===

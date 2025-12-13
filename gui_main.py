@@ -163,7 +163,7 @@ class FormManager(QMainWindow):
             models = [m["name"] for m in ollama.list()["models"]]
             self.model_combo.addItems(models)
             if models:
-                self.model_combo.setCurrentText("deepseek-r1:8b")
+                self.model_combo.setCurrentText("gpt-oss:20b")
         except:
             self.model_combo.addItem("No models found")
             self.model_combo.setEnabled(False)
