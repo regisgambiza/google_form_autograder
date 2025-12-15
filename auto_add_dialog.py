@@ -32,12 +32,16 @@ class SearchThread(QThread):
         if to_dt.tzinfo is None:
             to_dt = to_dt.replace(tzinfo=timezone.utc)
 
+        self.progress.emit(f"Starting search in {len(self.folder_identifiers)} folder(s)")
+        
         forms = find_forms_with_submissions_in_range(
             self.folder_identifiers,
             from_dt,
             to_dt,
-            progress_callback=self.progress.emit
+            progress_callback=lambda msg: self.progress.emit(f"Search: {msg}")
         )
+        
+        self.progress.emit(f"Search completed. Found {len(forms)} form(s) with submissions")
         self.finished.emit(forms)
 
 
@@ -214,11 +218,14 @@ class AutoAddDialog(QDialog):
         self.progress_dialog.close()
 
         if not forms:
-            QMessageBox.information(
-                self, "No Forms",
-                "No forms found with submissions in the date range."
-            )
-            return
+            if self.mode != 'auto':
+                QMessageBox.information(
+                    self, "No Forms",
+                    "No forms found with submissions in the date range."
+                )
+                return
+    # auto mode: continue silently
+
 
         parent = self.parent()
         added = False

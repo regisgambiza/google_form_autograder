@@ -387,14 +387,23 @@ class FormManager(QMainWindow):
             return
         now = datetime.now()
         now_str = now.strftime("%H:%M:%S")
+        
+        # Calculate time range for search
         from_dt = now - timedelta(minutes=self.recency_minutes)
         to_dt = now
+        
         if self.last_check_time:
             from_dt = self.last_check_time
-        self.debug_output.append(f"<font color='green'>[AUTO {now_str}] Searching...</font>")
+        
+        # Show detailed search info
+        time_range_str = f"{from_dt.strftime('%H:%M:%S')} to {to_dt.strftime('%H:%M:%S')}"
+        self.debug_output.append(f"<font color='green'>[AUTO {now_str}] 🔍 Searching for new submissions in folders: {', '.join(self.folders)}</font>")
+        self.debug_output.append(f"<font color='green'>[AUTO] Time range: {time_range_str} (last {self.recency_minutes} minutes)</font>")
 
         self.auto_search_thread = SearchThread(self.folders, from_dt, to_dt)
-        self.auto_search_thread.progress.connect(lambda msg: None)
+        
+        # Connect progress signals with more detail
+        self.auto_search_thread.progress.connect(lambda msg: self.debug_output.append(f"<font color='gray'>[AUTO SEARCH] {msg}</font>"))
         self.auto_search_thread.finished.connect(self.on_auto_search_complete)
         self.auto_search_thread.start()
 
@@ -405,6 +414,22 @@ class FormManager(QMainWindow):
         if not self.auto_mode:
             return
 
+        now_str = datetime.now().strftime("%H:%M:%S")
+        
+        # Detailed summary of search results
+        total_forms_found = len(forms)
+        new_forms = [form for form in forms if form['url'] not in self.forms_data]
+        existing_forms = [form for form in forms if form['url'] in self.forms_data]
+        
+        # Log detailed results
+        self.debug_output.append(f"<font color='blue'>[AUTO {now_str}] 📊 Search completed:</font>")
+        self.debug_output.append(f"<font color='blue'>[AUTO] Total forms with submissions: {total_forms_found}</font>")
+        self.debug_output.append(f"<font color='blue'>[AUTO] New forms to process: {len(new_forms)}</font>")
+        self.debug_output.append(f"<font color='blue'>[AUTO] Already in queue: {len(existing_forms)}</font>")
+        
+        if total_forms_found == 0:
+            self.debug_output.append(f"<font color='gray'>[AUTO] 📭 No forms found with submissions in the specified time range.</font>")
+        
         added = 0
         for form in forms:
             url = form['url']
@@ -416,18 +441,28 @@ class FormManager(QMainWindow):
                 display_text = f"NEW {time_str} | {title} — {url}"
                 item = QListWidgetItem(f"⏳ {display_text}")
                 item.setData(Qt.UserRole, url)
-                item.setForeground(QColor("#0d6efd"))  # Blue for pending
+                item.setForeground(QColor("#0d6efd"))
                 self.form_list.addItem(item)
                 added += 1
+                # Log each new form found
+                self.debug_output.append(f"<font color='green'>[AUTO] ➕ Added new form: {title} (submitted at {time_str})</font>")
 
         if added > 0:
             self.save_forms()
-            self.debug_output.append(f"<font color='blue'>[AUTO] Found {added} NEW form(s) → Starting grader...</font>")
+            self.debug_output.append(f"<font color='blue'>[AUTO] 🚀 Found {added} NEW form(s) → Starting grader...</font>")
             self.run_grader()
         else:
-            mins = self.interval_seconds // 60
-            self.debug_output.append(f"<font color='orange'>[AUTO] No new forms → Next check in {mins} min</font>")
-            QTimer.singleShot(self.interval_seconds * 1000, self.auto_cycle)
+            if total_forms_found > 0:
+                self.debug_output.append(f"<font color='gray'>[AUTO] 📋 All {total_forms_found} forms already in queue. Waiting for next check...</font>")
+            else:
+                self.debug_output.append(f"<font color='gray'>[AUTO] ⏸ No new submissions found. Waiting for next check...</font>")
+
+        # 🔁 ALWAYS continue auto search loop
+        minutes = self.interval_seconds // 60
+        next_check = datetime.now() + timedelta(seconds=self.interval_seconds)
+        next_check_str = next_check.strftime("%H:%M:%S")
+        self.debug_output.append(f"<font color='gray'>[AUTO] ⏰ Next check in {minutes} minute(s) at {next_check_str}</font>")
+        QTimer.singleShot(self.interval_seconds * 1000, self.auto_cycle)
 
     def stop_auto_mode(self):
         self.auto_mode = False
@@ -481,25 +516,63 @@ class FormManager(QMainWindow):
 
     def update_finished_form(self, form_id):
         self.finished_forms.append(form_id)
-        self.finished_label.setText(f"✅ Finished: {len(self.finished_forms)}")
+        now_str = datetime.now().strftime("%H:%M:%S")
+        
         for i in range(self.form_list.count()):
             item = self.form_list.item(i)
             url = item.data(Qt.UserRole)
             if url and self.extract_form_id(url) == form_id:
                 current_text = item.text().replace("⏳ ", "")
+                # Extract title for better logging
+                title = current_text.split(" — ")[0] if " — " in current_text else "Unknown Form"
                 item.setText(f"✅ {current_text}")
                 item.setForeground(QColor("#198754"))  # Green for done
+                
+                # Log completion
+                self.debug_output.append(f"<font color='green'>[AUTO {now_str}] ✅ Completed: {title}</font>")
                 break
-
+        
+        self.finished_label.setText(f"✅ Finished: {len(self.finished_forms)}")
+        
     def on_grading_finished(self, success, msg):
         self.run_button.setEnabled(True)
+        now_str = datetime.now().strftime("%H:%M:%S")
+        
         if not success:
-            self.debug_output.append(f"<font color='red'>Grading failed: {msg}</font>")
+            self.debug_output.append(f"<font color='red'>[AUTO {now_str}] ❌ Grading failed: {msg}</font>")
+        else:
+            self.debug_output.append(f"<font color='green'>[AUTO {now_str}] ✅ Grading completed successfully!</font>")
 
         if self.auto_mode:
-            self.clear_finished_forms_silently()
-            mins = self.interval_seconds // 60
-            self.debug_output.append(f"<font color='green'>[AUTO] Grading finished → Next check in {mins} min</font>")
+            # Clear only finished forms
+            forms_cleared = 0
+            i = 0
+            while i < self.form_list.count():
+                item = self.form_list.item(i)
+                if item.text().startswith("✅ "):
+                    self.form_list.takeItem(i)
+                    url = item.data(Qt.UserRole)
+                    if url in self.forms_data:
+                        del self.forms_data[url]
+                    forms_cleared += 1
+                else:
+                    i += 1
+            
+            if forms_cleared > 0:
+                self.debug_output.append(f"<font color='gray'>[AUTO] 🗑️ Cleared {forms_cleared} finished forms from queue</font>")
+                self.save_forms()
+            
+            # Show auto-mode stats
+            remaining_forms = self.form_list.count()
+            finished_count = len(self.finished_forms)
+            
+            self.debug_output.append(f"<font color='blue'>[AUTO] 📊 Session Stats: Finished: {finished_count}, In queue: {remaining_forms}</font>")
+            
+            minutes = self.interval_seconds // 60
+            next_check = datetime.now() + timedelta(seconds=self.interval_seconds)
+            next_check_str = next_check.strftime("%H:%M:%S")
+            
+            self.debug_output.append(f"<font color='green'>[AUTO] 🔄 Grading finished → Next check in {minutes} minute(s) at {next_check_str}</font>")
             QTimer.singleShot(self.interval_seconds * 1000, self.auto_cycle)
         else:
             if success:
