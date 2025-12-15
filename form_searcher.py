@@ -1,3 +1,4 @@
+# form_searcher.py - OPTIMIZED FOR AUTO MODE: USE FILTER FOR RECENT RESPONSES ONLY
 import json
 from datetime import datetime, timezone
 from auth import get_drive_service, get_service
@@ -35,28 +36,41 @@ def parse_folder_identifier(identifier):
     return [f['id'] for f in folders]
 
 
-def get_last_submission_time(form_id, progress_callback=None):
+def get_last_submission_time(form_id, from_dt=None, progress_callback=None):
+    """
+    Get the latest submission time.
+    If from_dt is provided (UTC aware), use filter to fetch only recent responses for efficiency.
+    """
     if progress_callback:
         progress_callback(f"Checking submissions for form {form_id}")
 
     forms_service = get_service()
 
+    filter_str = None
+    if from_dt:
+        # Use >= to include submissions exactly at from_dt (safe for incremental)
+        ts_str = from_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        filter_str = f"timestamp >= {ts_str}"
+
     try:
-        result = forms_service.forms().responses().list(
-            formId=form_id
-        ).execute()
-
-        responses = result.get('responses', [])
-        if not responses:
-            return None
-
         times = []
-        for resp in responses:
-            ts = resp.get('lastSubmittedTime')
-            if ts:
-                times.append(
-                    datetime.fromisoformat(ts.replace('Z', '+00:00'))
-                )
+        page_token = None
+        while True:
+            result = forms_service.forms().responses().list(
+                formId=form_id,
+                filter=filter_str,
+                pageToken=page_token
+            ).execute()
+
+            responses = result.get('responses', [])
+            for resp in responses:
+                ts_str = resp.get('lastSubmittedTime')
+                if ts_str:
+                    times.append(datetime.fromisoformat(ts_str.replace('Z', '+00:00')))
+
+            page_token = result.get('nextPageToken')
+            if not page_token:
+                break
 
         return max(times) if times else None
 
@@ -92,7 +106,7 @@ def find_forms_in_folder(folder_id, from_dt, to_dt, visited=None, progress_callb
         if progress_callback:
             progress_callback(f"Checking form: {title}")
 
-        last_ts = get_last_submission_time(form_id, progress_callback)
+        last_ts = get_last_submission_time(form_id, from_dt=from_dt, progress_callback=progress_callback)
         if last_ts and from_dt <= last_ts <= to_dt:
             matching.append({
                 "url": f"https://docs.google.com/forms/d/{form_id}/edit",
@@ -100,6 +114,7 @@ def find_forms_in_folder(folder_id, from_dt, to_dt, visited=None, progress_callb
                 "last_submission": last_ts.replace(tzinfo=None)
             })
 
+    # Recurse into subfolders
     folder_query = (
         f"'{folder_id}' in parents and "
         "mimeType='application/vnd.google-apps.folder' and trashed=false"
@@ -138,6 +153,7 @@ def find_forms_with_submissions_in_range(
             find_forms_in_folder(folder_id, from_dt, to_dt, progress_callback=progress_callback)
         )
 
+    # Deduplicate
     return list({f['url']: f for f in all_forms}.values())
 
 

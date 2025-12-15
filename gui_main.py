@@ -24,7 +24,7 @@ from PyQt5.QtWidgets import (
 
 from PyQt5.QtCore import Qt, QDate, QTimer
 from PyQt5.QtGui import QColor, QBrush, QFont, QPalette
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 
 # Local imports
@@ -380,88 +380,69 @@ class FormManager(QMainWindow):
         self.stop_button.show()
         self.run_button.setEnabled(False)
         self.debug_output.append("<b><font color='green'>AUTO RUN STARTED</font></b>")
-        self.auto_cycle()
+        # Set last_check_time AFTER the initial (full recency) search finishes
+        # It will be set in on_search_finished when auto mode starts
+        self.last_check_time = None  # Important: starts as None for first full scan
 
     def auto_cycle(self):
-        if not self.auto_mode:
-            return
-        now = datetime.now()
-        now_str = now.strftime("%H:%M:%S")
-        
-        # Calculate time range for search
-        from_dt = now - timedelta(minutes=self.recency_minutes)
-        to_dt = now
-        
-        if self.last_check_time:
+        now_utc = datetime.now(timezone.utc)
+
+        if self.last_check_time is None:
+            # First cycle after initial scan: use full recency window
+            from_dt = now_utc - timedelta(minutes=self.recency_minutes)
+            self.debug_output.append(f"<font color='blue'>[AUTO] 🔍 First auto check: scanning last {self.recency_minutes} minutes</font>")
+        else:
+            # Subsequent cycles: only since last check
             from_dt = self.last_check_time
-        
-        # Show detailed search info
-        time_range_str = f"{from_dt.strftime('%H:%M:%S')} to {to_dt.strftime('%H:%M:%S')}"
-        self.debug_output.append(f"<font color='green'>[AUTO {now_str}] 🔍 Searching for new submissions in folders: {', '.join(self.folders)}</font>")
-        self.debug_output.append(f"<font color='green'>[AUTO] Time range: {time_range_str} (last {self.recency_minutes} minutes)</font>")
+            self.debug_output.append(f"<font color='blue'>[AUTO] 🔍 Incremental check: since last scan</font>")
+
+        to_dt = now_utc
+
+        from_str = from_dt.strftime("%Y-%m-%d %H:%M:%S UTC")
+        to_str = to_dt.strftime("%Y-%m-%d %H:%M:%S UTC")
+        self.debug_output.append(f"<font color='purple'>[AUTO] Search range: {from_str} → {to_str}</font>")
 
         self.auto_search_thread = SearchThread(self.folders, from_dt, to_dt)
-        
-        # Connect progress signals with more detail
-        self.auto_search_thread.progress.connect(lambda msg: self.debug_output.append(f"<font color='gray'>[AUTO SEARCH] {msg}</font>"))
-        self.auto_search_thread.finished.connect(self.on_auto_search_complete)
+        self.auto_search_thread.progress.connect(lambda msg: self.debug_output.append(f"<font color='gray'>[SEARCH] {msg}</font>"))
+        self.auto_search_thread.finished.connect(self.on_auto_search_finished)
         self.auto_search_thread.start()
-
-        # Remember this time — this stops duplicates
-        self.last_check_time = to_dt
-
-    def on_auto_search_complete(self, forms):
-        if not self.auto_mode:
-            return
-
+    def on_auto_search_finished(self, forms):
         now_str = datetime.now().strftime("%H:%M:%S")
-        
-        # Detailed summary of search results
-        total_forms_found = len(forms)
-        new_forms = [form for form in forms if form['url'] not in self.forms_data]
-        existing_forms = [form for form in forms if form['url'] in self.forms_data]
-        
-        # Log detailed results
-        self.debug_output.append(f"<font color='blue'>[AUTO {now_str}] 📊 Search completed:</font>")
-        self.debug_output.append(f"<font color='blue'>[AUTO] Total forms with submissions: {total_forms_found}</font>")
-        self.debug_output.append(f"<font color='blue'>[AUTO] New forms to process: {len(new_forms)}</font>")
-        self.debug_output.append(f"<font color='blue'>[AUTO] Already in queue: {len(existing_forms)}</font>")
-        
-        if total_forms_found == 0:
-            self.debug_output.append(f"<font color='gray'>[AUTO] 📭 No forms found with submissions in the specified time range.</font>")
-        
-        added = 0
+        self.debug_output.append(f"<font color='blue'>[AUTO {now_str}] 📊 Search completed: Found {len(forms)} form(s) with recent submissions</font>")
+
+        new_added = 0
         for form in forms:
             url = form['url']
-            if url not in self.forms_data:
-                title = form.get('title', 'Untitled')
-                last_sub = form.get('last_submission')
-                time_str = last_sub.strftime("%H:%M") if last_sub else "?"
-                self.forms_data[url] = title
-                display_text = f"NEW {time_str} | {title} — {url}"
-                item = QListWidgetItem(f"⏳ {display_text}")
-                item.setData(Qt.UserRole, url)
-                item.setForeground(QColor("#0d6efd"))
-                self.form_list.addItem(item)
-                added += 1
-                # Log each new form found
-                self.debug_output.append(f"<font color='green'>[AUTO] ➕ Added new form: {title} (submitted at {time_str})</font>")
+            if url in self.forms_data:
+                continue  # Already processed or in queue
 
-        if added > 0:
+            title = form['title']
+            last = form.get('last_submission')
+            last_str = last.strftime("%Y-%m-%d %H:%M:%S") if last else "None"
+            display_text = f"{title} (Last submission: {last_str}) — {url}"
+
+            item = QListWidgetItem(f"⏳ {display_text}")
+            item.setData(Qt.UserRole, url)
+            item.setForeground(QColor("#0d6efd"))  # Blue
+            self.form_list.addItem(item)
+            self.forms_data[url] = title
+            new_added += 1
+
+        if new_added > 0:
+            self.debug_output.append(f"<font color='green'>[AUTO] ✅ Added {new_added} new form(s) → Starting grading...</font>")
             self.save_forms()
-            self.debug_output.append(f"<font color='blue'>[AUTO] 🚀 Found {added} NEW form(s) → Starting grader...</font>")
             self.run_grader()
         else:
-            if total_forms_found > 0:
-                self.debug_output.append(f"<font color='gray'>[AUTO] 📋 All {total_forms_found} forms already in queue. Waiting for next check...</font>")
-            else:
-                self.debug_output.append(f"<font color='gray'>[AUTO] ⏸ No new submissions found. Waiting for next check...</font>")
+            self.debug_output.append(f"<font color='orange'>[AUTO] 📭 No new forms with recent submissions found.</font>")
 
-        # 🔁 ALWAYS continue auto search loop
+        # IMPORTANT: Update last_check_time to NOW (end of this search)
+        self.last_check_time = datetime.now(timezone.utc)
+
+        # Schedule next check
         minutes = self.interval_seconds // 60
         next_check = datetime.now() + timedelta(seconds=self.interval_seconds)
-        next_check_str = next_check.strftime("%H:%M:%S")
-        self.debug_output.append(f"<font color='gray'>[AUTO] ⏰ Next check in {minutes} minute(s) at {next_check_str}</font>")
+        next_str = next_check.strftime("%H:%M:%S")
+        self.debug_output.append(f"<font color='gray'>[AUTO] ⏰ Next check in {minutes} minute(s) at {next_str}</font>")
         QTimer.singleShot(self.interval_seconds * 1000, self.auto_cycle)
 
     def stop_auto_mode(self):
@@ -533,7 +514,7 @@ class FormManager(QMainWindow):
                 break
         
         self.finished_label.setText(f"✅ Finished: {len(self.finished_forms)}")
-        
+
     def on_grading_finished(self, success, msg):
         self.run_button.setEnabled(True)
         now_str = datetime.now().strftime("%H:%M:%S")
