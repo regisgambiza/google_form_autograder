@@ -5,25 +5,42 @@ from googleapiclient.discovery import build
 from logger import log
 import os.path
 
-def _load_credentials(scopes):
-    """Internal helper to load or refresh credentials with given scopes."""
+# ============================================
+# UNIFIED SCOPES - Request all at once
+# ============================================
+ALL_SCOPES = [
+    "https://www.googleapis.com/auth/forms.body",
+    "https://www.googleapis.com/auth/forms.responses.readonly",
+    "https://www.googleapis.com/auth/drive.metadata.readonly",
+    "https://www.googleapis.com/auth/classroom.courses.readonly",
+    "https://www.googleapis.com/auth/classroom.coursework.me",
+]
+
+
+def _get_credentials():
+    """Get credentials with ALL scopes at once."""
     creds = None
 
     # Load token if it exists
     if os.path.exists("token.json"):
-        log("DEBUG", f"Loading credentials from token.json with scopes: {scopes}")
-        creds = Credentials.from_authorized_user_file("token.json", scopes)
+        log("DEBUG", f"Loading credentials from token.json")
+        creds = Credentials.from_authorized_user_file("token.json", ALL_SCOPES)
 
     # If invalid or missing, refresh or re-auth
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             log("DEBUG", "Refreshing expired credentials...")
-            creds.refresh(Request())
-        else:
-            log("DEBUG", f"Initiating OAuth flow with scopes: {scopes}")
+            try:
+                creds.refresh(Request())
+            except Exception as e:
+                log("WARNING", f"Refresh failed: {e}. Re-authenticating...")
+                creds = None
+        
+        if not creds:
+            log("DEBUG", f"Initiating OAuth flow with scopes: {ALL_SCOPES}")
             flow = InstalledAppFlow.from_client_secrets_file(
                 "client_secrets.json",
-                scopes
+                ALL_SCOPES
             )
             creds = flow.run_local_server(port=0)
 
@@ -37,13 +54,7 @@ def _load_credentials(scopes):
 def get_service():
     """Google Forms API"""
     log("DEBUG", "Setting up Forms API credentials...")
-
-    SCOPES = [
-        "https://www.googleapis.com/auth/forms.body",
-        "https://www.googleapis.com/auth/forms.responses.readonly"
-    ]
-
-    creds = _load_credentials(SCOPES)
+    creds = _get_credentials()
     service = build("forms", "v1", credentials=creds)
     log("DEBUG", "Forms API client ready.")
     return service
@@ -52,27 +63,16 @@ def get_service():
 def get_drive_service():
     """Google Drive API"""
     log("DEBUG", "Setting up Drive API credentials...")
-
-    SCOPES = [
-        "https://www.googleapis.com/auth/drive.metadata.readonly",
-    ]
-
-    creds = _load_credentials(SCOPES)
+    creds = _get_credentials()
     service = build("drive", "v3", credentials=creds)
     log("DEBUG", "Drive API client ready.")
     return service
 
 
 def get_classroom_service():
-    """Google Classroom API (courses + coursework READ)"""
+    """Google Classroom API"""
     log("DEBUG", "Setting up Classroom API credentials...")
-
-    SCOPES = [
-        "https://www.googleapis.com/auth/classroom.courses.readonly",
-        "https://www.googleapis.com/auth/classroom.coursework.me",   # ★ REQUIRED FIX ★
-    ]
-
-    creds = _load_credentials(SCOPES)
+    creds = _get_credentials()
     service = build("classroom", "v1", credentials=creds)
     log("DEBUG", "Classroom API client ready.")
     return service

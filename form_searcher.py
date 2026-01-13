@@ -39,26 +39,22 @@ def parse_folder_identifier(identifier):
 def get_last_submission_time(form_id, from_dt=None, progress_callback=None):
     """
     Get the latest submission time.
-    If from_dt is provided (UTC aware), use filter to fetch only recent responses for efficiency.
+    WARNING: Google Forms API filter support is unreliable.
+    We fetch ALL responses and filter in Python for reliability.
     """
     if progress_callback:
         progress_callback(f"Checking submissions for form {form_id}")
 
     forms_service = get_service()
 
-    filter_str = None
-    if from_dt:
-        # Use >= to include submissions exactly at from_dt (safe for incremental)
-        ts_str = from_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-        filter_str = f"timestamp >= {ts_str}"
-
     try:
         times = []
         page_token = None
+        
+        # Fetch ALL responses (no filter - Google's filter is unreliable)
         while True:
             result = forms_service.forms().responses().list(
                 formId=form_id,
-                filter=filter_str,
                 pageToken=page_token
             ).execute()
 
@@ -66,13 +62,19 @@ def get_last_submission_time(form_id, from_dt=None, progress_callback=None):
             for resp in responses:
                 ts_str = resp.get('lastSubmittedTime')
                 if ts_str:
-                    times.append(datetime.fromisoformat(ts_str.replace('Z', '+00:00')))
+                    dt = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
+                    
+                    # Filter in Python (reliable)
+                    if from_dt is None or dt >= from_dt:
+                        times.append(dt)
 
             page_token = result.get('nextPageToken')
             if not page_token:
                 break
 
-        return max(times) if times else None
+        result = max(times) if times else None
+        log("DEBUG", f"Form {form_id}: Found {len(times)} submissions in range, latest: {result}")
+        return result
 
     except Exception as e:
         log("ERROR", f"Error fetching responses for form {form_id}: {e}")
