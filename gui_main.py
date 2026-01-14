@@ -472,9 +472,16 @@ class FormManager(QMainWindow):
         self.stop_button.hide()
         self.run_button.setEnabled(True)
         self.debug_output.append("<b><font color='red'>AUTO RUN STOPPED</font></b>")
-        if hasattr(self, 'auto_search_thread') and self.auto_search_thread.isRunning():
+        
+        # Stop auto search thread if running
+        if hasattr(self, 'auto_search_thread') and self.auto_search_thread and self.auto_search_thread.isRunning():
             self.auto_search_thread.terminate()
-            self.auto_search_thread.wait()
+            self.auto_search_thread.wait(5000)
+        
+        # Stop grader thread if running
+        if self.grader_thread and self.grader_thread.isRunning():
+            self.grader_thread.terminate()
+            self.grader_thread.wait(5000)
 
     # ===============================================
     # GRADER CONTROL
@@ -590,6 +597,23 @@ class FormManager(QMainWindow):
         except:
             pass
         return None
+
+    def closeEvent(self, event):
+        """Properly clean up threads before closing the application."""
+        self.auto_mode = False
+        
+        # Stop and wait for grader thread
+        if self.grader_thread and self.grader_thread.isRunning():
+            self.grader_thread.terminate()
+            self.grader_thread.wait(5000)  # Wait up to 5 seconds
+        
+        # Stop and wait for auto search thread
+        if hasattr(self, 'auto_search_thread') and self.auto_search_thread and self.auto_search_thread.isRunning():
+            self.auto_search_thread.terminate()
+            self.auto_search_thread.wait(5000)  # Wait up to 5 seconds
+        
+        # Accept the close event
+        event.accept()
 
 
 if __name__ == "__main__":
