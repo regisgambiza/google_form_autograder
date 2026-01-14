@@ -282,6 +282,13 @@ class FormManager(QMainWindow):
         self.report_checkbox.stateChanged.connect(self.update_report_option)
         settings_layout.addWidget(self.report_checkbox)
 
+        grading_mode_label = QLabel("Grade Mode:")
+        self.grading_mode_combo = QComboBox()
+        self.grading_mode_combo.addItems(["Whole Form", "Recent Only"])
+        self.grading_mode_combo.setToolTip("Whole Form: Grade all submissions\nRecent Only: Grade only new submissions since last check")
+        settings_layout.addWidget(grading_mode_label)
+        settings_layout.addWidget(self.grading_mode_combo)
+
         bottom_layout.addLayout(settings_layout)
         main_layout.addLayout(bottom_layout)
 
@@ -502,7 +509,10 @@ class FormManager(QMainWindow):
         self.overall_progress_bar.setValue(0)
         self.finished_forms = []
 
-        self.grader_thread = GraderThread()
+        grading_mode = self.grading_mode_combo.currentText()
+        grade_recent_only = (grading_mode == "Recent Only")
+
+        self.grader_thread = GraderThread(grade_recent_only=grade_recent_only)
         self.grader_thread.finished.connect(self.on_grading_finished)
         self.grader_thread.progress.connect(self.update_progress)
         self.grader_thread.overall_progress.connect(self.update_overall_progress)

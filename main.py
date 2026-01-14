@@ -1,12 +1,14 @@
 # main.py - FINAL FIXED VERSION (no 'text' error, safe, clean, working)
 import json
 import sys
+from datetime import datetime, timezone
 from form_utils import get_form_structure
-from response_utils import get_responses
+from response_utils import get_responses, save_grading_time
 from auth import get_service
 from logger import log
 from feedback import generate_form_feedback
 from updater import update_correct_answers
+import os
 
 
 # === Load config and import evaluator ===
@@ -45,6 +47,13 @@ def extract_form_id(form_url: str) -> str:
 
 def main():
     log("INFO", "=== Google Form Autograder Started ===")
+
+    # Check if we should grade only recent submissions
+    grade_recent_only = os.environ.get("GRADE_RECENT_ONLY", "false").lower() == "true"
+    if grade_recent_only:
+        log("INFO", "🔄 RUNNING IN RECENT SUBMISSIONS ONLY MODE - Only new submissions will be graded")
+    else:
+        log("INFO", "📝 RUNNING IN WHOLE FORM MODE - All submissions will be graded")
 
     # Load forms list
     try:
@@ -102,7 +111,7 @@ def main():
             all_questions = []
 
             for q in form_structure:
-                responses = get_responses(service, form_id, q["questionId"])
+                responses = get_responses(service, form_id, q["questionId"], grade_recent_only=grade_recent_only)
 
                 # Try to get teacher-defined correct answers
                 correct_answers_fetched = []
@@ -156,6 +165,9 @@ def main():
             log("INFO", f"Finished processing form {form_id}")
             if duplicates_found:
                 print(f"\n=== Duplicate answers in {form_id}: {duplicates_found} ===\n")
+            
+            # Save grading timestamp for this form (for "recent only" mode next time)
+            save_grading_time(form_id, datetime.now(timezone.utc))
 
         except Exception as e:
             # THIS IS NOW 100% SAFE — NO 'text' VARIABLE ANYWHERE

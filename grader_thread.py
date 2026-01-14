@@ -13,10 +13,17 @@ class GraderThread(QThread):
     current_form = pyqtSignal(str)
     finished_form = pyqtSignal(str)
 
+    def __init__(self, grade_recent_only=False):
+        super().__init__()
+        self.grade_recent_only = grade_recent_only
+
     def run(self):
         try:
             my_env = os.environ.copy()
             my_env["PYTHONIOENCODING"] = "utf-8"
+
+            # Pass grading mode to main.py via environment variable
+            my_env["GRADE_RECENT_ONLY"] = str(self.grade_recent_only).lower()
 
             process = subprocess.Popen(
                 [sys.executable, "main.py"],
