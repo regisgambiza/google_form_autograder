@@ -81,9 +81,11 @@ def get_last_submission_time(form_id, from_dt=None, progress_callback=None):
         return None
 
 
-def find_forms_in_folder(folder_id, from_dt, to_dt, visited=None, progress_callback=None):
+def find_forms_in_folder(folder_id, from_dt, to_dt, visited=None, progress_callback=None, seen_forms=None):
     if visited is None:
         visited = set()
+    if seen_forms is None:
+        seen_forms = set()
     if folder_id in visited:
         return []
 
@@ -104,6 +106,12 @@ def find_forms_in_folder(folder_id, from_dt, to_dt, visited=None, progress_callb
     for form in forms:
         form_id = form['id']
         title = form.get('name', 'Untitled')
+        
+        # Skip if we've already processed this form
+        if form_id in seen_forms:
+            log("DEBUG", f"Skipping duplicate form check: {title} (already checked)")
+            continue
+        seen_forms.add(form_id)
 
         if progress_callback:
             progress_callback(f"Checking form: {title}")
@@ -128,7 +136,7 @@ def find_forms_in_folder(folder_id, from_dt, to_dt, visited=None, progress_callb
     for sub in subfolders:
         matching.extend(
             find_forms_in_folder(
-                sub['id'], from_dt, to_dt, visited, progress_callback
+                sub['id'], from_dt, to_dt, visited, progress_callback, seen_forms
             )
         )
 
@@ -148,14 +156,15 @@ def find_forms_with_submissions_in_range(
         all_folder_ids.update(parse_folder_identifier(ident))
 
     all_forms = []
+    seen_forms = set()
     for folder_id in all_folder_ids:
         if progress_callback:
             progress_callback(f"Searching folder {folder_id}")
         all_forms.extend(
-            find_forms_in_folder(folder_id, from_dt, to_dt, progress_callback=progress_callback)
+            find_forms_in_folder(folder_id, from_dt, to_dt, progress_callback=progress_callback, seen_forms=seen_forms)
         )
 
-    # Deduplicate
+    # Deduplicate (extra safety)
     return list({f['url']: f for f in all_forms}.values())
 
 
