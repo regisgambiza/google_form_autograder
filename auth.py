@@ -2,8 +2,10 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+from google.auth.exceptions import RefreshError
 from logger import log
 import os.path
+import threading
 
 # ============================================
 # UNIFIED SCOPES - Request all at once
@@ -16,39 +18,71 @@ ALL_SCOPES = [
     "https://www.googleapis.com/auth/classroom.coursework.me",
 ]
 
+# Thread-safe credentials cache
+_credentials_cache = None
+_credentials_lock = threading.Lock()
+
 
 def _get_credentials():
-    """Get credentials with ALL scopes at once."""
-    creds = None
-
-    # Load token if it exists
-    if os.path.exists("token.json"):
-        log("DEBUG", f"Loading credentials from token.json")
-        creds = Credentials.from_authorized_user_file("token.json", ALL_SCOPES)
-
-    # If invalid or missing, refresh or re-auth
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            log("DEBUG", "Refreshing expired credentials...")
-            try:
-                creds.refresh(Request())
-            except Exception as e:
-                log("WARNING", f"Refresh failed: {e}. Re-authenticating...")
-                creds = None
+    """Get credentials with ALL scopes at once. Thread-safe with automatic refresh handling."""
+    global _credentials_cache
+    
+    with _credentials_lock:
+        # Return cached credentials if valid
+        if _credentials_cache and _credentials_cache.valid:
+            return _credentials_cache
         
-        if not creds:
-            log("DEBUG", f"Initiating OAuth flow with scopes: {ALL_SCOPES}")
-            flow = InstalledAppFlow.from_client_secrets_file(
-                "client_secrets.json",
-                ALL_SCOPES
-            )
-            creds = flow.run_local_server(port=0)
+        creds = None
 
-            with open("token.json", "w") as token_file:
-                token_file.write(creds.to_json())
-            log("DEBUG", "New credentials saved to token.json.")
+        # Load token if it exists
+        if os.path.exists("token.json"):
+            log("DEBUG", "Loading credentials from token.json")
+            try:
+                creds = Credentials.from_authorized_user_file("token.json", ALL_SCOPES)
+            except Exception as e:
+                log("WARNING", f"Failed to load token.json: {e}. Will re-authenticate.")
+                creds = None
 
-    return creds
+        # If invalid or missing, refresh or re-auth
+        if not creds or not creds.valid:
+            if creds and creds.expired and creds.refresh_token:
+                log("DEBUG", "Refreshing expired credentials...")
+                try:
+                    creds.refresh(Request())
+                    log("DEBUG", "Token refreshed successfully")
+                    
+                    # Save refreshed token
+                    with open("token.json", "w") as token_file:
+                        token_file.write(creds.to_json())
+                    log("DEBUG", "Refreshed credentials saved to token.json")
+                    
+                except RefreshError as e:
+                    log("ERROR", f"Token refresh failed: {e}. Re-authenticating...")
+                    creds = None
+                except Exception as e:
+                    log("ERROR", f"Unexpected error during refresh: {e}. Re-authenticating...")
+                    creds = None
+            
+            # If refresh failed or no credentials, re-authenticate
+            if not creds:
+                log("DEBUG", f"Initiating OAuth flow with scopes: {ALL_SCOPES}")
+                try:
+                    flow = InstalledAppFlow.from_client_secrets_file(
+                        "client_secrets.json",
+                        ALL_SCOPES
+                    )
+                    creds = flow.run_local_server(port=0)
+
+                    with open("token.json", "w") as token_file:
+                        token_file.write(creds.to_json())
+                    log("DEBUG", "New credentials saved to token.json.")
+                except Exception as e:
+                    log("ERROR", f"OAuth flow failed: {e}")
+                    raise
+
+        # Cache the credentials
+        _credentials_cache = creds
+        return creds
 
 
 def get_service():

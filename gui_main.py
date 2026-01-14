@@ -25,6 +25,9 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QDate, QTimer
 from PyQt5.QtGui import QColor, QBrush, QFont, QPalette
 from datetime import datetime, timedelta, timezone
+import ctypes
+import atexit
+
 
 
 # Local imports
@@ -54,6 +57,25 @@ class FormManager(QMainWindow):
         self.interval_seconds = 300  # 5 minutes default
         self.folders = []
         self.last_check_time = None  # THIS FIXES DUPLICATES FOREVER
+
+        #Prevent sleep
+        ES_CONTINUOUS = 0x80000000
+        ES_SYSTEM_REQUIRED = 0x00000001
+        ES_DISPLAY_REQUIRED = 0x00000002
+
+        def prevent_sleep():
+            ctypes.windll.kernel32.SetThreadExecutionState(
+                ES_CONTINUOUS | ES_SYSTEM_REQUIRED
+            )
+
+        def restore_sleep():
+            ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS)
+
+        prevent_sleep()
+        atexit.register(restore_sleep)
+
+        print("Sleep prevention active. App is running.")
+
 
         # ===== Modern stylesheet =====
         self.setStyleSheet("""

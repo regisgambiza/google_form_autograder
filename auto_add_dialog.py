@@ -224,8 +224,7 @@ class AutoAddDialog(QDialog):
                     "No forms found with submissions in the date range."
                 )
                 return
-    # auto mode: continue silently
-
+            # auto mode: continue silently
 
         parent = self.parent()
         added = False
@@ -251,6 +250,11 @@ class AutoAddDialog(QDialog):
             parent.interval_seconds = self.interval_seconds
             parent.folders = self.all_folders
             parent.start_auto_mode()
+            
+            # ✅ FIX: Schedule the first auto_cycle after initial search
+            from PyQt5.QtCore import QTimer
+            QTimer.singleShot(self.interval_seconds * 1000, parent.auto_cycle)
+            
             if added:
                 parent.run_grader()
 
