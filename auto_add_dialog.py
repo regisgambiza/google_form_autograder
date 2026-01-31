@@ -1,3 +1,4 @@
+# auto_add_dialog.py - FIXED: Prevent duplicate searches, proper auto-cycle initialization
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLineEdit,
     QListWidget, QLabel, QDateEdit, QMessageBox,
@@ -23,7 +24,7 @@ class SearchThread(QThread):
         self.to_dt = to_dt
 
     def run(self):
-        # 🔒 HARDEN DATETIMES — GUARANTEE UTC
+        # Ensure UTC timezone
         from_dt = self.from_dt
         to_dt = self.to_dt
 
@@ -43,7 +44,6 @@ class SearchThread(QThread):
         
         self.progress.emit(f"Search completed. Found {len(forms)} form(s) with submissions")
         self.finished.emit(forms)
-
 
 
 class AutoAddDialog(QDialog):
@@ -195,7 +195,6 @@ class AutoAddDialog(QDialog):
             py_from_date = self.from_date.date().toPyDate()
             py_to_date = self.to_date.date().toPyDate()
 
-            # ✅ FIXED: Explicit UTC timezone
             from_dt = datetime.combine(
                 py_from_date, time.min, tzinfo=timezone.utc
             )
@@ -224,7 +223,6 @@ class AutoAddDialog(QDialog):
                     "No forms found with submissions in the date range."
                 )
                 return
-            # auto mode: continue silently
 
         parent = self.parent()
         added = False
@@ -238,24 +236,30 @@ class AutoAddDialog(QDialog):
 
             if url not in parent.forms_data:
                 parent.forms_data[url] = title
-                item = QListWidgetItem(text)
+                item = QListWidgetItem(f"⏳ {text}")
                 item.setData(Qt.UserRole, url)
+                from PyQt5.QtGui import QColor
+                item.setForeground(QColor("#0d6efd"))
                 parent.form_list.addItem(item)
                 added = True
 
         parent.save_forms()
 
         if self.mode == 'auto':
+            # Store settings in parent
             parent.recency_minutes = self.recency_minutes
             parent.interval_seconds = self.interval_seconds
             parent.folders = self.all_folders
+            
+            # Start auto mode (this sets up the mode but doesn't schedule cycles yet)
             parent.start_auto_mode()
             
-            # ✅ FIX: Schedule the first auto_cycle after initial search
-            from PyQt5.QtCore import QTimer
-            QTimer.singleShot(self.interval_seconds * 1000, parent.auto_cycle)
-            
+            # If forms were added, start grading immediately
             if added:
                 parent.run_grader()
+                # After grading completes, on_grading_finished will schedule the next cycle
+            else:
+                # No forms found, schedule first cycle anyway
+                parent.schedule_next_cycle()
 
         self.accept()
