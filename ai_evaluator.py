@@ -85,7 +85,7 @@ Return your answer in **EXACTLY** this format:
 
 - The array MUST contain exactly {len(answers)} objects.
 - Each object MUST have only the key "decision".
-- "decision" MUST be either "YES" or "NO".
+- "decision" MUST be ONLY "YES" or "NO". NEVER respond with "IDK", "MAYBE", "UNKNOWN", "UNCLEAR", or any other value.
 - Do NOT include any explanations, reasoning, text, or extra arrays.
 - Do NOT output more or fewer than {len(answers)} objects.
 """
@@ -121,10 +121,17 @@ Return your answer in **EXACTLY** this format:
             if len(decisions) != len(answers):
                 raise ValueError(f"Expected {len(answers)} decisions, got {len(decisions)}")
             for d in decisions:
-                decision = d.get("decision", "NO").upper()
-                if decision not in ["YES", "NO"]:
+                decision = d.get("decision", "NO").upper().strip()
+                # Explicitly reject IDK and other non-binary responses
+                if decision in ["IDK", "I DON'T KNOW", "IDON'TKNOW", "MAYBE", "UNKNOWN", "UNCLEAR", "N/A", "NA"]:
+                    log("WARNING", f"Invalid indecisive decision '{decision}' from {model}. Treating as NO.")
+                    d["decision"] = "NO"
+                elif decision not in ["YES", "NO"]:
                     log("WARNING", f"Invalid decision '{decision}' from {model}. Treating as NO.")
                     d["decision"] = "NO"
+                else:
+                    # Normalize valid decisions to uppercase
+                    d["decision"] = decision
 
             return [(d["decision"], text) for d in decisions]
         except Exception as e:

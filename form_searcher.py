@@ -1,8 +1,42 @@
 # form_searcher.py - OPTIMIZED FOR AUTO MODE: USE FILTER FOR RECENT RESPONSES ONLY
 import json
+import random
+import time
 from datetime import datetime, timezone
 from auth import get_drive_service, get_service
 from logger import log
+from googleapiclient.errors import HttpError
+
+
+def _is_retryable_error(err):
+    if isinstance(err, HttpError):
+        status = getattr(err, "resp", None)
+        status = status.status if status else None
+        return status in {429, 500, 502, 503, 504}
+    return isinstance(err, OSError)
+
+
+def _execute_with_retries(request, context="", progress_callback=None, max_retries=5):
+    attempt = 0
+    while True:
+        try:
+            return request.execute()
+        except Exception as e:
+            retryable = _is_retryable_error(e)
+            if not retryable or attempt >= max_retries:
+                log("ERROR", f"{context} failed after {attempt + 1} attempt(s): {e}")
+                raise
+
+            delay = min(8.0, 0.5 * (2 ** attempt))
+            delay = delay * (0.5 + random.random())
+            attempt += 1
+
+            log("WARNING", f"{context} transient error: {e}. Retrying in {delay:.2f}s")
+            if progress_callback:
+                progress_callback(
+                    f"Transient error. Retrying ({attempt}/{max_retries + 1})"
+                )
+            time.sleep(delay)
 
 
 def parse_folder_identifier(identifier):
@@ -26,7 +60,14 @@ def parse_folder_identifier(identifier):
         f"name='{identifier}' and "
         "mimeType='application/vnd.google-apps.folder' and trashed=false"
     )
-    results = drive_service.files().list(q=query, fields="files(id)").execute()
+    try:
+        results = _execute_with_retries(
+            drive_service.files().list(q=query, fields="files(id)"),
+            context="Drive folder lookup",
+        )
+    except Exception as e:
+        log("ERROR", f"Folder lookup failed for '{identifier}': {e}")
+        return []
     folders = results.get('files', [])
 
     if not folders:
@@ -53,10 +94,14 @@ def get_last_submission_time(form_id, from_dt=None, progress_callback=None):
         
         # Fetch ALL responses (no filter - Google's filter is unreliable)
         while True:
-            result = forms_service.forms().responses().list(
-                formId=form_id,
-                pageToken=page_token
-            ).execute()
+            result = _execute_with_retries(
+                forms_service.forms().responses().list(
+                    formId=form_id,
+                    pageToken=page_token
+                ),
+                context=f"Forms responses list for {form_id}",
+                progress_callback=progress_callback,
+            )
 
             responses = result.get('responses', [])
             for resp in responses:
@@ -77,6 +122,15 @@ def get_last_submission_time(form_id, from_dt=None, progress_callback=None):
         return result
 
     except Exception as e:
+        if isinstance(e, HttpError):
+            status = getattr(e, "resp", None)
+            status = status.status if status else None
+            if status == 403:
+                log(
+                    "WARNING",
+                    f"Skipping form {form_id}: not authorized to read responses.",
+                )
+                return None
         log("ERROR", f"Error fetching responses for form {form_id}: {e}")
         return None
 
@@ -97,9 +151,15 @@ def find_forms_in_folder(folder_id, from_dt, to_dt, visited=None, progress_callb
         f"'{folder_id}' in parents and "
         "mimeType='application/vnd.google-apps.form' and trashed=false"
     )
-    forms = drive_service.files().list(
-        q=form_query, fields="files(id, name)"
-    ).execute().get('files', [])
+    try:
+        forms = _execute_with_retries(
+            drive_service.files().list(q=form_query, fields="files(id, name)"),
+            context=f"Drive forms list in folder {folder_id}",
+            progress_callback=progress_callback,
+        ).get('files', [])
+    except Exception as e:
+        log("ERROR", f"Drive forms list failed in folder {folder_id}: {e}")
+        return []
 
     matching = []
 
@@ -129,9 +189,15 @@ def find_forms_in_folder(folder_id, from_dt, to_dt, visited=None, progress_callb
         f"'{folder_id}' in parents and "
         "mimeType='application/vnd.google-apps.folder' and trashed=false"
     )
-    subfolders = drive_service.files().list(
-        q=folder_query, fields="files(id)"
-    ).execute().get('files', [])
+    try:
+        subfolders = _execute_with_retries(
+            drive_service.files().list(q=folder_query, fields="files(id)"),
+            context=f"Drive subfolder list in folder {folder_id}",
+            progress_callback=progress_callback,
+        ).get('files', [])
+    except Exception as e:
+        log("ERROR", f"Drive subfolder list failed in folder {folder_id}: {e}")
+        return matching
 
     for sub in subfolders:
         matching.extend(
