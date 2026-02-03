@@ -200,6 +200,8 @@ class FormManager(QMainWindow):
         auto_add_button.clicked.connect(self.open_manual_add_dialog)
         auto_run_button = QPushButton("▶ Auto Run")
         auto_run_button.clicked.connect(self.open_auto_run_dialog)
+        grade_now_button = QPushButton("⚡ Grade Folder/URL")
+        grade_now_button.clicked.connect(self.open_quick_grade_dialog)
         self.run_button = QPushButton("🚀 Run Now")
         self.run_button.clicked.connect(self.run_grader)
 
@@ -218,6 +220,7 @@ class FormManager(QMainWindow):
 
         actions_layout.addWidget(auto_add_button)
         actions_layout.addWidget(auto_run_button)
+        actions_layout.addWidget(grade_now_button)
         actions_layout.addWidget(self.run_button)
         actions_layout.addWidget(remove_button)
         actions_layout.addWidget(clear_all_button)
@@ -332,6 +335,45 @@ class FormManager(QMainWindow):
         dialog = AutoAddDialog(self, mode='auto')
         dialog.exec_()
 
+    def open_quick_grade_dialog(self):
+        """Open a dialog to add a folder/form URL and grade immediately without checking submissions"""
+        from PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel
+        
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Grade Folder/Form Now")
+        dialog.setGeometry(100, 100, 500, 150)
+        
+        layout = QVBoxLayout()
+        
+        label = QLabel("Enter a Google Drive folder URL or Google Form URL to grade immediately:")
+        layout.addWidget(label)
+        
+        input_field = QLineEdit()
+        input_field.setPlaceholderText("Paste folder URL or form URL here...")
+        layout.addWidget(input_field)
+        
+        button_layout = QHBoxLayout()
+        ok_button = QPushButton("Grade")
+        cancel_button = QPushButton("Cancel")
+        
+        ok_button.clicked.connect(dialog.accept)
+        cancel_button.clicked.connect(dialog.reject)
+        
+        button_layout.addWidget(ok_button)
+        button_layout.addWidget(cancel_button)
+        layout.addLayout(button_layout)
+        
+        dialog.setLayout(layout)
+        
+        if dialog.exec_() == QDialog.Accepted:
+            url = input_field.text().strip()
+            if not url:
+                QMessageBox.warning(self, "Empty Input", "Please enter a URL")
+                return
+            
+            # Grade immediately without checking last submissions
+            self.grade_url_immediately(url)
+
     def update_evaluator(self, text):
         evaluator = "ai_evaluator" if "Basic" in text else "ai_evaluator_2"
         self.update_config("evaluator", evaluator)
@@ -372,6 +414,75 @@ class FormManager(QMainWindow):
                 self.report_checkbox.setChecked(generate_report)
         except FileNotFoundError:
             pass
+
+    def grade_url_immediately(self, url):
+        """Grade a folder or form URL immediately without checking last submissions"""
+        try:
+            from datetime import datetime, timezone, timedelta
+            
+            # Check if it's a direct form URL or a folder URL
+            if '/forms/d/' in url:
+                # Direct form URL - extract form ID
+                form_id = url.split('/forms/d/')[1].split('/')[0]
+                form_url = f"https://docs.google.com/forms/d/{form_id}/edit"
+                
+                # Add directly without searching
+                if form_url not in self.forms_data:
+                    self.forms_data[form_url] = "Form"
+                    display_text = f"Form — {form_url}"
+                    item = QListWidgetItem(f"⏳ {display_text}")
+                    item.setData(Qt.UserRole, form_url)
+                    item.setForeground(QColor("#0d6efd"))
+                    self.form_list.addItem(item)
+                
+                self.debug_output.append(f"✅ Added form: {form_id}")
+                
+            else:
+                # Folder URL - search for forms
+                from_dt = datetime.now(timezone.utc) - timedelta(days=365)
+                to_dt = datetime.now(timezone.utc) + timedelta(days=1)
+                
+                self.debug_output.append(f"🔍 Searching folder: {url}")
+                
+                # Extract folder IDs or form IDs from the URL
+                folder_ids = find_forms_with_submissions_in_range(
+                    [url],  # Single folder/form
+                    from_dt=from_dt,
+                    to_dt=to_dt,
+                    progress_callback=lambda msg: self.debug_output.append(msg)
+                )
+                
+                if not folder_ids:
+                    QMessageBox.warning(self, "No Forms Found", "Could not find any accessible forms at that URL")
+                    return
+                
+                # Add all found forms to the grading queue
+                for form_data in folder_ids:
+                    form_url = form_data.get("url")
+                    form_title = form_data.get("title", "Untitled")
+                    
+                    if form_url not in self.forms_data:
+                        self.forms_data[form_url] = form_title
+                        display_text = f"{form_title} — {form_url}"
+                        item = QListWidgetItem(f"⏳ {display_text}")
+                        item.setData(Qt.UserRole, form_url)
+                        item.setForeground(QColor("#0d6efd"))
+                        self.form_list.addItem(item)
+                
+                self.debug_output.append(f"✅ Found {len(folder_ids)} forms in folder")
+            
+            self.update_in_queue_label()
+            self.save_forms()
+            
+            # Set to "Whole Form" mode for immediate grading
+            self.grading_mode_combo.setCurrentText("Whole Form")
+            
+            # Start grading immediately
+            self.run_grader()
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to process URL: {str(e)}")
+            self.debug_output.append(f"❌ Error: {str(e)}")
 
     def update_in_queue_label(self):
         self.in_queue_label.setText(f"⏳ In Queue: {self.form_list.count()}")
