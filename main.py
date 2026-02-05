@@ -1,6 +1,7 @@
 # main.py - FINAL FIXED VERSION (no 'text' error, safe, clean, working)
 import json
 import sys
+import time
 from datetime import datetime, timezone
 from form_utils import get_form_structure
 from response_utils import get_responses, save_grading_time
@@ -89,6 +90,7 @@ def main():
         form_id = None
 
         try:
+            form_start = time.perf_counter()
             form_id = extract_form_id(form_url)
             log("INFO", f"[{idx}/{total_forms}] Processing → {form_id}")
 
@@ -163,6 +165,8 @@ def main():
                         duplicates_found.extend(dups)
 
             log("INFO", f"Finished processing form {form_id}")
+            form_elapsed = time.perf_counter() - form_start
+            log("INFO", f"Timing Form {form_id}: {form_elapsed:.2f}s total")
             if duplicates_found:
                 print(f"\n=== Duplicate answers in {form_id}: {duplicates_found} ===\n")
             

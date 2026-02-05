@@ -4,6 +4,9 @@ from logger import log
 import re
 import unicodedata
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
+import subprocess
 from sympy import sympify, simplify
 
 # Load config
@@ -12,7 +15,89 @@ with open("config.json") as f:
 
 MODELS = config["models"].get("judge", ["gpt-oss:20b"])
 LENIENCY = config.get("leniency", "lenient").lower()
-BATCH_SIZE_LIMIT = 20  # Maximum answers per batch to avoid token limits
+DEFAULT_BATCH_SIZE = 32  # Recommended default batch size
+MAX_PARALLEL_WORKERS = config.get("max_parallel_workers", 8)
+
+_AUTO_WORKERS = None
+_AUTO_BATCH_SIZE = None
+
+def _detect_vram_gb():
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+        if not lines:
+            return None
+        # Take the first GPU if multiple are present
+        mb = float(lines[0])
+        return mb / 1024.0
+    except Exception:
+        return None
+
+def _get_batch_size():
+    try:
+        with open("config.json") as f:
+            cfg = json.load(f)
+        val = cfg.get("batch_size", DEFAULT_BATCH_SIZE)
+        if isinstance(val, str) and val.lower() == "auto":
+            global _AUTO_BATCH_SIZE
+            if _AUTO_BATCH_SIZE is None:
+                _AUTO_BATCH_SIZE = DEFAULT_BATCH_SIZE
+            return _AUTO_BATCH_SIZE, True
+        if isinstance(val, int) and val > 0:
+            return val, False
+    except Exception:
+        pass
+    return DEFAULT_BATCH_SIZE, False
+
+def _reduce_auto_batch_size(current_size):
+    global _AUTO_BATCH_SIZE
+    new_size = max(1, int(current_size) // 2)
+    if _AUTO_BATCH_SIZE is None or new_size < _AUTO_BATCH_SIZE:
+        _AUTO_BATCH_SIZE = new_size
+        log("WARNING", f"Auto batch size reduced to {new_size} due to model output mismatch")
+    return new_size
+
+def _get_votes_with_split(model, question, batch, expected, leniency, is_auto):
+    try:
+        votes = get_model_vote(model, question, batch, expected, leniency, allow_fallback_no=False)
+        if len(votes) != len(batch):
+            raise ValueError(f"Expected {len(batch)} decisions, got {len(votes)}")
+        return votes
+    except Exception as e:
+        if len(batch) <= 1:
+            log("ERROR", f"Batch size 1 failed for {model}: {e}. Falling back to NO.")
+            return [("NO", "") for _ in batch]
+        if is_auto:
+            _reduce_auto_batch_size(len(batch))
+        mid = len(batch) // 2
+        left = _get_votes_with_split(model, question, batch[:mid], expected, leniency, is_auto)
+        right = _get_votes_with_split(model, question, batch[mid:], expected, leniency, is_auto)
+        return left + right
+
+def _resolve_max_workers(total_tasks):
+    global _AUTO_WORKERS
+    if isinstance(MAX_PARALLEL_WORKERS, str) and MAX_PARALLEL_WORKERS.lower() == "auto":
+        if _AUTO_WORKERS is None:
+            vram_gb = _detect_vram_gb()
+            if vram_gb:
+                _AUTO_WORKERS = max(2, min(12, int(vram_gb)))
+                log("INFO", f"Auto-tuned max_parallel_workers={_AUTO_WORKERS} based on GPU VRAM={vram_gb:.1f} GB")
+            else:
+                _AUTO_WORKERS = 8
+                log("WARNING", "Auto-tune failed to detect VRAM. Using max_parallel_workers=8")
+        max_workers = min(_AUTO_WORKERS, total_tasks) if total_tasks > 0 else 1
+        return max_workers
+
+    if isinstance(MAX_PARALLEL_WORKERS, (int, float)) and MAX_PARALLEL_WORKERS > 0:
+        return min(int(MAX_PARALLEL_WORKERS), total_tasks) if total_tasks > 0 else 1
+
+    # Fallback default
+    return min(8, total_tasks) if total_tasks > 0 else 1
 
 # --- Helpers ---
 
@@ -66,7 +151,7 @@ def extract_number(s):
     match = re.search(r'-?\d+(\.\d+)?', str(s))
     return float(match.group()) if match else None
 
-def get_model_vote(model, question, answers, expected, leniency, retries=3):
+def get_model_vote(model, question, answers, expected, leniency, retries=3, allow_fallback_no=True):
     """
     Send a batch of answers for a question to the model and get decisions for all, comparing to expected.
     Returns a list of (decision, raw_response) tuples, one for each answer.
@@ -142,8 +227,10 @@ Return your answer in **EXACTLY** this format:
         except Exception as e:
             log("DEBUG", f"Attempt {attempt}/{retries}: Error parsing JSON from {model}: {str(e)}. Raw response: {text[:200]}...")
             if attempt == retries:
-                log("WARNING", f"Max retries reached for {model}. Falling back to NO for all answers.")
-                return [("NO", text) for _ in answers]
+                if allow_fallback_no:
+                    log("WARNING", f"Max retries reached for {model}. Falling back to NO for all answers.")
+                    return [("NO", text) for _ in answers]
+                raise
 
     return [("NO", "") for _ in answers]
 
@@ -167,17 +254,47 @@ def evaluate_answers_batch(question, answers, expected=None):
 
     # --- AI model votes ---
     all_votes = []
-    batches = [unique_answers[i:i + BATCH_SIZE_LIMIT] for i in range(0, len(unique_answers), BATCH_SIZE_LIMIT)]
+    batch_size, is_auto = _get_batch_size()
+    batches = [unique_answers[i:i + batch_size] for i in range(0, len(unique_answers), batch_size)]
+    total_tasks = len(batches) * len(judges)
+    max_workers = _resolve_max_workers(total_tasks)
+    log("DEBUG", f"Parallelizing {total_tasks} model calls with max_workers={max_workers} (batch_size={batch_size})")
+
+    results = {}
+    start_parallel = time.perf_counter()
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_map = {}
+        for batch_idx, batch in enumerate(batches, 1):
+            log("DEBUG", f"Batch {batch_idx}/{len(batches)}: {len(batch)} answers")
+            for model in judges:
+                future = executor.submit(_get_votes_with_split, model, question, batch, expected, LENIENCY, is_auto)
+                future_map[future] = (batch_idx, model, batch)
+
+        for future in as_completed(future_map):
+            batch_idx, model, batch = future_map[future]
+            try:
+                votes = future.result()
+            except Exception as e:
+                log("ERROR", f"Model {model} crashed on batch {batch_idx}: {e}. Falling back to NO.")
+                votes = [("NO", "") for _ in batch]
+            results[(batch_idx, model)] = votes
+            log("DEBUG", f"Model {model} processed batch {batch_idx} successfully")
+    elapsed_parallel = time.perf_counter() - start_parallel
+    log(
+        "INFO",
+        f"Timing Q{question.get('index', '?')}: {total_tasks} model calls across "
+        f"{len(batches)} batch(es) in {elapsed_parallel:.2f}s "
+        f"(workers={max_workers}, answers={len(unique_answers)})"
+    )
+
     for batch_idx, batch in enumerate(batches, 1):
-        log("DEBUG", f"Batch {batch_idx}/{len(batches)}: {len(batch)} answers")
         batch_votes = []
         for model in judges:
-            votes = get_model_vote(model, question, batch, expected, LENIENCY)
+            votes = results.get((batch_idx, model), [("NO", "") for _ in batch])
             if len(votes) != len(batch):
                 log("ERROR", f"Model {model} returned {len(votes)} votes, expected {len(batch)}. Falling back to NO.")
                 votes = [("NO", "") for _ in batch]
             batch_votes.append(votes)
-            log("DEBUG", f"Model {model} processed {len(batch)} answers successfully")
         all_votes.extend(list(zip(*batch_votes)))
 
     for idx, ans in enumerate(unique_answers, 1):

@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLineEdit, QListWidget, QListWidgetItem, QMessageBox,
     QProgressBar, QTextEdit, QLabel, QComboBox, QCheckBox,
-    QProgressDialog, QSplitter
+    QProgressDialog, QSplitter, QSpinBox
 )
 
 from PyQt5.QtCore import Qt, QDate, QTimer
@@ -37,6 +37,7 @@ class FormManager(QMainWindow):
         self.finished_forms = []
         self.auto_mode = False
         self.auto_timer = None  # Track the QTimer for auto-cycle
+        self.debug_lines = []
 
         # Auto Mode Settings
         self.recency_minutes = 60
@@ -176,6 +177,15 @@ class FormManager(QMainWindow):
         right_label.setObjectName("Header")
         right_layout.addWidget(right_label)
 
+        timing_filter_row = QHBoxLayout()
+        timing_filter_label = QLabel("Filter:")
+        self.timing_only_checkbox = QCheckBox("Timing Only")
+        self.timing_only_checkbox.stateChanged.connect(self.on_timing_filter_changed)
+        timing_filter_row.addWidget(timing_filter_label)
+        timing_filter_row.addWidget(self.timing_only_checkbox)
+        timing_filter_row.addStretch()
+        right_layout.addLayout(timing_filter_row)
+
         self.debug_output = QTextEdit()
         self.debug_output.setReadOnly(True)
         self.debug_output.setFont(QFont("Consolas", 10))
@@ -259,6 +269,17 @@ class FormManager(QMainWindow):
         self.report_checkbox.setChecked(True)
         self.report_checkbox.stateChanged.connect(self.update_report_option)
         settings_layout.addWidget(self.report_checkbox)
+
+        batch_label = QLabel("Batch Size:")
+        self.batch_size_spin = QSpinBox()
+        self.batch_size_spin.setRange(1, 200)
+        self.batch_size_spin.setSingleStep(1)
+        self.batch_size_spin.valueChanged.connect(self.update_batch_size)
+        self.batch_auto_checkbox = QCheckBox("Auto")
+        self.batch_auto_checkbox.stateChanged.connect(self.update_batch_auto)
+        settings_layout.addWidget(batch_label)
+        settings_layout.addWidget(self.batch_size_spin)
+        settings_layout.addWidget(self.batch_auto_checkbox)
 
         grading_mode_label = QLabel("Grade Mode:")
         self.grading_mode_combo = QComboBox()
@@ -387,6 +408,18 @@ class FormManager(QMainWindow):
     def update_report_option(self, state):
         self.update_config("generate_report", state == Qt.Checked)
 
+    def update_batch_size(self, value):
+        if not self.batch_auto_checkbox.isChecked():
+            self.update_config("batch_size", int(value))
+
+    def update_batch_auto(self, state):
+        is_auto = state == Qt.Checked
+        self.batch_size_spin.setEnabled(not is_auto)
+        if is_auto:
+            self.update_config("batch_size", "auto")
+        else:
+            self.update_config("batch_size", int(self.batch_size_spin.value()))
+
     def update_config(self, key, value):
         try:
             with open("config.json", "r+") as f:
@@ -412,8 +445,20 @@ class FormManager(QMainWindow):
                     self.model_combo.setCurrentText(models[0])
                 generate_report = config.get("generate_report", True)
                 self.report_checkbox.setChecked(generate_report)
+                batch_size = config.get("batch_size", 32)
+                if isinstance(batch_size, str) and batch_size.lower() == "auto":
+                    self.batch_auto_checkbox.setChecked(True)
+                    self.batch_size_spin.setEnabled(False)
+                    self.batch_size_spin.setValue(32)
+                else:
+                    if not isinstance(batch_size, int) or batch_size <= 0:
+                        batch_size = 32
+                    self.batch_auto_checkbox.setChecked(False)
+                    self.batch_size_spin.setEnabled(True)
+                    self.batch_size_spin.setValue(batch_size)
         except FileNotFoundError:
-            pass
+            self.batch_size_spin.setValue(32)
+            self.update_config("batch_size", 32)
 
     def grade_url_immediately(self, url):
         """Grade a folder or form URL immediately without checking last submissions"""
@@ -435,21 +480,21 @@ class FormManager(QMainWindow):
                     item.setForeground(QColor("#0d6efd"))
                     self.form_list.addItem(item)
                 
-                self.debug_output.append(f"✅ Added form: {form_id}")
+                self.append_debug(f"✅ Added form: {form_id}")
                 
             else:
                 # Folder URL - search for forms
                 from_dt = datetime.now(timezone.utc) - timedelta(days=365)
                 to_dt = datetime.now(timezone.utc) + timedelta(days=1)
                 
-                self.debug_output.append(f"🔍 Searching folder: {url}")
+                self.append_debug(f"🔍 Searching folder: {url}")
                 
                 # Extract folder IDs or form IDs from the URL
                 folder_ids = find_forms_with_submissions_in_range(
                     [url],  # Single folder/form
                     from_dt=from_dt,
                     to_dt=to_dt,
-                    progress_callback=lambda msg: self.debug_output.append(msg)
+                    progress_callback=lambda msg: self.append_debug(msg)
                 )
                 
                 if not folder_ids:
@@ -469,7 +514,7 @@ class FormManager(QMainWindow):
                         item.setForeground(QColor("#0d6efd"))
                         self.form_list.addItem(item)
                 
-                self.debug_output.append(f"✅ Found {len(folder_ids)} forms in folder")
+                self.append_debug(f"✅ Found {len(folder_ids)} forms in folder")
             
             self.update_in_queue_label()
             self.save_forms()
@@ -482,7 +527,7 @@ class FormManager(QMainWindow):
             
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to process URL: {str(e)}")
-            self.debug_output.append(f"❌ Error: {str(e)}")
+            self.append_debug(f"❌ Error: {str(e)}")
 
     def update_in_queue_label(self):
         self.in_queue_label.setText(f"⏳ In Queue: {self.form_list.count()}")
@@ -490,13 +535,13 @@ class FormManager(QMainWindow):
     def start_auto_mode(self):
         """Start auto mode - only call this once from dialog"""
         if self.auto_mode:
-            self.debug_output.append("<font color='orange'>[AUTO] ⚠️ Auto mode already running</font>")
+            self.append_debug("<font color='orange'>[AUTO] ⚠️ Auto mode already running</font>")
             return
             
         self.auto_mode = True
         self.stop_button.show()
         self.run_button.setEnabled(False)
-        self.debug_output.append("<b><font color='green'>AUTO RUN STARTED</font></b>")
+        self.append_debug("<b><font color='green'>AUTO RUN STARTED</font></b>")
         self.last_check_time = None
         
         # DON'T schedule auto_cycle here - let the dialog handle the first search
@@ -509,7 +554,7 @@ class FormManager(QMainWindow):
             
         # Prevent overlapping searches
         if self.is_searching:
-            self.debug_output.append("<font color='orange'>[AUTO] ⚠️ Search already in progress, skipping cycle</font>")
+            self.append_debug("<font color='orange'>[AUTO] ⚠️ Search already in progress, skipping cycle</font>")
             self.schedule_next_cycle()
             return
 
@@ -517,19 +562,19 @@ class FormManager(QMainWindow):
 
         if self.last_check_time is None:
             from_dt = now_utc - timedelta(minutes=self.recency_minutes)
-            self.debug_output.append(f"<font color='blue'>[AUTO] 🔍 First auto check: scanning last {self.recency_minutes} minutes</font>")
+            self.append_debug(f"<font color='blue'>[AUTO] 🔍 First auto check: scanning last {self.recency_minutes} minutes</font>")
         else:
             from_dt = self.last_check_time
-            self.debug_output.append(f"<font color='blue'>[AUTO] 🔍 Incremental check: since last scan</font>")
+            self.append_debug(f"<font color='blue'>[AUTO] 🔍 Incremental check: since last scan</font>")
 
         to_dt = now_utc
         from_str = from_dt.strftime("%Y-%m-%d %H:%M:%S UTC")
         to_str = to_dt.strftime("%Y-%m-%d %H:%M:%S UTC")
-        self.debug_output.append(f"<font color='purple'>[AUTO] Search range: {from_str} → {to_str}</font>")
+        self.append_debug(f"<font color='purple'>[AUTO] Search range: {from_str} → {to_str}</font>")
 
         self.is_searching = True
         self.auto_search_thread = SearchThread(self.folders, from_dt, to_dt)
-        self.auto_search_thread.progress.connect(lambda msg: self.debug_output.append(f"<font color='gray'>[SEARCH] {msg}</font>"))
+        self.auto_search_thread.progress.connect(lambda msg: self.append_debug(f"<font color='gray'>[SEARCH] {msg}</font>"))
         self.auto_search_thread.finished.connect(self.on_auto_search_finished)
         self.auto_search_thread.start()
 
@@ -541,7 +586,7 @@ class FormManager(QMainWindow):
             return
             
         now_str = datetime.now().strftime("%H:%M:%S")
-        self.debug_output.append(f"<font color='blue'>[AUTO {now_str}] 📊 Search completed: Found {len(forms)} form(s) with recent submissions</font>")
+        self.append_debug(f"<font color='blue'>[AUTO {now_str}] 📊 Search completed: Found {len(forms)} form(s) with recent submissions</font>")
 
         new_added = 0
         for form in forms:
@@ -562,11 +607,11 @@ class FormManager(QMainWindow):
             new_added += 1
 
         if new_added > 0:
-            self.debug_output.append(f"<font color='green'>[AUTO] ✅ Added {new_added} new form(s) → Starting grading...</font>")
+            self.append_debug(f"<font color='green'>[AUTO] ✅ Added {new_added} new form(s) → Starting grading...</font>")
             self.save_forms()
             self.run_grader()
         else:
-            self.debug_output.append(f"<font color='orange'>[AUTO] 🔭 No new forms with recent submissions found.</font>")
+            self.append_debug(f"<font color='orange'>[AUTO] 🔭 No new forms with recent submissions found.</font>")
             self.schedule_next_cycle()
 
         # Update last check time
@@ -580,7 +625,7 @@ class FormManager(QMainWindow):
         minutes = self.interval_seconds // 60
         next_check = datetime.now() + timedelta(seconds=self.interval_seconds)
         next_str = next_check.strftime("%H:%M:%S")
-        self.debug_output.append(f"<font color='gray'>[AUTO] ⏰ Next check in {minutes} minute(s) at {next_str}</font>")
+        self.append_debug(f"<font color='gray'>[AUTO] ⏰ Next check in {minutes} minute(s) at {next_str}</font>")
         
         # Cancel any existing timer
         if self.auto_timer:
@@ -597,7 +642,7 @@ class FormManager(QMainWindow):
         self.auto_mode = False
         self.stop_button.hide()
         self.run_button.setEnabled(True)
-        self.debug_output.append("<b><font color='red'>AUTO RUN STOPPED</font></b>")
+        self.append_debug("<b><font color='red'>AUTO RUN STOPPED</font></b>")
         
         # Cancel timer
         if self.auto_timer:
@@ -628,12 +673,13 @@ class FormManager(QMainWindow):
             return
 
         if self.is_grading or (self.grader_thread and self.grader_thread.isRunning()):
-            self.debug_output.append("<font color='orange'>[GRADER] ⚠️ Grading already in progress</font>")
+            self.append_debug("<font color='orange'>[GRADER] ⚠️ Grading already in progress</font>")
             return
 
         self.is_grading = True
         self.run_button.setEnabled(False)
         self.debug_output.clear()
+        self.debug_lines = []
         self.overall_progress_bar.setValue(0)
         self.finished_forms = []
 
@@ -644,7 +690,7 @@ class FormManager(QMainWindow):
         self.grader_thread.finished.connect(self.on_grading_finished)
         self.grader_thread.progress.connect(self.update_progress)
         self.grader_thread.overall_progress.connect(self.update_overall_progress)
-        self.grader_thread.debug_message.connect(self.debug_output.append)
+        self.grader_thread.debug_message.connect(self.append_debug)
         self.grader_thread.current_form.connect(lambda url: self.current_label.setText(f"🟡 Processing: {url.split('/')[-2][:10]}..."))
         self.grader_thread.finished_form.connect(self.update_finished_form)
         self.grader_thread.start()
@@ -674,10 +720,29 @@ class FormManager(QMainWindow):
                 title = current_text.split(" — ")[0] if " — " in current_text else "Unknown Form"
                 item.setText(f"✅ {current_text}")
                 item.setForeground(QColor("#198754"))
-                self.debug_output.append(f"<font color='green'>[AUTO {now_str}] ✅ Completed: {title}</font>")
+                self.append_debug(f"<font color='green'>[AUTO {now_str}] ✅ Completed: {title}</font>")
                 break
         
         self.finished_label.setText(f"✅ Finished: {len(self.finished_forms)}")
+    def is_timing_line(self, message):
+        return "Timing " in message
+
+    def append_debug(self, message):
+        self.debug_lines.append(message)
+        if not self.timing_only_checkbox.isChecked() or self.is_timing_line(message):
+            self.debug_output.append(message)
+
+    def on_timing_filter_changed(self, state):
+        self.debug_output.clear()
+        if not self.debug_lines:
+            return
+        if self.timing_only_checkbox.isChecked():
+            lines = [m for m in self.debug_lines if self.is_timing_line(m)]
+        else:
+            lines = self.debug_lines
+        for line in lines:
+            self.debug_output.append(line)
+
 
     def on_grading_finished(self, success, msg):
         self.is_grading = False
@@ -685,9 +750,9 @@ class FormManager(QMainWindow):
         now_str = datetime.now().strftime("%H:%M:%S")
         
         if not success:
-            self.debug_output.append(f"<font color='red'>[AUTO {now_str}] ❌ Grading failed: {msg}</font>")
+            self.append_debug(f"<font color='red'>[AUTO {now_str}] ❌ Grading failed: {msg}</font>")
         else:
-            self.debug_output.append(f"<font color='green'>[AUTO {now_str}] ✅ Grading completed successfully!</font>")
+            self.append_debug(f"<font color='green'>[AUTO {now_str}] ✅ Grading completed successfully!</font>")
 
         if self.auto_mode:
             # Clear finished forms
@@ -705,12 +770,12 @@ class FormManager(QMainWindow):
                     i += 1
             
             if forms_cleared > 0:
-                self.debug_output.append(f"<font color='gray'>[AUTO] 🗑️ Cleared {forms_cleared} finished forms from queue</font>")
+                self.append_debug(f"<font color='gray'>[AUTO] 🗑️ Cleared {forms_cleared} finished forms from queue</font>")
                 self.save_forms()
             
             remaining_forms = self.form_list.count()
             finished_count = len(self.finished_forms)
-            self.debug_output.append(f"<font color='blue'>[AUTO] 📊 Session Stats: Finished: {finished_count}, In queue: {remaining_forms}</font>")
+            self.append_debug(f"<font color='blue'>[AUTO] 📊 Session Stats: Finished: {finished_count}, In queue: {remaining_forms}</font>")
             
             # Schedule next cycle
             self.schedule_next_cycle()
@@ -764,3 +829,5 @@ if __name__ == "__main__":
     window = FormManager()
     window.show()
     sys.exit(app.exec_())
+
+
