@@ -105,7 +105,9 @@ def get_last_submission_time(form_id, from_dt=None, progress_callback=None):
 
             responses = result.get('responses', [])
             for resp in responses:
-                ts_str = resp.get('lastSubmittedTime')
+                # Some responses may not include lastSubmittedTime reliably.
+                # Fall back to createTime so recent submissions are not missed.
+                ts_str = resp.get('lastSubmittedTime') or resp.get('createTime')
                 if ts_str:
                     dt = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
                     

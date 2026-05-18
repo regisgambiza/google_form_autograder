@@ -21,6 +21,7 @@ ALL_SCOPES = [
 # Thread-safe credentials cache
 _credentials_cache = None
 _credentials_lock = threading.Lock()
+CLIENT_SECRETS_FILE = "client_secrets.json"
 
 
 def _get_credentials():
@@ -67,8 +68,16 @@ def _get_credentials():
             if not creds:
                 log("DEBUG", f"Initiating OAuth flow with scopes: {ALL_SCOPES}")
                 try:
+                    if not os.path.exists(CLIENT_SECRETS_FILE):
+                        msg = (
+                            f"Missing OAuth client file: '{CLIENT_SECRETS_FILE}'. "
+                            "Create an OAuth Desktop client in Google Cloud Console, "
+                            "download the JSON, and place it in the project root."
+                        )
+                        log("ERROR", msg)
+                        raise FileNotFoundError(msg)
                     flow = InstalledAppFlow.from_client_secrets_file(
-                        "client_secrets.json",
+                        CLIENT_SECRETS_FILE,
                         ALL_SCOPES
                     )
                     creds = flow.run_local_server(port=0)

@@ -212,6 +212,8 @@ class FormManager(QMainWindow):
         auto_run_button.clicked.connect(self.open_auto_run_dialog)
         grade_now_button = QPushButton("⚡ Grade Folder/URL")
         grade_now_button.clicked.connect(self.open_quick_grade_dialog)
+        grade_all_button = QPushButton("📚 Grade All Folders")
+        grade_all_button.clicked.connect(self.grade_all_forms_in_all_folders)
         self.run_button = QPushButton("🚀 Run Now")
         self.run_button.clicked.connect(self.run_grader)
 
@@ -231,6 +233,7 @@ class FormManager(QMainWindow):
         actions_layout.addWidget(auto_add_button)
         actions_layout.addWidget(auto_run_button)
         actions_layout.addWidget(grade_now_button)
+        actions_layout.addWidget(grade_all_button)
         actions_layout.addWidget(self.run_button)
         actions_layout.addWidget(remove_button)
         actions_layout.addWidget(clear_all_button)
@@ -528,6 +531,63 @@ class FormManager(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to process URL: {str(e)}")
             self.append_debug(f"❌ Error: {str(e)}")
+
+    def grade_all_forms_in_all_folders(self):
+        """Find and grade all forms from all predefined folders, ignoring date windows."""
+        try:
+            folders = load_predefined_folders()
+            if not folders:
+                QMessageBox.warning(
+                    self,
+                    "No Predefined Folders",
+                    "Add folders in Auto Find first, then use Grade All Folders.",
+                )
+                return
+
+            self.append_debug(f"📚 Grade All: Searching all forms in {len(folders)} folder(s)")
+            from_dt = datetime(1970, 1, 1, tzinfo=timezone.utc)
+            to_dt = datetime.now(timezone.utc) + timedelta(days=1)
+
+            forms = find_forms_with_submissions_in_range(
+                folders,
+                from_dt=from_dt,
+                to_dt=to_dt,
+                progress_callback=lambda msg: self.append_debug(f"[GRADE ALL] {msg}"),
+            )
+
+            if not forms:
+                QMessageBox.information(
+                    self,
+                    "No Forms Found",
+                    "No accessible forms with responses were found in your predefined folders.",
+                )
+                return
+
+            new_added = 0
+            for form in forms:
+                form_url = form.get("url")
+                form_title = form.get("title", "Untitled")
+                if form_url and form_url not in self.forms_data:
+                    self.forms_data[form_url] = form_title
+                    display_text = f"{form_title} — {form_url}"
+                    item = QListWidgetItem(f"⏳ {display_text}")
+                    item.setData(Qt.UserRole, form_url)
+                    item.setForeground(QColor("#0d6efd"))
+                    self.form_list.addItem(item)
+                    new_added += 1
+
+            self.save_forms()
+            self.update_in_queue_label()
+            self.append_debug(
+                f"✅ Grade All: Found {len(forms)} form(s), added {new_added} new form(s) to queue"
+            )
+
+            self.grading_mode_combo.setCurrentText("Whole Form")
+            self.run_grader()
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Grade All failed: {str(e)}")
+            self.append_debug(f"❌ Grade All failed: {str(e)}")
 
     def update_in_queue_label(self):
         self.in_queue_label.setText(f"⏳ In Queue: {self.form_list.count()}")
