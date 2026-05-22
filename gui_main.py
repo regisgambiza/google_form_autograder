@@ -23,6 +23,7 @@ from grader_thread import GraderThread
 from class_loader_thread import ClassLoaderThread
 import ollama
 
+BANGKOK_TZ = timezone(timedelta(hours=7))
 
 class FormManager(QMainWindow):
     def __init__(self):
@@ -649,14 +650,21 @@ class FormManager(QMainWindow):
         self.append_debug(f"<font color='blue'>[AUTO {now_str}] 📊 Search completed: Found {len(forms)} form(s) with recent submissions</font>")
 
         new_added = 0
+        found_urls = set()
         for form in forms:
             url = form['url']
+            found_urls.add(url)
             if url in self.forms_data:
                 continue
 
             title = form['title']
             last = form.get('last_submission')
-            last_str = last.strftime("%Y-%m-%d %H:%M:%S") if last else "None"
+            if last:
+                if last.tzinfo is None:
+                    last = last.replace(tzinfo=timezone.utc)
+                last_str = last.astimezone(BANGKOK_TZ).strftime("%Y-%m-%d %H:%M:%S ICT")
+            else:
+                last_str = "None"
             display_text = f"{title} (Last submission: {last_str}) — {url}"
 
             item = QListWidgetItem(f"⏳ {display_text}")
@@ -666,12 +674,15 @@ class FormManager(QMainWindow):
             self.forms_data[url] = title
             new_added += 1
 
-        if new_added > 0:
-            self.append_debug(f"<font color='green'>[AUTO] ✅ Added {new_added} new form(s) → Starting grading...</font>")
+        if found_urls:
+            if new_added > 0:
+                self.append_debug(f"<font color='green'>[AUTO] ??? Added {new_added} new form(s) ??? Starting grading (recent submissions only)...</font>")
+            else:
+                self.append_debug("<font color='green'>[AUTO] ??? Found recent submissions in existing queued form(s) ??? Starting grading (recent submissions only)...</font>")
             self.save_forms()
-            self.run_grader()
+            self.run_grader(force_recent_only=True)
         else:
-            self.append_debug(f"<font color='orange'>[AUTO] 🔭 No new forms with recent submissions found.</font>")
+            self.append_debug(f"<font color='orange'>[AUTO] ???? No new forms with recent submissions found.</font>")
             self.schedule_next_cycle()
 
         # Update last check time
@@ -723,7 +734,7 @@ class FormManager(QMainWindow):
         self.is_searching = False
         self.is_grading = False
 
-    def run_grader(self):
+    def run_grader(self, force_recent_only=False):
         """Start the grading process"""
         if not self.forms_data:
             if self.auto_mode:
@@ -744,7 +755,7 @@ class FormManager(QMainWindow):
         self.finished_forms = []
 
         grading_mode = self.grading_mode_combo.currentText()
-        grade_recent_only = (grading_mode == "Recent Only")
+        grade_recent_only = force_recent_only or (grading_mode == "Recent Only")
 
         self.grader_thread = GraderThread(grade_recent_only=grade_recent_only)
         self.grader_thread.finished.connect(self.on_grading_finished)
@@ -889,5 +900,6 @@ if __name__ == "__main__":
     window = FormManager()
     window.show()
     sys.exit(app.exec_())
+
 
 

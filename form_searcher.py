@@ -2,10 +2,12 @@
 import json
 import random
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from auth import get_drive_service, get_service
 from logger import log
 from googleapiclient.errors import HttpError
+
+BANGKOK_TZ = timezone(timedelta(hours=7))
 
 
 def _is_retryable_error(err):
@@ -105,9 +107,12 @@ def get_last_submission_time(form_id, from_dt=None, progress_callback=None):
 
             responses = result.get('responses', [])
             for resp in responses:
-                # Some responses may not include lastSubmittedTime reliably.
-                # Fall back to createTime so recent submissions are not missed.
-                ts_str = resp.get('lastSubmittedTime') or resp.get('createTime')
+                # Prefer submitTime (used by main grading flow), then fall back.
+                ts_str = (
+                    resp.get("submitTime")
+                    or resp.get("lastSubmittedTime")
+                    or resp.get("createTime")
+                )
                 if ts_str:
                     dt = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
                     
@@ -183,7 +188,7 @@ def find_forms_in_folder(folder_id, from_dt, to_dt, visited=None, progress_callb
             matching.append({
                 "url": f"https://docs.google.com/forms/d/{form_id}/edit",
                 "title": title,
-                "last_submission": last_ts.replace(tzinfo=None)
+                "last_submission": last_ts
             })
 
     # Recurse into subfolders
