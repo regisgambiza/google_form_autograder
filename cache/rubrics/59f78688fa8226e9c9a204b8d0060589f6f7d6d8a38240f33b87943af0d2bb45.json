@@ -1,0 +1,32 @@
+{
+  "required_concepts": [
+    "tetrahedron",
+    "triangle-based pyramid",
+    "triangular base"
+  ],
+  "optional_concepts": [],
+  "acceptable_paraphrases": [
+    "Tetrahedron",
+    "Triangle pyramid",
+    "Triangular based pyramid",
+    "pyramid",
+    "a",
+    "Triangular",
+    "Triangle based pyramid",
+    "Triangular base Pyramid",
+    "Pyramid"
+  ],
+  "critical_errors": [],
+  "strict_keywords": [
+    "tetrahedron",
+    "triangle",
+    "based",
+    "base"
+  ],
+  "misconceptions": [
+    "believing it is a square-based pyramid",
+    "stating it has more than four triangular faces",
+    "describing it as a cone or cylinder"
+  ],
+  "grading_notes": "Ensure the answer includes at least one of the strict keywords and does not contain any misconceptions."
+}

@@ -1,0 +1,25 @@
+{
+  "required_concepts": [
+    "pentagon",
+    "pyramid"
+  ],
+  "optional_concepts": [],
+  "acceptable_paraphrases": [
+    "Pentagon-based pyramid",
+    "Pentagonal pyramid",
+    "Pentagon pyramid"
+  ],
+  "critical_errors": [
+    "Incorrect spelling of 'pentagon'",
+    "Missing the term 'pyramid'"
+  ],
+  "strict_keywords": [
+    "pentagon",
+    "pyramid"
+  ],
+  "misconceptions": [
+    "Referring to it as a regular pentagon without mentioning the pyramid structure",
+    "Using terms like square, triangle or hexagon in place of pentagon"
+  ],
+  "grading_notes": "Credit will be given for correct spelling variations and acceptable paraphrases. Points may be deducted for missing key concepts or critical errors."
+}

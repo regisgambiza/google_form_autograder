@@ -248,7 +248,11 @@ class FormManager(QMainWindow):
 
         evaluator_label = QLabel("Evaluator:")
         self.evaluator_combo = QComboBox()
-        self.evaluator_combo.addItems(["ai_evaluator (Basic)", "ai_evaluator_2 (Advanced)"])
+        self.evaluator_combo.addItems([
+            "ai_evaluator (Basic)",
+            "ai_evaluator_2 (Advanced)",
+            "ai_evaluator_semantic (Semantic Pipeline)",
+        ])
         self.evaluator_combo.currentTextChanged.connect(self.update_evaluator)
         settings_layout.addWidget(evaluator_label)
         settings_layout.addWidget(self.evaluator_combo)
@@ -400,7 +404,12 @@ class FormManager(QMainWindow):
             self.grade_url_immediately(url)
 
     def update_evaluator(self, text):
-        evaluator = "ai_evaluator" if "Basic" in text else "ai_evaluator_2"
+        if "Semantic Pipeline" in text:
+            evaluator = "ai_evaluator_semantic"
+        elif "Basic" in text:
+            evaluator = "ai_evaluator"
+        else:
+            evaluator = "ai_evaluator_2"
         self.update_config("evaluator", evaluator)
 
     def update_leniency(self, text):
@@ -440,7 +449,12 @@ class FormManager(QMainWindow):
             with open("config.json") as f:
                 config = json.load(f)
                 evaluator = config.get("evaluator", "ai_evaluator")
-                index = 0 if evaluator == "ai_evaluator" else 1
+                if evaluator == "ai_evaluator":
+                    index = 0
+                elif evaluator == "ai_evaluator_semantic":
+                    index = 2
+                else:
+                    index = 1
                 self.evaluator_combo.setCurrentIndex(index)
                 leniency = config.get("leniency", "lenient")
                 self.leniency_combo.setCurrentText(leniency)

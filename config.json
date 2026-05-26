@@ -1,13 +1,47 @@
 {
     "models": {
         "judge": [
-            "gpt-oss:latest"
+            "qwen2.5:7b"
         ]
     },
+    "jury_models": {
+        "semantic_judge": "qwen2.5:7b",
+        "concept_judge": "deepseek-r1:8b",
+        "factual_judge": "llama3.1:8b",
+        "strict_judge": "phi4",
+        "misconception_judge": "deepseek-r1:8b",
+        "language_filter": "qwen2.5:7b"
+    },
+    "embedding_model": "mxbai-embed-large",
     "leniency": "lenient",
     "leniency_note": "options: extreme, lenient, balanced, strict",
-    "evaluator": "ai_evaluator_2",
+    "evaluator": "ai_evaluator_semantic",
     "generate_report": false,
     "max_parallel_workers": "auto",
-    "batch_size": "auto"
+    "batch_size": "auto",
+    "numeric_tolerance": 0.01,
+    "max_latency_per_answer_seconds": 30,
+    "enable_reflection": false,
+    "misconception_penalty": 0.4,
+    "retry_attempts": 3,
+    "confidence_thresholds": {
+        "auto_accept": 0.92,
+        "auto_reject": 0.35
+    },
+    "embedding_thresholds": {
+        "auto_accept": 0.92,
+        "auto_reject": 0.35,
+        "send_to_jury": [
+            0.35,
+            0.92
+        ]
+    },
+    "consensus_weights": {
+        "semantic_similarity": 0.35,
+        "concept_coverage": 0.25,
+        "factual_accuracy": 0.2,
+        "strict_judge": 0.1,
+        "language_noise": 0.05,
+        "embedding": 0.05
+    }
 }
