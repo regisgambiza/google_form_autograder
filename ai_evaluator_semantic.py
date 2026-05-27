@@ -46,8 +46,8 @@ def _print_pretty_block(question: Dict[str, object], results: List[object]) -> N
 def evaluate_answers(question: Dict[str, object], answers: List[str], expected: Optional[List[str]] = None) -> List[str]:
     """Legacy-compatible evaluator entrypoint returning accepted answers."""
     log("INFO", "[SEMANTIC PIPELINE ACTIVE] ai_evaluator_semantic")
-    expected_text = " | ".join(expected) if expected else ""
+    expected_values = expected or []
     qtext = str(question.get("title", "Untitled Question"))
-    results = semantic_evaluate_answers(answers, expected_text, qtext)
+    results = semantic_evaluate_answers(answers, expected_values, qtext)
     _print_pretty_block(question, results)
     return [r.answer for r in results if r.decision == "YES"]

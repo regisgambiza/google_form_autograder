@@ -1,8 +1,11 @@
-﻿import time
-from dataclasses import dataclass
-from typing import Dict, List
+﻿import hashlib
+import json
+import os
+import time
+from dataclasses import asdict, dataclass
+from typing import Dict, List, Union
 
-from ai_judges import call_judge
+from ai_judges import run_judges
 from confidence_router import route_decision
 from consensus_engine import combine_scores
 from deterministic_checks import run_deterministic_checks
@@ -13,10 +16,11 @@ from normalization import normalize, semantic_deduplicate
 from rubric_generator import generate_rubric
 from semantic_scoring import score_concepts
 
+RESULT_CACHE: Dict[str, "EvaluationResult"] = {}
+
 
 @dataclass
 class EvaluationResult:
-    """Rich result metadata for each evaluated answer."""
     answer: str
     decision: str
     final_score: float
@@ -34,88 +38,128 @@ class EvaluationResult:
     stage_reached: str
 
 
-def evaluate_answer(answer: str, expected: str, question: str) -> EvaluationResult:
-    """Evaluate a single answer through deterministic->embedding->jury->reasoning pipeline."""
+def _expected_text(expected: Union[str, List[str]]) -> str:
+    if isinstance(expected, list):
+        return " | ".join(expected)
+    return expected
+
+
+def _qhash(question: str, expected: Union[str, List[str]]) -> str:
+    return hashlib.sha256(f"{question}:{_expected_text(expected)}".encode()).hexdigest()
+
+
+def _cache_key(answer: str, question_hash: str) -> str:
+    return hashlib.sha256(f"{normalize(answer)}:{question_hash}".encode()).hexdigest()
+
+
+def evaluate_answer(answer: str, expected: Union[str, List[str]], question: str) -> EvaluationResult:
     cfg = load_config()
     start = time.perf_counter()
     max_latency_ms = float(cfg.get("max_latency_per_answer_seconds", 30.0)) * 1000.0
+    qh = _qhash(question, expected)
+    ck = _cache_key(answer, qh)
+
+    if ck in RESULT_CACHE:
+        r = RESULT_CACHE[ck]
+        log("DEBUG", f"cache_hit=True stage={r.stage_reached}")
+        return r
 
     det = run_deterministic_checks(answer, expected, float(cfg.get("numeric_tolerance", 0.01)))
     if det.accepted and det.confidence >= 0.95:
-        latency_ms = (time.perf_counter() - start) * 1000.0
-        log("DEBUG", f"stage=deterministic method={det.method} latency_ms={latency_ms:.2f}")
-        return EvaluationResult(answer, "YES", det.confidence, det.confidence, det.confidence, det.confidence, False, "", [], [], 1.0, det.confidence, True, latency_ms, "deterministic")
+        lat = (time.perf_counter() - start) * 1000.0
+        res = EvaluationResult(answer, "YES", det.confidence, det.confidence, det.confidence, det.confidence, False, "", [], [], 1.0, det.confidence, True, lat, "deterministic")
+        RESULT_CACHE[ck] = res
+        log("DEBUG", f"latency_ms={lat:.2f} stage=deterministic")
+        return res
 
-    rubric = generate_rubric(question, expected)
+    exp_text = _expected_text(expected)
+    rubric = generate_rubric(question, exp_text)
+    if isinstance(expected, list) and expected:
+        rubric["acceptable_paraphrases"] = list(dict.fromkeys(
+            [str(x) for x in rubric.get("acceptable_paraphrases", [])] + [str(x) for x in expected]
+        ))
     concept = score_concepts(normalize(answer), rubric)
-
-    thresholds = cfg["embedding_thresholds"]
     emb_score = float(concept["embedding_score"])
-    if emb_score >= float(thresholds["auto_accept"]):
-        latency_ms = (time.perf_counter() - start) * 1000.0
-        return EvaluationResult(answer, "YES", emb_score, concept["semantic_score"], concept["concept_score"], concept["semantic_score"], False, "", concept["missing_concepts"], concept["accepted_concepts"], 1.0, emb_score, False, latency_ms, "embedding")
-    if emb_score < float(thresholds["auto_reject"]):
-        latency_ms = (time.perf_counter() - start) * 1000.0
-        return EvaluationResult(answer, "NO", emb_score, concept["semantic_score"], concept["concept_score"], concept["semantic_score"], False, "", concept["missing_concepts"], concept["accepted_concepts"], 1.0, emb_score, False, latency_ms, "embedding")
-
-    judges_cfg = cfg.get("jury_models", {})
-    retries = int(cfg.get("retry_attempts", 3))
-    judges: Dict[str, Dict[str, object]] = {}
-    for role, model in judges_cfg.items():
-        judges[role] = call_judge(model, role, answer, question, expected, rubric, retries=retries)
-
-    active = [j for j in judges.values() if j.get("decision") != "ABSTAIN"]
+    emb_th = cfg.get("embedding_thresholds", {})
     misconception = detect_misconception(answer, rubric)
+
+    # High-coverage semantic accept fast path (pre-jury) when no misconception is detected.
+    if float(concept["concept_score"]) >= 1.0 and float(concept["semantic_score"]) >= 0.70 and not bool(misconception["misconception_detected"]):
+        lat = (time.perf_counter() - start) * 1000.0
+        res = EvaluationResult(
+            answer,
+            "YES",
+            float(concept["semantic_score"]),
+            float(concept["semantic_score"]),
+            float(concept["concept_score"]),
+            float(concept["semantic_score"]),
+            False,
+            "",
+            list(concept["missing_concepts"]),
+            list(concept["accepted_concepts"]),
+            1.0,
+            float(concept["semantic_score"]),
+            False,
+            lat,
+            "embedding",
+        )
+        RESULT_CACHE[ck] = res
+        return res
+
+    # Embedding pre-filter BEFORE jury
+    if emb_score >= float(emb_th.get("auto_accept", 0.92)):
+        lat = (time.perf_counter() - start) * 1000.0
+        res = EvaluationResult(answer, "YES", emb_score, float(concept["semantic_score"]), float(concept["concept_score"]), float(concept["semantic_score"]), False, "", list(concept["missing_concepts"]), list(concept["accepted_concepts"]), 1.0, emb_score, False, lat, "embedding")
+        RESULT_CACHE[ck] = res
+        return res
+    if emb_score < float(emb_th.get("auto_reject", 0.35)):
+        lat = (time.perf_counter() - start) * 1000.0
+        res = EvaluationResult(answer, "NO", emb_score, float(concept["semantic_score"]), float(concept["concept_score"]), float(concept["semantic_score"]), False, "", list(concept["missing_concepts"]), list(concept["accepted_concepts"]), 1.0, emb_score, False, lat, "embedding")
+        RESULT_CACHE[ck] = res
+        return res
+
+    judges = run_judges(answer, question, exp_text, rubric, retries=int(cfg.get("retry_attempts", 3)))
+    active = [j for j in judges if j.get("decision") != "ABSTAIN"]
 
     if not active:
         final_score = emb_score
         decision = "YES" if final_score >= float(cfg["confidence_thresholds"]["auto_accept"]) else "NO"
         stage = "embedding"
         confidence = final_score
-        factual = concept["semantic_score"]
+        factual = float(concept["semantic_score"])
+        agg = {"semantic_similarity": float(concept["semantic_score"]), "concept_coverage": float(concept["concept_score"]), "factual_accuracy": float(concept["semantic_score"]), "strict_judge_score": 0.0, "language_noise_ratio": 0.0}
     else:
         agg = {
             "semantic_similarity": sum(float(j.get("semantic_similarity", 0.0)) for j in active) / len(active),
             "concept_coverage": max(float(concept["concept_score"]), sum(float(j.get("concept_coverage", 0.0)) for j in active) / len(active)),
             "factual_accuracy": sum(float(j.get("factual_accuracy", 0.0)) for j in active) / len(active),
-            "strict_judge_score": max([float(j.get("confidence", 0.0)) for role, j in judges.items() if role == "strict_judge"] or [0.0]),
+            "strict_judge_score": max(float(j.get("confidence", 0.0)) for j in active),
             "language_noise_ratio": sum(float(j.get("language_noise_ratio", 0.0)) for j in active) / len(active),
         }
         final_score = combine_scores(agg, emb_score, bool(misconception["misconception_detected"]), cfg)
         decision, confidence, _, stage = route_decision(final_score, answer, question, rubric, agg, cfg["confidence_thresholds"])
-        factual = agg["factual_accuracy"]
+        factual = float(agg["factual_accuracy"])
 
-    latency_ms = (time.perf_counter() - start) * 1000.0
-    if latency_ms > max_latency_ms:
-        log("WARNING", f"Latency exceeded: {latency_ms:.2f}ms > {max_latency_ms:.2f}ms")
+    lat = (time.perf_counter() - start) * 1000.0
+    if lat > max_latency_ms:
+        log("WARNING", f"Latency exceeded: {lat:.2f}ms > {max_latency_ms:.2f}ms")
 
-    agreement_votes = [1.0 if j.get("decision") == decision else 0.0 for j in judges.values() if j.get("decision") != "ABSTAIN"]
-    model_agreement = (sum(agreement_votes) / len(agreement_votes)) if agreement_votes else 0.0
+    votes = [1.0 if j.get("decision") == decision else 0.0 for j in active]
+    agree = (sum(votes) / len(votes)) if votes else 0.0
+    res = EvaluationResult(answer, decision, float(final_score), float(concept["semantic_score"]), float(concept["concept_score"]), factual, bool(misconception["misconception_detected"]), str(misconception["misconception_description"]), list(concept["missing_concepts"]), list(concept["accepted_concepts"]), agree, float(confidence), False, lat, stage)
+    RESULT_CACHE[ck] = res
 
-    result = EvaluationResult(
-        answer=answer,
-        decision=decision,
-        final_score=final_score,
-        semantic_score=float(concept["semantic_score"]),
-        concept_score=float(concept["concept_score"]),
-        factual_score=float(factual),
-        misconception_detected=bool(misconception["misconception_detected"]),
-        misconception_description=str(misconception["misconception_description"]),
-        missing_concepts=list(concept["missing_concepts"]),
-        accepted_concepts=list(concept["accepted_concepts"]),
-        model_agreement=model_agreement,
-        confidence=float(confidence),
-        fast_path_used=False,
-        latency_ms=latency_ms,
-        stage_reached=stage,
-    )
-    log("DEBUG", f"EvaluationResult={result}")
-    log("INFO", f"decision={result.decision} score={result.final_score:.3f} stage={result.stage_reached}")
-    return result
+    if bool(cfg.get("persist_result_cache", False)):
+        os.makedirs("cache/results", exist_ok=True)
+        with open(os.path.join("cache/results", f"{qh}.json"), "w", encoding="utf-8") as f:
+            json.dump({k: asdict(v) for k, v in RESULT_CACHE.items()}, f)
+
+    log("DEBUG", f"EvaluationResult={res}")
+    log("INFO", f"decision={res.decision} score={res.final_score:.3f} stage={res.stage_reached} latency_ms={res.latency_ms:.2f}")
+    return res
 
 
-def evaluate_answers(answers: List[str], expected: str, question: str) -> List[EvaluationResult]:
-    """Evaluate list of answers with normalized semantic deduplication."""
+def evaluate_answers(answers: List[str], expected: Union[str, List[str]], question: str) -> List[EvaluationResult]:
     unique, mapping = semantic_deduplicate(answers, normalize_fn=normalize)
     rep_results = {u: evaluate_answer(u, expected, question) for u in unique}
     out: List[EvaluationResult] = []

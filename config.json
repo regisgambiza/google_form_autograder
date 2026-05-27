@@ -6,11 +6,12 @@
     },
     "jury_models": {
         "semantic_judge": "qwen2.5:7b",
-        "concept_judge": "deepseek-r1:8b",
-        "factual_judge": "llama3.1:8b",
-        "strict_judge": "phi4",
-        "misconception_judge": "deepseek-r1:8b",
-        "language_filter": "qwen2.5:7b"
+        "concept_judge": "qwen2.5:7b",
+        "factual_judge": "qwen2.5:7b",
+        "strict_judge": "qwen2.5:7b",
+        "misconception_judge": "qwen2.5:7b",
+        "language_filter": "qwen2.5:7b",
+        "reasoning_fallback": "deepseek-r1:8b"
     },
     "embedding_model": "mxbai-embed-large",
     "leniency": "lenient",
@@ -43,5 +44,16 @@
         "strict_judge": 0.1,
         "language_noise": 0.05,
         "embedding": 0.05
-    }
+    },
+    "ollama_options": {
+        "judge_num_ctx": 2048,
+        "rubric_num_ctx": 1024,
+        "fallback_num_ctx": 4096
+    },
+    "early_exit": {
+        "enabled": true,
+        "min_judges": 3,
+        "agreement_confidence": 0.9
+    },
+    "persist_result_cache": false
 }

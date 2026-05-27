@@ -45,7 +45,13 @@ def _to_fraction(value: str) -> Optional[Fraction]:
 def algebra_equal(a: str, b: str) -> bool:
     """SymPy algebraic equivalence check."""
     try:
-        return simplify(sympify(a) - sympify(b)) == 0
+        def prep(x: str) -> str:
+            x = str(x).replace(" ", "")
+            x = re.sub(r"(\d)([a-zA-Z])", r"\1*\2", x)
+            x = re.sub(r"([a-zA-Z])(\d)", r"\1*\2", x)
+            x = re.sub(r"(\))([a-zA-Z0-9])", r"\1*\2", x)
+            return x
+        return simplify(sympify(prep(a)) - sympify(prep(b))) == 0
     except Exception:
         return False
 
@@ -65,8 +71,12 @@ def run_deterministic_checks(answer: str, expected: Union[str, List[str]], numer
             return DeterministicResult(True, 0.97, "multiple_answer")
 
     for exp in exp_list:
-        af = _to_fraction(_strip_units(answer))
-        ef = _to_fraction(_strip_units(exp))
+        # Try raw first (preserves percentage semantics like 50% == 0.5), then unit-stripped.
+        af = _to_fraction(answer)
+        ef = _to_fraction(exp)
+        if af is None or ef is None:
+            af = _to_fraction(_strip_units(answer))
+            ef = _to_fraction(_strip_units(exp))
         if af is not None and ef is not None:
             av = float(af)
             ev = float(ef)
