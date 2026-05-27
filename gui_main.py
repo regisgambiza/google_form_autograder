@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLineEdit, QListWidget, QListWidgetItem, QMessageBox,
     QProgressBar, QTextEdit, QLabel, QComboBox, QCheckBox,
-    QProgressDialog, QSplitter, QSpinBox
+    QProgressDialog, QSplitter, QSpinBox, QDialog, QFormLayout
 )
 
 from PyQt5.QtCore import Qt, QDate, QTimer
@@ -30,6 +30,7 @@ class FormManager(QMainWindow):
         super().__init__()
         self.setWindowTitle("Google Form Autograder")
         self.setGeometry(100, 100, 1250, 820)
+        self.setFixedSize(1250, 820)
 
         self.grader_thread = None
         self.auto_search_thread = None
@@ -242,66 +243,101 @@ class FormManager(QMainWindow):
 
         bottom_layout.addLayout(actions_layout)
 
-        # SETTINGS
-        settings_layout = QHBoxLayout()
-        settings_layout.addStretch()
-
-        evaluator_label = QLabel("Evaluator:")
-        self.evaluator_combo = QComboBox()
-        self.evaluator_combo.addItems([
-            "ai_evaluator (Basic)",
-            "ai_evaluator_2 (Advanced)",
-            "ai_evaluator_semantic (Semantic Pipeline)",
-        ])
-        self.evaluator_combo.currentTextChanged.connect(self.update_evaluator)
-        settings_layout.addWidget(evaluator_label)
-        settings_layout.addWidget(self.evaluator_combo)
-
-        leniency_label = QLabel("Leniency:")
-        self.leniency_combo = QComboBox()
-        self.leniency_combo.addItems(["extreme", "lenient", "balanced", "strict"])
-        self.leniency_combo.currentTextChanged.connect(self.update_leniency)
-        settings_layout.addWidget(leniency_label)
-        settings_layout.addWidget(self.leniency_combo)
-
-        model_label = QLabel("Ollama Model:")
-        self.model_combo = QComboBox()
-        available_models = ollama.list().get('models', [])
-        if available_models:
-            self.model_combo.addItems([m['name'] for m in available_models])
-        self.model_combo.currentTextChanged.connect(self.update_model)
-        settings_layout.addWidget(model_label)
-        settings_layout.addWidget(self.model_combo)
-
-        self.report_checkbox = QCheckBox("Generate Report")
-        self.report_checkbox.setChecked(True)
-        self.report_checkbox.stateChanged.connect(self.update_report_option)
-        settings_layout.addWidget(self.report_checkbox)
-
-        batch_label = QLabel("Batch Size:")
-        self.batch_size_spin = QSpinBox()
-        self.batch_size_spin.setRange(1, 200)
-        self.batch_size_spin.setSingleStep(1)
-        self.batch_size_spin.valueChanged.connect(self.update_batch_size)
-        self.batch_auto_checkbox = QCheckBox("Auto")
-        self.batch_auto_checkbox.stateChanged.connect(self.update_batch_auto)
-        settings_layout.addWidget(batch_label)
-        settings_layout.addWidget(self.batch_size_spin)
-        settings_layout.addWidget(self.batch_auto_checkbox)
-
-        grading_mode_label = QLabel("Grade Mode:")
-        self.grading_mode_combo = QComboBox()
-        self.grading_mode_combo.addItems(["Whole Form", "Recent Only"])
-        self.grading_mode_combo.setToolTip("Whole Form: Grade all submissions\nRecent Only: Grade only new submissions since last check")
-        settings_layout.addWidget(grading_mode_label)
-        settings_layout.addWidget(self.grading_mode_combo)
-
-        bottom_layout.addLayout(settings_layout)
+        settings_button = QPushButton("⚙ Settings")
+        settings_button.clicked.connect(self.open_settings_dialog)
+        settings_button.setObjectName("Secondary")
+        bottom_layout.addStretch()
+        bottom_layout.addWidget(settings_button)
         main_layout.addLayout(bottom_layout)
 
         self.load_forms()
         self.load_config()
         self.update_in_queue_label()
+
+    def open_settings_dialog(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Settings")
+        dialog.setModal(True)
+        dialog.setFixedSize(520, 360)
+        form = QFormLayout(dialog)
+
+        evaluator_combo = QComboBox(dialog)
+        evaluator_combo.addItems([
+            "ai_evaluator (Basic)",
+            "ai_evaluator_2 (Advanced)",
+            "ai_evaluator_semantic (Semantic Pipeline)",
+        ])
+
+        leniency_combo = QComboBox(dialog)
+        leniency_combo.addItems(["extreme", "lenient", "balanced", "strict"])
+
+        model_combo = QComboBox(dialog)
+        available_models = ollama.list().get('models', [])
+        if available_models:
+            model_combo.addItems([m['name'] for m in available_models])
+
+        report_checkbox = QCheckBox("Generate Report", dialog)
+        batch_size_spin = QSpinBox(dialog)
+        batch_size_spin.setRange(1, 200)
+        batch_auto_checkbox = QCheckBox("Auto", dialog)
+        grading_mode_combo = QComboBox(dialog)
+        grading_mode_combo.addItems(["Whole Form", "Recent Only"])
+
+        cfg = {}
+        try:
+            with open("config.json", "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+        except Exception:
+            cfg = {}
+        ev = cfg.get("evaluator", "ai_evaluator")
+        evaluator_combo.setCurrentIndex(0 if ev == "ai_evaluator" else (2 if ev == "ai_evaluator_semantic" else 1))
+        leniency_combo.setCurrentText(cfg.get("leniency", "lenient"))
+        models = cfg.get("models", {}).get("judge", [])
+        if models:
+            model_combo.setCurrentText(models[0])
+        report_checkbox.setChecked(bool(cfg.get("generate_report", True)))
+        batch_size = cfg.get("batch_size", 32)
+        if isinstance(batch_size, str) and batch_size.lower() == "auto":
+            batch_auto_checkbox.setChecked(True)
+            batch_size_spin.setEnabled(False)
+            batch_size_spin.setValue(32)
+        else:
+            batch_size_spin.setValue(int(batch_size) if isinstance(batch_size, int) and batch_size > 0 else 32)
+        batch_auto_checkbox.stateChanged.connect(lambda s: batch_size_spin.setEnabled(s != Qt.Checked))
+
+        form.addRow("Evaluator:", evaluator_combo)
+        form.addRow("Leniency:", leniency_combo)
+        form.addRow("Ollama Model:", model_combo)
+        form.addRow("", report_checkbox)
+        batch_row = QWidget(dialog)
+        bl = QHBoxLayout(batch_row)
+        bl.setContentsMargins(0, 0, 0, 0)
+        bl.addWidget(batch_size_spin)
+        bl.addWidget(batch_auto_checkbox)
+        form.addRow("Batch Size:", batch_row)
+        form.addRow("Grade Mode:", grading_mode_combo)
+
+        buttons = QWidget(dialog)
+        b = QHBoxLayout(buttons)
+        b.setContentsMargins(0, 0, 0, 0)
+        save_btn = QPushButton("Save", dialog)
+        cancel_btn = QPushButton("Cancel", dialog)
+        save_btn.clicked.connect(dialog.accept)
+        cancel_btn.clicked.connect(dialog.reject)
+        b.addWidget(save_btn)
+        b.addWidget(cancel_btn)
+        form.addRow("", buttons)
+
+        if dialog.exec_() == QDialog.Accepted:
+            self.update_evaluator(evaluator_combo.currentText())
+            self.update_leniency(leniency_combo.currentText())
+            if model_combo.currentText():
+                self.update_model(model_combo.currentText())
+            self.update_report_option(Qt.Checked if report_checkbox.isChecked() else Qt.Unchecked)
+            if batch_auto_checkbox.isChecked():
+                self.update_config("batch_size", "auto")
+            else:
+                self.update_config("batch_size", int(batch_size_spin.value()))
 
     def load_forms(self):
         try:
@@ -422,16 +458,18 @@ class FormManager(QMainWindow):
         self.update_config("generate_report", state == Qt.Checked)
 
     def update_batch_size(self, value):
-        if not self.batch_auto_checkbox.isChecked():
+        if hasattr(self, "batch_auto_checkbox") and not self.batch_auto_checkbox.isChecked():
             self.update_config("batch_size", int(value))
 
     def update_batch_auto(self, state):
         is_auto = state == Qt.Checked
-        self.batch_size_spin.setEnabled(not is_auto)
+        if hasattr(self, "batch_size_spin"):
+            self.batch_size_spin.setEnabled(not is_auto)
         if is_auto:
             self.update_config("batch_size", "auto")
         else:
-            self.update_config("batch_size", int(self.batch_size_spin.value()))
+            if hasattr(self, "batch_size_spin"):
+                self.update_config("batch_size", int(self.batch_size_spin.value()))
 
     def update_config(self, key, value):
         try:
@@ -448,34 +486,9 @@ class FormManager(QMainWindow):
         try:
             with open("config.json") as f:
                 config = json.load(f)
-                evaluator = config.get("evaluator", "ai_evaluator")
-                if evaluator == "ai_evaluator":
-                    index = 0
-                elif evaluator == "ai_evaluator_semantic":
-                    index = 2
-                else:
-                    index = 1
-                self.evaluator_combo.setCurrentIndex(index)
-                leniency = config.get("leniency", "lenient")
-                self.leniency_combo.setCurrentText(leniency)
-                models = config.get("models", {}).get("judge", [])
-                if models:
-                    self.model_combo.setCurrentText(models[0])
-                generate_report = config.get("generate_report", True)
-                self.report_checkbox.setChecked(generate_report)
-                batch_size = config.get("batch_size", 32)
-                if isinstance(batch_size, str) and batch_size.lower() == "auto":
-                    self.batch_auto_checkbox.setChecked(True)
-                    self.batch_size_spin.setEnabled(False)
-                    self.batch_size_spin.setValue(32)
-                else:
-                    if not isinstance(batch_size, int) or batch_size <= 0:
-                        batch_size = 32
-                    self.batch_auto_checkbox.setChecked(False)
-                    self.batch_size_spin.setEnabled(True)
-                    self.batch_size_spin.setValue(batch_size)
+                if "batch_size" not in config:
+                    self.update_config("batch_size", 32)
         except FileNotFoundError:
-            self.batch_size_spin.setValue(32)
             self.update_config("batch_size", 32)
 
     def grade_url_immediately(self, url):
