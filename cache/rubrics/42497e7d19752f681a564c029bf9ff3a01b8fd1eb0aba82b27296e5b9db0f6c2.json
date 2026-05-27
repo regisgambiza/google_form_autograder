@@ -1,0 +1,30 @@
+{
+  "required_concepts": [
+    "binary representation",
+    "decimal conversion"
+  ],
+  "optional_concepts": [
+    "bitwise operations",
+    "number systems"
+  ],
+  "acceptable_paraphrases": [
+    "the binary number 101 is equal to 5 in decimal",
+    "when converting from binary, 101 becomes 5",
+    "in base 2, the number 101 equals 5 in base 10"
+  ],
+  "critical_errors": [
+    "incorrect decimal conversion",
+    "wrong binary representation"
+  ],
+  "strict_keywords": [
+    "binary",
+    "decimal",
+    "equals",
+    "number"
+  ],
+  "misconceptions": [
+    "believing that 82 or 8 is the correct binary number",
+    "stating that 101 in binary equals 8 or 82 in decimal"
+  ],
+  "grading_notes": "Ensure the answer clearly shows the conversion from binary to decimal. Incorrect values will result in partial credit at most."
+}

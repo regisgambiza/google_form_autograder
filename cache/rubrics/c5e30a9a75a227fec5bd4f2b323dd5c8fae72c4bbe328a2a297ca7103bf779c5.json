@@ -1,0 +1,43 @@
+{
+  "required_concepts": [
+    "A rectangle does not always have all sides equal",
+    "A kite does not have opposite sides parallel",
+    "A square has 4 equal sides",
+    "Rectangles do not necessarily have 4 equal sides",
+    "Rhombuses have two pairs of equal sides"
+  ],
+  "optional_concepts": [
+    "Angles in a rectangle are always 90 degrees",
+    "Kites have two pairs of adjacent sides that are equal",
+    "Parallelograms have opposite sides parallel and equal in length"
+  ],
+  "acceptable_paraphrases": [
+    "A square is not the same as a rectangle because they do not share all properties",
+    "Rectangles can vary in side lengths, unlike squares",
+    "Kites and rhombuses are distinct shapes with different properties",
+    "Not all rectangles are rhombuses due to differing side properties"
+  ],
+  "critical_errors": [
+    "Incorrectly stating that a rectangle has equal sides like a square",
+    "Saying that a rectangle is always a parallelogram or rhombus",
+    "Misstating the properties of a kite and confusing it with other shapes"
+  ],
+  "strict_keywords": [
+    "rectangle",
+    "sides not always equal",
+    "kite",
+    "opposite sides not parallel",
+    "square",
+    "four equal sides",
+    "rhombus",
+    "equal sides",
+    "parallelogram"
+  ],
+  "misconceptions": [
+    "Believing that all rectangles have four equal sides",
+    "Thinking that a rectangle is always a parallelogram or rhombus",
+    "Confusing the properties of a kite with those of other quadrilaterals",
+    "Stating that a rectangle can be both a square and a rhombus at the same time"
+  ],
+  "grading_notes": "Ensure all core concepts are covered. Accept alternative phrasings but ensure they convey the correct information. Avoid strict penalties for minor variations in wording."
+}

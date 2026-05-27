@@ -1,0 +1,32 @@
+{
+  "required_concepts": [
+    "rhombus",
+    "kite",
+    "pairs of equal adjacent sides"
+  ],
+  "optional_concepts": [
+    "quadrilateral",
+    "opposite sides are equal in a rhombus",
+    "all sides are equal in a rhombus"
+  ],
+  "acceptable_paraphrases": [
+    "A rhombus is a type of kite because it has two pairs of adjacent equal sides.",
+    "Since a rhombus has four equal sides, it qualifies as a kite with two pairs of adjacent equal sides.",
+    "All sides are the same length in both a rhombus and a kite."
+  ],
+  "critical_errors": [
+    "Confusing a square for a rhombus or a kite",
+    "Stating that only kites have four equal sides"
+  ],
+  "strict_keywords": [
+    "pairs of equal adjacent sides",
+    "rhombus",
+    "kite"
+  ],
+  "misconceptions": [
+    "A rhombus and a kite are the same shape but with different side lengths.",
+    "A kite has only two pairs of equal opposite sides, not adjacent sides.",
+    "All kites have four equal sides."
+  ],
+  "grading_notes": "Credit should be given for correct identification of the relationship between a rhombus and a kite based on their properties. Points may be deducted for incorrect statements or misconceptions about these shapes."
+}

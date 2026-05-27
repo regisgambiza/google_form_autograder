@@ -1,0 +1,33 @@
+{
+  "required_concepts": [
+    "rectangle",
+    "property a",
+    "property b",
+    "property c"
+  ],
+  "optional_concepts": [],
+  "acceptable_paraphrases": [
+    "A rectangle has A, B and C properties",
+    "The properties of a rectangle include A, B, C",
+    "Properties A, B, and C apply to rectangles"
+  ],
+  "critical_errors": [
+    "incorrect property names",
+    "missing any required concept"
+  ],
+  "strict_keywords": [
+    "rectangle",
+    "property a",
+    "property b",
+    "property c",
+    "A",
+    "B",
+    "C"
+  ],
+  "misconceptions": [
+    "believing that only one or two properties are true for all rectangles",
+    "stating that these are not properties of a rectangle",
+    "mixing up the property names (e.g., treating A and B as interchangeable)"
+  ],
+  "grading_notes": "Credit will be given for including all required concepts. Optional concepts, if present, will earn bonus points. Misstatements or confusion about the properties will result in deductions."
+}

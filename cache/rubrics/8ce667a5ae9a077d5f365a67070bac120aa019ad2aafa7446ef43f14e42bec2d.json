@@ -1,0 +1,40 @@
+{
+  "required_concepts": [
+    "Diagonals of a square are perpendicular",
+    "The diagonals intersect at right angles (90 degrees)",
+    "Perpendicular bisectors"
+  ],
+  "optional_concepts": [
+    "Has 4 lines of symmetry that cut diagonally and in half",
+    "Square diagonals not shared by all rectangles is that they are perpendicular",
+    "All sides are equal and has 4 right angles"
+  ],
+  "acceptable_paraphrases": [
+    "The diagonals are perpendicular",
+    "the diagonals are perpendicular",
+    "Perpendicular",
+    "diagonals of a square",
+    "Diagonals ofa square are perpendicular",
+    "The diagonals intersect at 90 degrees",
+    "Cross at 90",
+    "Diagonals of a square are perpendicular to each other (they meet at 90°)",
+    "Perpendicularity"
+  ],
+  "critical_errors": [
+    "Misstating that the diagonals bisect corners rather than being perpendicular",
+    "Incorrectly stating that all rectangles have perpendicular diagonals",
+    "Failing to mention the right angle intersection of diagonals"
+  ],
+  "strict_keywords": [
+    "perpendicular",
+    "right angles (90 degrees)",
+    "intersect at right angles",
+    "perpendicular bisectors"
+  ],
+  "misconceptions": [
+    "Diagonals bisect each other at an angle other than 90 degrees",
+    "All rectangles have perpendicular diagonals",
+    "The diagonals of a square are not the only diagonals with this property (e.g., rhombus also has this property)"
+  ],
+  "grading_notes": "Award full points for answers containing all required concepts and some optional ones. Deduct points for critical errors and misconceptions, but allow partial credit for acceptable paraphrases."
+}

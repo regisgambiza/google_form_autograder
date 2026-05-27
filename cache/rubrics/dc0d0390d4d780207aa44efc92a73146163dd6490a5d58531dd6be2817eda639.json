@@ -1,0 +1,34 @@
+{
+  "required_concepts": [
+    "kite properties",
+    "diagonals of a kite"
+  ],
+  "optional_concepts": [
+    "angle bisectors",
+    "congruent sides"
+  ],
+  "acceptable_paraphrases": [
+    "A and B are diagonally opposite vertices",
+    "Ab is one diagonal",
+    "a and b are the other diagonal",
+    "A, C, I intersect at right angles",
+    "Property a refers to diagonals being perpendicular",
+    "A,B and A,b refer to diagonals bisecting each other"
+  ],
+  "critical_errors": [
+    "incorrect labeling of vertices",
+    "misidentification of properties"
+  ],
+  "strict_keywords": [
+    "diagonal",
+    "vertices",
+    "bisects",
+    "perpendicular"
+  ],
+  "misconceptions": [
+    "believing all sides are equal",
+    "thinking diagonals are not perpendicular",
+    "confusing vertex angles with diagonal intersections"
+  ],
+  "grading_notes": "Ensure the answer includes both diagonals and their properties. Watch for common geometric misconceptions."
+}

@@ -1,0 +1,33 @@
+{
+  "required_concepts": [
+    "lines of symmetry",
+    "shape can have more than one line of symmetry"
+  ],
+  "optional_concepts": [
+    "specific shapes like rhombus",
+    "parallelogram"
+  ],
+  "acceptable_paraphrases": [
+    "no other shape with two lines of symmetry exists",
+    "a square is not the only shape with two lines of symmetry",
+    "other shapes such as a rhombus can have exactly two lines of symmetry",
+    "a parallelogram does not necessarily need to be a rectangle for it to have two lines of symmetry"
+  ],
+  "critical_errors": [
+    "saying all shapes with two lines of symmetry must be rectangles",
+    "incorrectly stating that only squares have two lines of symmetry"
+  ],
+  "strict_keywords": [
+    "shape",
+    "lines of symmetry",
+    "two",
+    "not necessarily",
+    "rhombus",
+    "parallelogram"
+  ],
+  "misconceptions": [
+    "only squares can have two lines of symmetry",
+    "all shapes with two lines of symmetry must be rectangles"
+  ],
+  "grading_notes": "Credit should be given for correctly identifying that a shape does not have to be a rectangle and providing examples or explanations involving other shapes like rhombus or parallelogram. Deduct points for incorrect statements about the necessity of being a rectangle."
+}

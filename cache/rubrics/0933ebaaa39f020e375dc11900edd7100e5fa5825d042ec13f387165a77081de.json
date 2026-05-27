@@ -1,0 +1,29 @@
+{
+  "required_concepts": [
+    "halving",
+    "division by two"
+  ],
+  "optional_concepts": [
+    "fraction",
+    "half"
+  ],
+  "acceptable_paraphrases": [
+    "one half",
+    "50%",
+    "split in half"
+  ],
+  "critical_errors": [
+    "multiplying instead of dividing",
+    "incorrect decimal representation"
+  ],
+  "strict_keywords": [
+    "0.5",
+    "0.50",
+    "one-half"
+  ],
+  "misconceptions": [
+    "believing the answer is 1 or any whole number",
+    "thinking division by two means adding a zero"
+  ],
+  "grading_notes": "Credit should be given for any correct paraphrase that conveys the concept of half or one divided by two. Incorrect decimal representations like .05 or .500 may also receive partial credit depending on context."
+}

@@ -1,0 +1,32 @@
+{
+  "required_concepts": [
+    "number of sides",
+    "name of polygon with 14 sides",
+    "lines of symmetry"
+  ],
+  "optional_concepts": [],
+  "acceptable_paraphrases": [
+    "2b = 14",
+    "14-sided shape",
+    "a shape with 14 lines of symmetry can be a tetradecagon",
+    "tetradecagon has 14 sides and 7 sides have symmetry"
+  ],
+  "critical_errors": [
+    "incorrect number of sides",
+    "wrong polygon name",
+    "inaccurate description of lines of symmetry"
+  ],
+  "strict_keywords": [
+    "2b",
+    "14",
+    "tetradecagon",
+    "lines of symmetry",
+    "Tetradecagon"
+  ],
+  "misconceptions": [
+    "thinking a tetradecagon has less than 7 lines of symmetry",
+    "associating the number of sides with fewer symmetrical properties",
+    "believing that all polygons with an even number of sides have more than 7 lines of symmetry"
+  ],
+  "grading_notes": "Ensure the answer contains the correct numerical value, polygon name, and accurate description of its symmetry. Accept paraphrases but ensure the core concepts are intact."
+}

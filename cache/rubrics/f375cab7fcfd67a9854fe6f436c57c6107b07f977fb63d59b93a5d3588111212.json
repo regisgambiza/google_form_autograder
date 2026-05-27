@@ -1,0 +1,28 @@
+{
+  "required_concepts": [
+    "rhombus",
+    "A and B"
+  ],
+  "optional_concepts": [],
+  "acceptable_paraphrases": [
+    "A and B are properties of a rhombus",
+    "Rhombus A or B",
+    "Properties A, B, C; A and B relevant",
+    "Rhombus with properties A and B"
+  ],
+  "critical_errors": [
+    "mistaking the shape for another quadrilateral",
+    "missing both A and B"
+  ],
+  "strict_keywords": [
+    "rhombus",
+    "A and B",
+    "properties"
+  ],
+  "misconceptions": [
+    "confusing a rhombus with a square or parallelogram",
+    "omitting one of the properties (A or B)",
+    "including an incorrect property not related to a rhombus"
+  ],
+  "grading_notes": "Ensure the answer includes both A and B, and refers to the shape as a rhombus. Watch for irrelevant properties."
+}

@@ -1,0 +1,35 @@
+{
+  "required_concepts": [
+    "All four sides are equal",
+    "Rhombus has opposite equal angles",
+    "Two lines of symmetry",
+    "Diagonals must be perpendicular"
+  ],
+  "optional_concepts": [
+    "Parallel 90degree",
+    "A quadrilateral where all four sides are equal in length"
+  ],
+  "acceptable_paraphrases": [
+    "Four sides equal | 4equal sides",
+    "You know it by seeing if sides are 4 equal and has opposite equal angles with two lines of symmetry",
+    "Diagonals must be perpendicular and bisect",
+    "A rhombus has 4 equal sides and has opposite equal angles and has 2 lines"
+  ],
+  "critical_errors": [
+    "Incorrectly identifying the shape as a square instead of a rhombus",
+    "Missing any of the required concepts listed above"
+  ],
+  "strict_keywords": [
+    "four sides are equal",
+    "opposite equal angles",
+    "two lines of symmetry",
+    "diagonals must be perpendicular"
+  ],
+  "misconceptions": [
+    "Confusing a rhombus with other shapes like a square or parallelogram",
+    "Failing to mention the diagonals being perpendicular and bisecting each other",
+    "Incorrectly stating that all angles are equal (which is not necessarily true for all rhombi)",
+    "Ignoring the two lines of symmetry"
+  ],
+  "grading_notes": "Ensure the answer includes all required concepts, uses strict keywords where necessary, and does not show any misconceptions. Acceptable paraphrases can be used but must convey the same meaning."
+}

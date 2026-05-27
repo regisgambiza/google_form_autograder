@@ -1,0 +1,25 @@
+{
+  "required_concepts": [
+    "number of symmetrical lines"
+  ],
+  "optional_concepts": [],
+  "acceptable_paraphrases": [
+    "symmetry lines",
+    "lines of reflection",
+    "order of rotational symmetry"
+  ],
+  "critical_errors": [
+    "incorrect number of lines of symmetry",
+    "mentioning incorrect geometric properties"
+  ],
+  "strict_keywords": [
+    "2c",
+    "8",
+    "lines of symmetry"
+  ],
+  "misconceptions": [
+    "mentioning only vertical or horizontal lines of symmetry without considering all possible lines",
+    "stating that there are no lines of symmetry or an arbitrary number not equal to 8"
+  ],
+  "grading_notes": "Ensure the answer specifies both the quantity and nature of the lines of symmetry. Deduct points for incomplete or incorrect specification."
+}

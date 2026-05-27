@@ -1,0 +1,35 @@
+{
+  "required_concepts": [
+    "regular nonagon",
+    "lines of symmetry",
+    "number of sides"
+  ],
+  "optional_concepts": [],
+  "acceptable_paraphrases": [
+    "A regular nonagon has 9 lines of symmetry",
+    "A regular nonagon has 9 line of symmety",
+    "Bonbon=9lines",
+    "9lines",
+    "regular polygon has the same number of lines of symmetry as it has sides",
+    "It should have nine",
+    "A regular nona has 9 lines of symmetry",
+    "A nonagon is 9",
+    "It has 9 lines of symmetry",
+    "False",
+    "A regular nonagon has 9 side, so it must have exactly 9 lines of symmetry",
+    "Regular nonagon has 9lines"
+  ],
+  "critical_errors": [],
+  "strict_keywords": [
+    "regular",
+    "nonagon",
+    "9",
+    "lines of symmetry"
+  ],
+  "misconceptions": [
+    "A regular nonagon has 7 lines of symmetry",
+    "A nonagon does not have the same number of lines of symmetry as its sides",
+    "Only some types of polygons have lines of symmetry equal to their sides"
+  ],
+  "grading_notes": "Ensure the answer includes the correct number of lines of symmetry and relates it directly to the number of sides. Avoiding common misconceptions is crucial."
+}

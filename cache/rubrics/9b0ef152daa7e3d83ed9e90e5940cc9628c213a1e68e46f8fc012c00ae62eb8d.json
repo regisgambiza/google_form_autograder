@@ -1,0 +1,38 @@
+{
+  "required_concepts": [
+    "parallelogram",
+    "property c",
+    "negative angle sum"
+  ],
+  "optional_concepts": [
+    "A|A",
+    "no right angles",
+    "opposite sides parallel"
+  ],
+  "acceptable_paraphrases": [
+    "Parallelogram: A | A | No | Negative | A,C | has property c | - | 85",
+    "A quadrilateral with two pairs of parallel sides, no right angles, negative angle sum, and property c",
+    "Opposite sides are parallel; no right angles; property c is negative"
+  ],
+  "critical_errors": [
+    "parallelogram",
+    "property c",
+    "negative angle sum"
+  ],
+  "strict_keywords": [
+    "Parallelogram:",
+    "A | A",
+    "No",
+    "Negative",
+    "A,C",
+    "property c",
+    "-"
+  ],
+  "misconceptions": [
+    "right angles in a parallelogram",
+    "positive angle sum",
+    "only two pairs of parallel sides",
+    "more than one negative value (other than -85)"
+  ],
+  "grading_notes": "Ensure the answer includes all required concepts and avoids critical errors. Optional concepts can be included for extra credit."
+}

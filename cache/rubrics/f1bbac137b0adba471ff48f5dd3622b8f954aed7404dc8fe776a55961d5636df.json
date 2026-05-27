@@ -1,0 +1,34 @@
+{
+  "required_concepts": [
+    "shapes (square, rectangle, rhombus, parallelogram, kite, trapezium)",
+    "diagonals properties (perpendicular or not)",
+    "rotational symmetry"
+  ],
+  "optional_concepts": [],
+  "acceptable_paraphrases": [
+    "Shapes with perpendicular diagonals and rotational symmetry",
+    "Shapes that are either square or rectangle",
+    "Shapes without perpendicular diagonals and no rotational symmetry"
+  ],
+  "critical_errors": [
+    "Incorrectly identifying shapes as having perpendicular diagonals when they do not",
+    "Incorrectly stating a shape has rotational symmetry when it does not"
+  ],
+  "strict_keywords": [
+    "square",
+    "rectangle",
+    "rhombus",
+    "parallelogram",
+    "kite",
+    "trapezium",
+    "perpendicular diagonals",
+    "rotational symmetry"
+  ],
+  "misconceptions": [
+    "Thinking all parallelograms are squares or rectangles",
+    "Confusing rhombus with square and thinking they always have perpendicular diagonals",
+    "Believing that the presence of perpendicular diagonals means a shape has rotational symmetry",
+    "Forgetting to include trapezium in answers"
+  ],
+  "grading_notes": "Correctly identify at least two properties (diagonals, rotational symmetry) for each shape. Full credit if all shapes and their properties are accurately identified."
+}

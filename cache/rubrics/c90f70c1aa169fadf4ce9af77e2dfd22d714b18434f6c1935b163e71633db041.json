@@ -1,0 +1,33 @@
+{
+  "required_concepts": [
+    "true",
+    "rhombus"
+  ],
+  "optional_concepts": [],
+  "acceptable_paraphrases": [
+    "yes",
+    "y",
+    "correct",
+    "affirmative"
+  ],
+  "critical_errors": [
+    "false",
+    "t-false",
+    "no",
+    "n",
+    "n-no"
+  ],
+  "strict_keywords": [
+    "true",
+    "|T|",
+    "⁷6",
+    "Ya",
+    "Yass",
+    "26"
+  ],
+  "misconceptions": [
+    "squares are the only quadrilaterals with equal sides",
+    "rhombuses have unequal angles"
+  ],
+  "grading_notes": "Ensure all required concepts are present and no critical errors are made. Acceptable paraphrases may include synonyms or rephrasing of the strict keywords."
+}

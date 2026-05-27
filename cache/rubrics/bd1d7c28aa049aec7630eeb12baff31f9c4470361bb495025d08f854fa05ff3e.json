@@ -1,0 +1,30 @@
+{
+  "required_concepts": [
+    "false statement",
+    "true statement"
+  ],
+  "optional_concepts": [],
+  "acceptable_paraphrases": [
+    "incorrect",
+    "not true",
+    "invalid"
+  ],
+  "critical_errors": [
+    "correct statement",
+    "affirmative response"
+  ],
+  "strict_keywords": [
+    "False",
+    "True",
+    "No",
+    "trapezoid",
+    "Ya",
+    "Yass"
+  ],
+  "misconceptions": [
+    "believing a trapezoid has more than one pair of parallel sides",
+    "confusing the answer with 'yes' or 'true'",
+    "mistakenly accepting an affirmative response as correct"
+  ],
+  "grading_notes": "Ensure that the student provides a clear and unambiguous negative response, and correctly identifies a property of a trapezoid."
+}

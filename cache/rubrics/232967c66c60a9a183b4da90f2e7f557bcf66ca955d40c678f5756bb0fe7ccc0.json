@@ -1,0 +1,31 @@
+{
+  "required_concepts": [
+    "True",
+    "T",
+    "true"
+  ],
+  "optional_concepts": [],
+  "acceptable_paraphrases": [
+    "yes",
+    "y",
+    "it is true"
+  ],
+  "critical_errors": [
+    "false",
+    "False",
+    "f",
+    "0",
+    "no",
+    "n"
+  ],
+  "strict_keywords": [
+    "True",
+    "T",
+    "true"
+  ],
+  "misconceptions": [
+    "This statement can be false under certain conditions.",
+    "The answer depends on the context."
+  ],
+  "grading_notes": "Ensure that students provide a clear affirmative answer. Acceptance of 'true' in various forms (True, T, true) is allowed. Additional values or concepts beyond True are not required but do not penalize the student."
+}
