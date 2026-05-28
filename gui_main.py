@@ -30,7 +30,8 @@ class FormManager(QMainWindow):
         super().__init__()
         self.setWindowTitle("Google Form Autograder")
         self.setGeometry(100, 100, 1250, 820)
-        self.setFixedSize(1250, 820)
+        self.setMinimumSize(1000, 700)
+        self.grading_mode = "Whole Form"
 
         self.grader_thread = None
         self.auto_search_thread = None
@@ -272,9 +273,28 @@ class FormManager(QMainWindow):
         leniency_combo.addItems(["extreme", "lenient", "balanced", "strict"])
 
         model_combo = QComboBox(dialog)
-        available_models = ollama.list().get('models', [])
+        available_models = []
+        try:
+            available_models = [m['name'] for m in ollama.list().get('models', [])]
+        except Exception as e:
+            print(f"Error fetching Ollama models: {e}")
+
+        cfg = {}
+        try:
+            with open("config.json", "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+        except Exception:
+            cfg = {}
+
+        # Add existing config model to list if it's not there
+        models = cfg.get("models", {}).get("judge", [])
+        if models:
+            config_model = models[0]
+            if config_model not in available_models:
+                available_models.insert(0, config_model)
+
         if available_models:
-            model_combo.addItems([m['name'] for m in available_models])
+            model_combo.addItems(available_models)
 
         report_checkbox = QCheckBox("Generate Report", dialog)
         batch_size_spin = QSpinBox(dialog)
@@ -283,16 +303,9 @@ class FormManager(QMainWindow):
         grading_mode_combo = QComboBox(dialog)
         grading_mode_combo.addItems(["Whole Form", "Recent Only"])
 
-        cfg = {}
-        try:
-            with open("config.json", "r", encoding="utf-8") as f:
-                cfg = json.load(f)
-        except Exception:
-            cfg = {}
         ev = cfg.get("evaluator", "ai_evaluator")
         evaluator_combo.setCurrentIndex(0 if ev == "ai_evaluator" else (2 if ev == "ai_evaluator_semantic" else 1))
         leniency_combo.setCurrentText(cfg.get("leniency", "lenient"))
-        models = cfg.get("models", {}).get("judge", [])
         if models:
             model_combo.setCurrentText(models[0])
         report_checkbox.setChecked(bool(cfg.get("generate_report", True)))
@@ -304,6 +317,9 @@ class FormManager(QMainWindow):
         else:
             batch_size_spin.setValue(int(batch_size) if isinstance(batch_size, int) and batch_size > 0 else 32)
         batch_auto_checkbox.stateChanged.connect(lambda s: batch_size_spin.setEnabled(s != Qt.Checked))
+
+        # Set Grade Mode from config
+        grading_mode_combo.setCurrentText(cfg.get("grading_mode", "Whole Form"))
 
         form.addRow("Evaluator:", evaluator_combo)
         form.addRow("Leniency:", leniency_combo)
@@ -329,15 +345,47 @@ class FormManager(QMainWindow):
         form.addRow("", buttons)
 
         if dialog.exec_() == QDialog.Accepted:
-            self.update_evaluator(evaluator_combo.currentText())
-            self.update_leniency(leniency_combo.currentText())
-            if model_combo.currentText():
-                self.update_model(model_combo.currentText())
-            self.update_report_option(Qt.Checked if report_checkbox.isChecked() else Qt.Unchecked)
-            if batch_auto_checkbox.isChecked():
-                self.update_config("batch_size", "auto")
+            # Read existing config first to preserve other fields
+            config_data = {}
+            if os.path.exists("config.json"):
+                try:
+                    with open("config.json", "r", encoding="utf-8") as f:
+                        config_data = json.load(f)
+                except Exception as e:
+                    print(f"Error loading config: {e}")
+
+            # Update fields
+            eval_text = evaluator_combo.currentText()
+            if "Semantic Pipeline" in eval_text:
+                config_data["evaluator"] = "ai_evaluator_semantic"
+            elif "Basic" in eval_text:
+                config_data["evaluator"] = "ai_evaluator"
             else:
-                self.update_config("batch_size", int(batch_size_spin.value()))
+                config_data["evaluator"] = "ai_evaluator_2"
+
+            config_data["leniency"] = leniency_combo.currentText()
+
+            if model_combo.currentText():
+                config_data["models"] = {"judge": [model_combo.currentText()]}
+
+            config_data["generate_report"] = report_checkbox.isChecked()
+
+            if batch_auto_checkbox.isChecked():
+                config_data["batch_size"] = "auto"
+            else:
+                config_data["batch_size"] = int(batch_size_spin.value())
+
+            config_data["grading_mode"] = grading_mode_combo.currentText()
+
+            # Save the updated grading mode to self
+            self.grading_mode = config_data["grading_mode"]
+
+            # Write config.json in a single atomic write operation
+            try:
+                with open("config.json", "w", encoding="utf-8") as f:
+                    json.dump(config_data, f, indent=4)
+            except Exception as e:
+                QMessageBox.critical(self, "Error Saving Settings", f"Failed to save settings: {str(e)}")
 
     def load_forms(self):
         try:
@@ -473,23 +521,41 @@ class FormManager(QMainWindow):
 
     def update_config(self, key, value):
         try:
-            with open("config.json", "r+") as f:
-                config = json.load(f)
-                config[key] = value
-                f.seek(0)
+            config = {}
+            if os.path.exists("config.json"):
+                with open("config.json", "r", encoding="utf-8") as f:
+                    config = json.load(f)
+            config[key] = value
+            with open("config.json", "w", encoding="utf-8") as f:
                 json.dump(config, f, indent=4)
-                f.truncate()
         except Exception:
             pass
 
     def load_config(self):
         try:
-            with open("config.json") as f:
-                config = json.load(f)
-                if "batch_size" not in config:
-                    self.update_config("batch_size", 32)
-        except FileNotFoundError:
-            self.update_config("batch_size", 32)
+            if os.path.exists("config.json"):
+                with open("config.json", "r", encoding="utf-8") as f:
+                    config = json.load(f)
+            else:
+                config = {}
+            
+            # Ensure default settings are written if not present
+            modified = False
+            if "batch_size" not in config:
+                config["batch_size"] = 32
+                modified = True
+            if "grading_mode" not in config:
+                config["grading_mode"] = "Whole Form"
+                modified = True
+            
+            if modified:
+                with open("config.json", "w", encoding="utf-8") as f:
+                    json.dump(config, f, indent=4)
+                    
+            self.grading_mode = config.get("grading_mode", "Whole Form")
+        except Exception as e:
+            print(f"Error loading config: {e}")
+            self.grading_mode = "Whole Form"
 
     def grade_url_immediately(self, url):
         """Grade a folder or form URL immediately without checking last submissions"""
@@ -551,7 +617,7 @@ class FormManager(QMainWindow):
             self.save_forms()
             
             # Set to "Whole Form" mode for immediate grading
-            self.grading_mode_combo.setCurrentText("Whole Form")
+            self.grading_mode = "Whole Form"
             
             # Start grading immediately
             self.run_grader()
@@ -610,7 +676,7 @@ class FormManager(QMainWindow):
                 f"✅ Grade All: Found {len(forms)} form(s), added {new_added} new form(s) to queue"
             )
 
-            self.grading_mode_combo.setCurrentText("Whole Form")
+            self.grading_mode = "Whole Form"
             self.run_grader()
 
         except Exception as e:
@@ -781,7 +847,7 @@ class FormManager(QMainWindow):
         self.overall_progress_bar.setValue(0)
         self.finished_forms = []
 
-        grading_mode = self.grading_mode_combo.currentText()
+        grading_mode = self.grading_mode
         grade_recent_only = force_recent_only or (grading_mode == "Recent Only")
 
         self.grader_thread = GraderThread(grade_recent_only=grade_recent_only)

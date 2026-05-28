@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import json
 import re
 from typing import Dict, List
@@ -29,8 +29,8 @@ def _abstain(reason: str = "judge unavailable") -> Dict[str, object]:
 
 def _extract_json_object(raw: str) -> Dict[str, object]:
     clean = re.sub(r"<think>.*?</think>", "", raw or "", flags=re.IGNORECASE | re.DOTALL).strip()
-    clean = re.sub(r"^```(?:json)?\\s*", "", clean, flags=re.IGNORECASE)
-    clean = re.sub(r"\\s*```$", "", clean)
+    clean = re.sub(r"^```(?:json)?\s*", "", clean, flags=re.IGNORECASE)
+    clean = re.sub(r"\s*```$", "", clean)
     try:
         return json.loads(clean)
     except Exception:
@@ -44,10 +44,11 @@ def _extract_json_object(raw: str) -> Dict[str, object]:
             except Exception:
                 pass
             idx = clean.find("{", idx + 1)
-        m = re.search(r"\\{.*?\\}", clean, flags=re.DOTALL)
+        m = re.search(r"\{.*\}", clean, flags=re.DOTALL)
         if not m:
             raise
         return json.loads(m.group(0))
+
 
 
 def _normalize_decision(d: Dict[str, object]) -> Dict[str, object]:
@@ -56,8 +57,46 @@ def _normalize_decision(d: Dict[str, object]) -> Dict[str, object]:
     return d
 
 
+def _fill_judge_defaults(data: Dict[str, object]) -> Dict[str, object]:
+    defaults = _abstain("partial")
+    for key in REQUIRED_FIELDS:
+        if key not in data:
+            data[key] = defaults[key]
+    # Ensure numeric fields are actually numeric
+    for nf in ["semantic_similarity", "concept_coverage", "factual_accuracy", "language_noise_ratio", "confidence"]:
+        try:
+            data[nf] = float(data[nf])
+        except (TypeError, ValueError):
+            data[nf] = 0.0
+    # Ensure boolean field
+    if isinstance(data.get("misconception_detected"), str):
+        data["misconception_detected"] = data["misconception_detected"].lower() in {"true", "yes", "1"}
+    elif not isinstance(data.get("misconception_detected"), bool):
+        data["misconception_detected"] = bool(data.get("misconception_detected", False))
+    return data
+
+
 def _valid(d: Dict[str, object]) -> bool:
     return all(k in d for k in REQUIRED_FIELDS) and str(d.get("decision")) in {"YES", "NO", "ABSTAIN"}
+
+
+def _make_judge_prompt(question: str, expected: str, answer: str, rubric: Dict[str, object]) -> str:
+    return (
+        f"Question: {question}\nExpected: {expected}\nAnswer: {answer}\nRubric: {json.dumps(rubric)}\n\n"
+        "You MUST return ONLY a valid JSON object with EXACTLY these fields:\n"
+        "{\n"
+        '  "semantic_similarity": 0.0 to 1.0,\n'
+        '  "concept_coverage": 0.0 to 1.0,\n'
+        '  "factual_accuracy": 0.0 to 1.0,\n'
+        '  "misconception_detected": true or false,\n'
+        '  "misconception_description": "describe any misconception or empty string",\n'
+        '  "language_noise_ratio": 0.0 to 1.0,\n'
+        '  "confidence": 0.0 to 1.0,\n'
+        '  "decision": "YES" or "NO" or "ABSTAIN",\n'
+        '  "reason_short": "brief reason for decision"\n'
+        "}\n"
+        "No preamble. No explanation. Only the JSON object."
+    )
 
 
 async def call_judge_async(session, model: str, role: str, answer: str, question: str, expected: str, rubric: Dict[str, object], retries: int, num_ctx: int) -> Dict[str, object]:
@@ -65,7 +104,7 @@ async def call_judge_async(session, model: str, role: str, answer: str, question
         "model": model,
         "messages": [
             {"role": "system", "content": JUDGE_PROMPTS[role]},
-            {"role": "user", "content": f"Question: {question}\\nExpected: {expected}\\nAnswer: {answer}\\nRubric: {json.dumps(rubric)}\\nReturn strict JSON only."}
+            {"role": "user", "content": _make_judge_prompt(question, expected, answer, rubric)}
         ],
         "stream": False,
         "options": {"num_ctx": num_ctx},
@@ -75,8 +114,7 @@ async def call_judge_async(session, model: str, role: str, answer: str, question
             async with session.post("http://localhost:11434/api/chat", json=payload, timeout=120) as resp:
                 data = await resp.json()
             obj = _normalize_decision(_extract_json_object(data.get("message", {}).get("content", "")))
-            for k in REQUIRED_FIELDS:
-                obj.setdefault(k, _abstain("partial")[k])
+            obj = _fill_judge_defaults(obj)
             if _valid(obj):
                 return obj
         except Exception as ex:
@@ -105,12 +143,11 @@ async def run_all_judges_with_early_exit(answer: str, question: str, expected: s
                         options={"num_ctx": num_ctx},
                         messages=[
                             {"role": "system", "content": JUDGE_PROMPTS[role]},
-                            {"role": "user", "content": f"Question: {question}\\nExpected: {expected}\\nAnswer: {answer}\\nRubric: {json.dumps(rubric)}\\nReturn strict JSON only."},
+                            {"role": "user", "content": _make_judge_prompt(question, expected, answer, rubric)},
                         ],
                     )["message"]["content"]
                     candidate = _normalize_decision(_extract_json_object(raw))
-                    for k in REQUIRED_FIELDS:
-                        candidate.setdefault(k, _abstain("partial")[k])
+                    candidate = _fill_judge_defaults(candidate)
                     if _valid(candidate):
                         obj = candidate
                         break
@@ -118,6 +155,8 @@ async def run_all_judges_with_early_exit(answer: str, question: str, expected: s
                     log("WARNING", f"Judge {role} sync attempt {i+1}/{retries} failed: {ex}")
             out.append(obj)
         return out
+
+
 
     tasks = {}
     async with aiohttp.ClientSession() as session:

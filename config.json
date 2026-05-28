@@ -55,5 +55,6 @@
         "min_judges": 3,
         "agreement_confidence": 0.9
     },
-    "persist_result_cache": false
+    "persist_result_cache": false,
+    "grading_mode": "Recent Only"
 }
