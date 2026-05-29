@@ -253,13 +253,18 @@ async def call_judge_async(session, model: str, role: str, answer: str, question
     }
     for i in range(retries):
         try:
-            async with session.post("http://localhost:11434/api/chat", json=payload, timeout=120) as resp:
+            async with session.post("http://localhost:11434/api/chat", json=payload, timeout=180) as resp:
                 data = await resp.json()
 
             # With structured output, Ollama returns the JSON object
             # The content might be a string (raw JSON) or already a dict
             content = data.get("message", {}).get("content", "")
-            
+
+            # Handle empty response (model may have timed out or failed)
+            if not content or content == "":
+                log("WARNING", f"Judge {role} attempt {i+1}/{retries}: Empty response from model")
+                continue
+
             # Parse JSON string if needed, otherwise use as dict
             if isinstance(content, str):
                 try:
