@@ -5,15 +5,11 @@ import re
 import ollama
 from logger import log
 
-# Load config safely
-try:
-    with open("config.json") as f:
-        config = json.load(f)
-except Exception as e:
-    log("ERROR", f"Could not load config.json: {e}")
-    config = {}
+from evaluator_config import load_config
 
-MODELS = config.get("models", {}).get("judge", ["deepseek-r1:8b"])
+# Load merged config defaults.
+config = load_config()
+MODELS = config.get("models", {}).get("judge", [])
 BATCH_SIZE_LIMIT = 1
 
 

@@ -1,19 +1,20 @@
 {
     "models": {
         "judge": [
-            "qwen2.5:7b"
+            "llama3.1:8b"
         ]
     },
     "jury_models": {
-        "semantic_judge": "qwen2.5:7b",
-        "concept_judge": "qwen2.5:7b",
-        "factual_judge": "qwen2.5:7b",
-        "strict_judge": "qwen2.5:7b",
-        "misconception_judge": "qwen2.5:7b",
-        "language_filter": "qwen2.5:7b",
-        "reasoning_fallback": "deepseek-r1:8b"
+        "semantic_judge": "llama3.1:8b",
+        "concept_judge": "llama3.1:8b",
+        "factual_judge": "llama3.1:8b",
+        "strict_judge": "llama3.1:8b",
+        "misconception_judge": "llama3.1:8b",
+        "language_filter": "llama3.1:8b"
     },
+    "rubric_model": "llama3.1:8b",
     "embedding_model": "mxbai-embed-large",
+    "reasoning_model": "llama3.1:8b",
     "leniency": "lenient",
     "leniency_note": "options: extreme, lenient, balanced, strict",
     "evaluator": "ai_evaluator_semantic",
@@ -56,5 +57,5 @@
         "agreement_confidence": 0.9
     },
     "persist_result_cache": false,
-    "grading_mode": "Recent Only"
+    "grading_mode": "Whole Form"
 }

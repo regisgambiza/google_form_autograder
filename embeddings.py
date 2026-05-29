@@ -33,6 +33,13 @@ def cosine_similarity(a: List[float], b: List[float]) -> float:
 
 
 def semantic_similarity(answer: str, expected: str) -> float:
+    cfg = load_config()
+    model = cfg.get("embedding_model")
+    if model:
+        try:
+            return cosine_similarity(get_embedding(answer, model), get_embedding(expected, model))
+        except Exception:
+            pass
     for model in PREFERRED_MODELS:
         try:
             return cosine_similarity(get_embedding(answer, model), get_embedding(expected, model))

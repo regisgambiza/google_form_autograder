@@ -22,6 +22,7 @@ from auto_add_dialog import AutoAddDialog, SearchThread
 from grader_thread import GraderThread
 from class_loader_thread import ClassLoaderThread
 import ollama
+from evaluator_config import DEFAULT_CONFIG
 
 BANGKOK_TZ = timezone(timedelta(hours=7))
 
@@ -259,7 +260,9 @@ class FormManager(QMainWindow):
         dialog = QDialog(self)
         dialog.setWindowTitle("Settings")
         dialog.setModal(True)
-        dialog.setFixedSize(520, 360)
+        dialog.resize(760, 520)
+        dialog.setMinimumSize(680, 480)
+        dialog.setSizeGripEnabled(True)
         form = QFormLayout(dialog)
 
         evaluator_combo = QComboBox(dialog)
@@ -273,6 +276,9 @@ class FormManager(QMainWindow):
         leniency_combo.addItems(["extreme", "lenient", "balanced", "strict"])
 
         model_combo = QComboBox(dialog)
+        rubric_model_combo = QComboBox(dialog)
+        embedding_model_combo = QComboBox(dialog)
+        reasoning_model_combo = QComboBox(dialog)
         available_models = []
         try:
             available_models = [m['name'] for m in ollama.list().get('models', [])]
@@ -288,13 +294,41 @@ class FormManager(QMainWindow):
 
         # Add existing config model to list if it's not there
         models = cfg.get("models", {}).get("judge", [])
+        rubric_model = cfg.get("rubric_model")
+        embedding_model = cfg.get("embedding_model")
+        reasoning_model = cfg.get("reasoning_model")
         if models:
             config_model = models[0]
             if config_model not in available_models:
                 available_models.insert(0, config_model)
+        if rubric_model and rubric_model not in available_models:
+            available_models.insert(0, rubric_model)
+        if embedding_model and embedding_model not in available_models:
+            available_models.insert(0, embedding_model)
+        if reasoning_model and reasoning_model not in available_models:
+            available_models.insert(0, reasoning_model)
 
         if available_models:
             model_combo.addItems(available_models)
+            rubric_model_combo.addItems(available_models)
+            embedding_model_combo.addItems(available_models)
+            reasoning_model_combo.addItems(available_models)
+
+        # Jury model selectors (one combobox per jury role)
+        jury_combos = {}
+        jury_defaults = DEFAULT_CONFIG.get("jury_models", {})
+        cfg_jury = cfg.get("jury_models", {}) if cfg else {}
+        for role, default_model in jury_defaults.items():
+            combo = QComboBox(dialog)
+            # Ensure the configured/default model is present in the list
+            role_model = cfg_jury.get(role, default_model)
+            role_models = list(available_models)
+            if role_model and role_model not in role_models:
+                role_models.insert(0, role_model)
+            if role_models:
+                combo.addItems(role_models)
+                combo.setCurrentText(role_model)
+            jury_combos[role] = combo
 
         report_checkbox = QCheckBox("Generate Report", dialog)
         batch_size_spin = QSpinBox(dialog)
@@ -308,6 +342,9 @@ class FormManager(QMainWindow):
         leniency_combo.setCurrentText(cfg.get("leniency", "lenient"))
         if models:
             model_combo.setCurrentText(models[0])
+        rubric_model_combo.setCurrentText(cfg.get("rubric_model", cfg.get("models", {}).get("judge", [""])[0] if models else ""))
+        embedding_model_combo.setCurrentText(cfg.get("embedding_model", DEFAULT_CONFIG.get("embedding_model", "")))
+        reasoning_model_combo.setCurrentText(cfg.get("reasoning_model", DEFAULT_CONFIG.get("reasoning_model", "")))
         report_checkbox.setChecked(bool(cfg.get("generate_report", True)))
         batch_size = cfg.get("batch_size", 32)
         if isinstance(batch_size, str) and batch_size.lower() == "auto":
@@ -323,7 +360,15 @@ class FormManager(QMainWindow):
 
         form.addRow("Evaluator:", evaluator_combo)
         form.addRow("Leniency:", leniency_combo)
-        form.addRow("Ollama Model:", model_combo)
+        form.addRow("Primary Judge Model:", model_combo)
+        form.addRow("Rubric Model:", rubric_model_combo)
+        form.addRow("Embedding Model:", embedding_model_combo)
+        form.addRow("Reasoning Model:", reasoning_model_combo)
+        # Add jury model rows
+        for role, combo in jury_combos.items():
+            # Make the label human-friendly, e.g., 'semantic_judge' -> 'Semantic Judge'
+            label = role.replace('_', ' ').title()
+            form.addRow(f"{label}:", combo)
         form.addRow("", report_checkbox)
         batch_row = QWidget(dialog)
         bl = QHBoxLayout(batch_row)
@@ -367,6 +412,24 @@ class FormManager(QMainWindow):
 
             if model_combo.currentText():
                 config_data["models"] = {"judge": [model_combo.currentText()]}
+            if rubric_model_combo.currentText():
+                config_data["rubric_model"] = rubric_model_combo.currentText()
+            if embedding_model_combo.currentText():
+                config_data["embedding_model"] = embedding_model_combo.currentText()
+            if reasoning_model_combo.currentText():
+                config_data["reasoning_model"] = reasoning_model_combo.currentText()
+
+            # Save jury model selections
+            selected_jury = {}
+            for role, combo in jury_combos.items():
+                try:
+                    sel = combo.currentText()
+                except Exception:
+                    sel = jury_defaults.get(role)
+                if sel:
+                    selected_jury[role] = sel
+            if selected_jury:
+                config_data["jury_models"] = selected_jury
 
             config_data["generate_report"] = report_checkbox.isChecked()
 

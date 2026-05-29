@@ -1,8 +1,10 @@
 import json
 import re
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 
 import ollama
+
+from evaluator_config import load_config
 
 
 def _extract_json(raw: str) -> dict:
@@ -19,8 +21,10 @@ def _extract_json(raw: str) -> dict:
         return json.loads(match.group(0))
 
 
-def invoke_reasoning_fallback(answer: str, question: str, rubric: Dict[str, object], judge_scores: Dict[str, float], model: str = "deepseek-r1:8b") -> Tuple[str, float, str]:
+def invoke_reasoning_fallback(answer: str, question: str, rubric: Dict[str, object], judge_scores: Dict[str, float], model: Optional[str] = None) -> Tuple[str, float, str]:
     """Run reasoning fallback and strip hidden chain-of-thought tags."""
+    cfg = load_config()
+    model = model or cfg.get("reasoning_model")
     prompt = (
         f"Question: {question}\n"
         f"Answer: {answer}\n"
