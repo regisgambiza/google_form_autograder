@@ -3,7 +3,7 @@ import json
 import os
 import time
 from dataclasses import asdict, dataclass
-from typing import Dict, List, Union
+from typing import Dict, List, Optional, Union
 
 from ai_judges import run_judges
 from confidence_router import route_decision
@@ -16,7 +16,10 @@ from normalization import normalize, semantic_deduplicate
 from rubric_generator import generate_rubric
 from semantic_scoring import score_concepts
 
+# === Global caches for optimization ===
 RESULT_CACHE: Dict[str, "EvaluationResult"] = {}
+# Cache rubrics per question (one rubric reused for all students)
+QUESTION_RUBRIC_CACHE: Dict[str, Dict] = {}
 
 
 @dataclass
@@ -48,6 +51,39 @@ def _qhash(question: str, expected: Union[str, List[str]]) -> str:
     return hashlib.sha256(f"{question}:{_expected_text(expected)}".encode()).hexdigest()
 
 
+def _question_cache_key(question: str, expected: Union[str, List[str]]) -> str:
+    """Cache key for question-level rubric caching."""
+    return _qhash(question, expected)
+
+
+def get_or_generate_rubric(question: str, expected: Union[str, List[str]], question_id: Optional[str] = None) -> Dict:
+    """Get rubric from cache or generate and cache it.
+    
+    One rubric per question is reused for all students, dramatically reducing LLM calls.
+    """
+    qkey = _question_cache_key(question, expected)
+    
+    if qkey in QUESTION_RUBRIC_CACHE:
+        log("DEBUG", f"rubric_cache_hit=True")
+        return QUESTION_RUBRIC_CACHE[qkey]
+    
+    # Generate new rubric
+    exp_text = _expected_text(expected)
+    rubric = generate_rubric(question, exp_text)
+    
+    # Add expected values to acceptable paraphrases
+    if isinstance(expected, list) and expected:
+        rubric["acceptable_paraphrases"] = list(dict.fromkeys(
+            [str(x) for x in rubric.get("acceptable_paraphrases", [])] + [str(x) for x in expected]
+        ))
+    
+    # Cache for future use
+    QUESTION_RUBRIC_CACHE[qkey] = rubric
+    log("DEBUG", f"rubric_cache_miss=True generated_for={question_id or 'unknown'}")
+    
+    return rubric
+
+
 def _cache_key(answer: str, question_hash: str) -> str:
     return hashlib.sha256(f"{normalize(answer)}:{question_hash}".encode()).hexdigest()
 
@@ -72,12 +108,9 @@ def evaluate_answer(answer: str, expected: Union[str, List[str]], question: str)
         log("DEBUG", f"latency_ms={lat:.2f} stage=deterministic")
         return res
 
+    # Get rubric from cache (one rubric per question reused for all students)
     exp_text = _expected_text(expected)
-    rubric = generate_rubric(question, exp_text)
-    if isinstance(expected, list) and expected:
-        rubric["acceptable_paraphrases"] = list(dict.fromkeys(
-            [str(x) for x in rubric.get("acceptable_paraphrases", [])] + [str(x) for x in expected]
-        ))
+    rubric = get_or_generate_rubric(question, exp_text, question_id=qh)
     concept = score_concepts(normalize(answer), rubric)
     emb_score = float(concept["embedding_score"])
     emb_th = cfg.get("embedding_thresholds", {})
@@ -120,7 +153,6 @@ def evaluate_answer(answer: str, expected: Union[str, List[str]], question: str)
 
     judges = run_judges(answer, question, exp_text, rubric, retries=int(cfg.get("retry_attempts", 3)))
     active = [j for j in judges if j.get("decision") != "ABSTAIN"]
-
     if not active:
         final_score = emb_score
         decision = "YES" if final_score >= float(cfg["confidence_thresholds"]["auto_accept"]) else "NO"
