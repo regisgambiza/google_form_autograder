@@ -1,3 +1,4 @@
+"""AI Judges - Clean architecture with structured output."""
 import asyncio
 import json
 import re
@@ -24,154 +25,62 @@ REQUIRED_FIELDS = ["semantic_similarity", "concept_coverage", "factual_accuracy"
 
 
 def _abstain(reason: str = "judge unavailable") -> Dict[str, object]:
-    return {"semantic_similarity": 0.0, "concept_coverage": 0.0, "factual_accuracy": 0.0, "misconception_detected": False, "misconception_description": "", "language_noise_ratio": 0.0, "confidence": 0.0, "decision": "ABSTAIN", "reason_short": reason}
+    """Return a default abstain response."""
+    return {
+        "semantic_similarity": 0.0,
+        "concept_coverage": 0.0,
+        "factual_accuracy": 0.0,
+        "misconception_detected": False,
+        "misconception_description": "",
+        "language_noise_ratio": 0.0,
+        "confidence": 0.0,
+        "decision": "ABSTAIN",
+        "reason_short": reason
+    }
 
 
-def _extract_json_object(raw: str) -> Dict[str, object]:
-    """Legacy JSON extraction function - kept as fallback for non-structured responses."""
-    if not raw:
-        raise ValueError("Empty response from LLM - no content returned")
+def parse_judge_response(raw: str) -> Dict[str, object]:
+    """
+    Single-pass JSON extraction. Clean architecture.
     
-    # Log first character to understand what we're dealing with
-    first_char = repr(raw[0]) if raw else "empty"
-    log("DEBUG", f"Extracting JSON from response starting with: {first_char} (raw len={len(raw)})")
-
-    # Remove any markdown comments or notes
-    clean = re.sub(r"<think>.*?</think>", "", raw or "", flags=re.IGNORECASE | re.DOTALL)
-    clean = re.sub(r"^\s*\[NOTE\].*?\[\/NOTE\]\s*", "", clean, flags=re.IGNORECASE | re.DOTALL)
+    Returns defaults if parsing fails, allowing the pipeline to continue gracefully.
+    """
+    # Handle empty response
+    if not raw or not raw.strip():
+        return _abstain("empty_response")
+    
+    # Strip think blocks (Qwen3) and tool_call tags
+    clean = re.sub(r"<think>.*?</think>", "", raw, flags=re.IGNORECASE | re.DOTALL)
+    clean = re.sub(r"<\|.*?\|>", "", clean, flags=re.DOTALL)  # strip tool_call tags
     clean = clean.strip()
-
-    # If after cleaning we have nothing, report it
-    if not clean:
-        raise ValueError(f"Empty response after removing markdown - original content: {repr(raw[:100])}")
-
-    # FIRST: Look for JSON code block and extract it
-    # Pattern: ```json ... }``` or ``` ... }```
-    code_block_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', clean, flags=re.DOTALL)
-    if code_block_match:
-        json_str = code_block_match.group(1)
-        log("DEBUG", f"Found JSON in code block, extracting...")
-        try:
-            return json.loads(json_str)
-        except json.JSONDecodeError as e:
-            log("DEBUG", f"Code block JSON parse failed: {e}")
-
-    # Remove markdown code blocks (whole blocks) to clean up the text
-    clean = re.sub(r'```(?:json)?\s*.*?```', '', clean, flags=re.IGNORECASE | re.DOTALL)
-    clean = clean.strip()
-
-    # Try parsing the entire cleaned string as JSON first
+    
+    # Try direct parse first (works if format= is respected)
     try:
-        return json.loads(clean)
-    except json.JSONDecodeError as e:
-        log("DEBUG", f"Full JSON parse failed at position {e.pos}: {e.msg}")
-
-    # SECOND: Look for JSON at the START of the cleaned string (position 0)
-    idx = clean.find('{')
-    if idx == 0:
-        log("DEBUG", f"Found JSON at start, attempting parse...")
+        obj = json.loads(clean)
+        if isinstance(obj, dict):
+            return obj
+    except json.JSONDecodeError:
+        pass
+    
+    # Fallback: find first { ... } block
+    match = re.search(r"\{.*\}", clean, re.DOTALL)
+    if match:
         try:
-            decoder = json.JSONDecoder()
-            obj, end_idx = decoder.raw_decode(clean)
+            obj = json.loads(match.group())
             if isinstance(obj, dict):
                 return obj
-        except json.JSONDecodeError as e:
-            log("DEBUG", f"JSON parse at start failed: {e}")
-
-    # THIRD: Look for JSON after a newline followed by whitespace, then {
-    # This handles cases like:\n  { ... } where the { is at the start of a line
-    for match in re.finditer(r'\n\s*\{', clean):
-        start = match.start()
-        if start + 1 < len(clean):
-            # Try to parse from the position after the newline/whitespace
-            json_start = start + 1
-            while json_start < len(clean) and clean[json_start].isspace():
-                json_start += 1
-            if json_start < len(clean) and clean[json_start] == '{':
-                log("DEBUG", f"Found JSON after newline at position {json_start}")
-                try:
-                    decoder = json.JSONDecoder()
-                    obj, end_idx = decoder.raw_decode(clean[json_start:])
-                    if isinstance(obj, dict):
-                        return obj
-                except json.JSONDecodeError as e:
-                    log("DEBUG", f"JSON parse after newline failed: {e}")
-
-    # FOURTH: Try every { position and attempt to parse JSON from there
-    # This handles cases where the JSON is embedded in text without a newline
-    # but we can still find and extract it
-    idx = 0
-    while idx >= 0 and idx < len(clean):
-        next_brace = clean.find('{', idx)
-        if next_brace == -1:
-            break
-        log("DEBUG", f"Trying JSON extraction from position {next_brace}...")
-        try:
-            decoder = json.JSONDecoder()
-            obj, end_idx = decoder.raw_decode(clean[next_brace:])
-            if isinstance(obj, dict):
-                log("DEBUG", f"Successfully extracted JSON from position {next_brace}")
-                return obj
-        except json.JSONDecodeError as e:
-            log("DEBUG", f"Failed to extract JSON from position {next_brace}: {e.msg}")
-        idx = next_brace + 1
-
-    # FIFTH: Use balanced brace counting to find valid JSON
-    # Only consider { that appears at the start of a line or after certain delimiters
-    brace_stack = 0
-    start_idx = -1
+        except json.JSONDecodeError:
+            pass
     
-    # Find potential JSON objects by looking for { that starts a line
-    lines = clean.split('\n')
-    for i, line in enumerate(lines):
-        stripped = line.lstrip()
-        if stripped.startswith('{'):
-            # Found a { at the start of a line (possibly after some whitespace)
-            # Find the position in the original string
-            pos = 0
-            for j in range(i):
-                pos += len(lines[j]) + 1  # +1 for the newline
-            pos += len(line) - len(stripped)  # add leading whitespace
-            start_idx = pos
-            brace_stack = 1
-            
-            # Find the matching }
-            end_pos = start_idx + 1
-            while end_pos < len(clean) and brace_stack > 0:
-                if clean[end_pos] == '{':
-                    brace_stack += 1
-                elif clean[end_pos] == '}':
-                    brace_stack -= 1
-                end_pos += 1
-            
-            if brace_stack == 0:
-                candidate = clean[start_idx:end_pos]
-                try:
-                    return json.loads(candidate)
-                except json.JSONDecodeError as e:
-                    log("DEBUG", f"JSON at line start failed: {e}")
-            break  # Only try the first line-starting brace
-    
-    # LAST RESORT: Use regex to find balanced braces that look like JSON
-    m = re.search(r'\{(?:[^{}]*(?:\{[^{}]*\}[^{}]*)*)*\}', clean, flags=re.DOTALL)
-    if m:
-        try:
-            return json.loads(m.group(0))
-        except json.JSONDecodeError as e:
-            log("DEBUG", f"Balanced brace extraction failed: {e}")
-
-    # If we still can't extract, provide detailed error message
-    log("ERROR", f"Failed to extract JSON from response")
-    log("ERROR", f"  Original (first 200 chars): {repr(raw[:200])}")
-    log("ERROR", f"  After cleaning (first 200 chars): {repr(clean[:200])}")
-    log("ERROR", f"  First 10 chars: {repr(clean[:10])}")
-    raise ValueError(f"Failed to extract JSON - LLM returned invalid response format. Start: {repr(clean[:50])}")
-
+    # Give up - return defaults for graceful degradation
+    log("DEBUG", f"Failed to parse judge response, using defaults")
+    log("DEBUG", f"  Raw content: {repr(raw)[:200]}")
+    return _abstain("parse_failed")
 
 
 def _normalize_decision(d: Dict[str, object]) -> Dict[str, object]:
+    """Normalize decision field to YES/NO/ABSTAIN."""
     decision = str(d.get("decision", "ABSTAIN")).strip().upper()
-    # Handle numeric decisions (e.g., 0, 1)
     if decision in {"0", "FALSE", "INCORRECT", "FAIL", "WRONG", "NO"}:
         d["decision"] = "NO"
     elif decision in {"1", "TRUE", "CORRECT", "PASS", "YES"}:
@@ -182,41 +91,50 @@ def _normalize_decision(d: Dict[str, object]) -> Dict[str, object]:
 
 
 def _fill_judge_defaults(data: Dict[str, object]) -> Dict[str, object]:
+    """Fill missing fields and clamp numeric values to [0.0, 1.0]."""
     defaults = _abstain("partial")
     for key in REQUIRED_FIELDS:
         if key not in data:
             data[key] = defaults[key]
-    # Ensure numeric fields are actually numeric and within valid ranges
+    
+    # Clamp numeric fields to [0.0, 1.0]
     for nf in ["semantic_similarity", "concept_coverage", "factual_accuracy", "language_noise_ratio", "confidence"]:
         try:
             val = float(data[nf])
-            # Clamp values to valid range [0.0, 1.0]
             data[nf] = max(0.0, min(1.0, val))
         except (TypeError, ValueError):
             data[nf] = 0.0
-    # Ensure boolean field
+    
+    # Normalize misconception_detected to boolean
     if isinstance(data.get("misconception_detected"), str):
         data["misconception_detected"] = data["misconception_detected"].lower() in {"true", "yes", "1"}
     elif not isinstance(data.get("misconception_detected"), bool):
         data["misconception_detected"] = bool(data.get("misconception_detected", False))
+    
     return data
 
 
 def _valid(d: Dict[str, object]) -> bool:
-    return all(k in d for k in REQUIRED_FIELDS) and str(d.get("decision")) in {"YES", "NO", "ABSTAIN"}
+    """Check if judge result has all required fields and valid decision."""
+    return (
+        all(k in d for k in REQUIRED_FIELDS) 
+        and str(d.get("decision")) in {"YES", "NO", "ABSTAIN"}
+    )
 
 
 def _make_judge_prompt(question: str, expected: str, answer: str, rubric: Dict[str, object]) -> str:
+    """Create prompt for judge."""
     return (
-        f"Question: {question}\nExpected: {expected}\nAnswer: {answer}\n\n"
-        f"Rubric for reference (do not return this):\n{json.dumps(rubric)}\n\n"
+        f"Question: {question}\n"
+        f"Expected: {expected}\n"
+        f"Answer: {answer}\n\n"
+        f"Rubric for reference:\n{json.dumps(rubric)}\n\n"
         "Provide your evaluation as a JSON object with these fields:"
     )
 
 
-def _get_judge_format(role: str) -> Dict[str, object]:
-    """Return the JSON schema for structured output based on judge role."""
-    # All judges use the same output format
+def _get_judge_format() -> Dict[str, object]:
+    """Return JSON schema for structured output."""
     return {
         "type": "object",
         "properties": {
@@ -230,17 +148,36 @@ def _get_judge_format(role: str) -> Dict[str, object]:
             "decision": {"type": "string", "enum": ["YES", "NO", "ABSTAIN"]},
             "reason_short": {"type": "string"}
         },
-        "required": [
-            "semantic_similarity", "concept_coverage", "factual_accuracy",
-            "misconception_detected", "misconception_description",
-            "language_noise_ratio", "confidence", "decision", "reason_short"
-        ],
-        "additionalProperties": False
+        "required": REQUIRED_FIELDS
     }
 
 
-async def call_judge_async(session, model: str, role: str, answer: str, question: str, expected: str, rubric: Dict[str, object], retries: int, num_ctx: int) -> Dict[str, object]:
-    """Call a judge using structured output format for reliable JSON responses."""
+def _get_ollama_options(role: str) -> Dict[str, object]:
+    """Get Ollama options for a judge role."""
+    cfg = load_config()
+    ollama_opts = cfg.get("ollama_options", {})
+    num_ctx = int(ollama_opts.get("judge_num_ctx", 2048))
+    num_predict = int(ollama_opts.get("judge_num_predict", 256))
+    
+    return {
+        "num_ctx": num_ctx,
+        "num_predict": num_predict,
+        "temperature": 0.1,
+        "top_p": 0.9
+    }
+
+
+async def call_judge_async(
+    session,
+    model: str,
+    role: str,
+    answer: str,
+    question: str,
+    expected: str,
+    rubric: Dict[str, object],
+    retries: int
+) -> Dict[str, object]:
+    """Call a judge using Ollama with structured output."""
     payload = {
         "model": model,
         "messages": [
@@ -248,52 +185,56 @@ async def call_judge_async(session, model: str, role: str, answer: str, question
             {"role": "user", "content": _make_judge_prompt(question, expected, answer, rubric)}
         ],
         "stream": False,
-        "options": {"num_ctx": num_ctx},
-        "format": _get_judge_format(role),  # Use structured output for reliable JSON
+        "options": _get_ollama_options(role),
+        "format": _get_judge_format(),  # Structured output for reliable JSON
+        "timeout": 180
     }
-    for i in range(retries):
+    
+    for attempt in range(retries):
         try:
             async with session.post("http://localhost:11434/api/chat", json=payload, timeout=180) as resp:
                 data = await resp.json()
 
-            # With structured output, Ollama returns the JSON object
-            # The content might be a string (raw JSON) or already a dict
             content = data.get("message", {}).get("content", "")
-
-            # Handle empty response (model may have timed out or failed)
+            
+            # Handle empty response
             if not content or content == "":
-                log("WARNING", f"Judge {role} attempt {i+1}/{retries}: Empty response from model")
+                log("WARNING", f"Judge {role} attempt {attempt+1}/{retries}: Empty response from model")
                 continue
 
-            # Parse JSON string if needed, otherwise use as dict
-            if isinstance(content, str):
-                try:
-                    obj = json.loads(content)
-                except json.JSONDecodeError:
-                    obj = content
-            else:
+            # Parse JSON - structured output returns dict, unstructured returns string
+            if isinstance(content, dict):
                 obj = content
-
+            else:
+                obj = json.loads(content)
+            
             obj = _normalize_decision(obj)
             obj = _fill_judge_defaults(obj)
             if _valid(obj):
                 return obj
 
         except json.JSONDecodeError as ex:
-            content = data.get("message", {}).get("content", "")
-            log("WARNING", f"Judge {role} attempt {i+1}/{retries} JSON decode error: {ex}")
-            log("WARNING", f"  Content received: {repr(content)[:200]}")
+            content = data.get("message", {}).get("content", "") if 'data' in locals() else ""
+            log("WARNING", f"Judge {role} JSON decode error: {ex}")
+            log("WARNING", f"  Content: {repr(content)[:200]}")
         except Exception as ex:
             content = data.get("message", {}).get("content", "") if 'data' in locals() else ""
-            log("WARNING", f"Judge {role} attempt {i+1}/{retries} failed: {ex}")
-            log("WARNING", f"  Content received: {repr(content)[:200]}")
+            log("WARNING", f"Judge {role} failed: {ex}")
+            log("WARNING", f"  Content: {repr(content)[:200]}")
+    
     return _abstain("retries_exhausted")
 
 
-async def run_all_judges_with_early_exit(answer: str, question: str, expected: str, rubric: Dict[str, object], retries: int = 3) -> List[Dict[str, object]]:
+async def run_all_judges_with_early_exit(
+    answer: str,
+    question: str,
+    expected: str,
+    rubric: Dict[str, object],
+    retries: int = 3
+) -> List[Dict[str, object]]:
+    """Run all judges with early exit if unanimous + high confidence."""
     cfg = load_config()
     jury_models = cfg.get("jury_models", {})
-    num_ctx = int(cfg.get("ollama_options", {}).get("judge_num_ctx", 2048))
     ee = cfg.get("early_exit", {})
     min_judges = int(ee.get("min_judges", 3))
     agree_thresh = float(ee.get("agreement_confidence", 0.90))
@@ -301,71 +242,85 @@ async def run_all_judges_with_early_exit(answer: str, question: str, expected: s
 
     if aiohttp is None:
         log("WARNING", "aiohttp not installed; falling back to synchronous judge calls")
-        out: List[Dict[str, object]] = []
-        for role in JUDGE_PROMPTS:
-            role_model = jury_models.get(role)
-            obj = _abstain("retries_exhausted")
-            for i in range(retries):
-                try:
-                    # Use structured output format for reliable JSON
-                    response = ollama.chat(
-                        model=role_model,
-                        options={"num_ctx": num_ctx},
-                        format=_get_judge_format(role),  # Structured output
-                        messages=[
-                            {"role": "system", "content": JUDGE_PROMPTS[role]},
-                            {"role": "user", "content": _make_judge_prompt(question, expected, answer, rubric)},
-                        ],
-                    )
-                    # With format parameter, response["message"]["content"] is already a dict
-                    raw = response.get("message", {}).get("content", "")
-                    
-                    # Handle both dict (structured output) and string fallback
-                    if isinstance(raw, dict):
-                        candidate = raw
-                    elif not raw:
-                        log("WARNING", f"Judge {role} sync attempt {i+1}/{retries} FAILED: Empty response from Ollama")
-                        continue
-                    else:
-                        candidate = _extract_json_object(raw)
-                    
-                    candidate = _normalize_decision(candidate)
-                    candidate = _fill_judge_defaults(candidate)
-                    if _valid(candidate):
-                        obj = candidate
-                        break
-                except json.JSONDecodeError as ex:
-                    log("WARNING", f"Judge {role} sync attempt {i+1}/{retries} JSON decode error: {ex}")
-                    log("WARNING", f"  Content received: {repr(raw)[:200]}")
-                except Exception as ex:
-                    log("WARNING", f"Judge {role} sync attempt {i+1}/{retries} failed: {ex}")
-                    log("WARNING", f"  Content received: {repr(raw)[:200]}")
-            out.append(obj)
-        return out
+        return _run_judges_sync(answer, question, expected, rubric, jury_models, retries)
 
-
-
+    # Run judges concurrently
     tasks = {}
     async with aiohttp.ClientSession() as session:
         for role in JUDGE_PROMPTS:
             role_model = jury_models.get(role)
-            tasks[asyncio.create_task(call_judge_async(session, role_model, role, answer, question, expected, rubric, retries, num_ctx))] = role
+            tasks[asyncio.create_task(call_judge_async(
+                session, role_model, role, answer, question, expected, rubric, retries
+            ))] = role
+        
         results: List[Dict[str, object]] = []
         for done in asyncio.as_completed(tasks):
             r = await done
             results.append(r)
+            
+            # Early exit check
             if enabled and len(results) >= min_judges:
                 decisions = [x.get("decision") for x in results]
                 confs = [float(x.get("confidence", 0.0)) for x in results]
-                avg_conf = (sum(confs) / len(confs)) if confs else 0.0
+                avg_conf = sum(confs) / len(confs) if confs else 0.0
+                
                 if len(set(decisions)) == 1 and avg_conf >= agree_thresh:
                     for t in tasks:
                         if not t.done():
                             t.cancel()
-                    log("DEBUG", f"Early exit after {len(results)} judges - unanimous {decisions[0]} @ {avg_conf:.2f}")
+                    log("DEBUG", f"Early exit: {len(results)} judges, unanimous {decisions[0]} @ {avg_conf:.2f}")
                     break
+        
         return results
 
 
-def run_judges(answer: str, question: str, expected: str, rubric: Dict[str, object], retries: int = 3) -> List[Dict[str, object]]:
+def _run_judges_sync(
+    answer: str,
+    question: str,
+    expected: str,
+    rubric: Dict[str, object],
+    jury_models: Dict[str, str],
+    retries: int
+) -> List[Dict[str, object]]:
+    """Synchronous judge execution (fallback when aiohttp unavailable)."""
+    out: List[Dict[str, object]] = []
+    
+    for role in JUDGE_PROMPTS:
+        role_model = jury_models.get(role)
+        for i in range(retries):
+            try:
+                response = ollama.chat(
+                    model=role_model,
+                    options=_get_ollama_options(role),
+                    format=_get_judge_format(),
+                    messages=[
+                        {"role": "system", "content": JUDGE_PROMPTS[role]},
+                        {"role": "user", "content": _make_judge_prompt(question, expected, answer, rubric)},
+                    ],
+                )
+                
+                raw = response.get("message", {}).get("content", "")
+                obj = parse_judge_response(raw) if isinstance(raw, str) else raw
+                
+                obj = _normalize_decision(obj)
+                obj = _fill_judge_defaults(obj)
+                if _valid(obj):
+                    out.append(obj)
+                    break
+            except Exception as ex:
+                log("WARNING", f"Judge {role} sync attempt {i+1}/{retries} failed: {ex}")
+        else:
+            out.append(_abstain("retries_exhausted"))
+    
+    return out
+
+
+def run_judges(
+    answer: str,
+    question: str,
+    expected: str,
+    rubric: Dict[str, object],
+    retries: int = 3
+) -> List[Dict[str, object]]:
+    """Public API - run all judges."""
     return asyncio.run(run_all_judges_with_early_exit(answer, question, expected, rubric, retries))

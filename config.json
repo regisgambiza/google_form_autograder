@@ -47,9 +47,12 @@
         "embedding": 0.05
     },
     "ollama_options": {
-        "judge_num_ctx": 4096,
-        "rubric_num_ctx": 1024,
-        "fallback_num_ctx": 4096
+        "judge_num_ctx": 2048,
+        "judge_num_predict": 512,
+        "rubric_num_ctx": 512,
+        "rubric_num_predict": 512,
+        "fallback_num_ctx": 4096,
+        "fallback_num_predict": 512
     },
     "early_exit": {
         "enabled": true,
