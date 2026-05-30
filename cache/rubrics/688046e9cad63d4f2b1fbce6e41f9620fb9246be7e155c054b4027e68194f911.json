@@ -1,0 +1,31 @@
+{
+  "required_concepts": [
+    "Continuous data can take any value within a range",
+    "Time measurement includes fractional values"
+  ],
+  "optional_concepts": [
+    "Examples of continuous variables",
+    "Measurement precision vs. reporting conventions"
+  ],
+  "acceptable_paraphrases": [
+    "Can take any numerical value",
+    "Measured in fractions of units",
+    "Not limited to whole numbers"
+  ],
+  "critical_errors": [
+    "Labeling as discrete without explaining fractional possibilities",
+    "Assuming whole-number reporting defines data type"
+  ],
+  "strict_keywords": [
+    "continuous",
+    "time",
+    "measurable",
+    "range"
+  ],
+  "misconceptions": [
+    "Believing whole-number reporting makes it discrete",
+    "Thinking time data must be integer-based",
+    "Confusing measurement tools with data type"
+  ],
+  "grading_notes": "Emphasize that data type is determined by potential values, not reporting method. Accept explanations linking time measurement to continuous scales."
+}

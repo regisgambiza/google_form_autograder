@@ -1,0 +1,27 @@
+{
+  "required_concepts": [
+    "Regular hexagon",
+    "Hexagon"
+  ],
+  "optional_concepts": [],
+  "acceptable_paraphrases": [
+    "a regular hexagon",
+    "1",
+    "A regular hexagon",
+    "hexagon",
+    "regular hexagon",
+    "Normal hexagon",
+    "Hexagom"
+  ],
+  "critical_errors": [
+    "Heptagon"
+  ],
+  "strict_keywords": [],
+  "misconceptions": [
+    "A regular pentagon or any other type of polygon",
+    "Irregular hexagon",
+    "Hexagons with unequal sides",
+    "A shape that is not a closed figure"
+  ],
+  "grading_notes": "Ensure the answer includes both 'Regular' and 'hexagon'. Acceptable paraphrases should maintain these core concepts."
+}

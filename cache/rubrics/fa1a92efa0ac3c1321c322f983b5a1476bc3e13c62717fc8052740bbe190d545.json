@@ -1,0 +1,23 @@
+{
+  "required_concepts": [
+    "photosynthesis",
+    "converts sunlight to energy"
+  ],
+  "optional_concepts": [],
+  "acceptable_paraphrases": [
+    "Plants use sunlight to produce energy",
+    "Sunlight is transformed into usable energy by plants",
+    "Photosynthetic process harnesses light to create fuel"
+  ],
+  "critical_errors": [
+    "fails to mention photosynthesis",
+    "incorrectly states that energy is produced without sunlight"
+  ],
+  "strict_keywords": [],
+  "misconceptions": [
+    "believes plants produce oxygen as their main function",
+    "thinks all organisms can perform photosynthesis",
+    "states sunlight is not necessary for the process"
+  ],
+  "grading_notes": "Ensure the answer includes both the process and its energy conversion aspect. Look for additional details that may indicate a deeper understanding, but do not penalize for missing these."
+}

@@ -1,0 +1,28 @@
+{
+  "required_concepts": [
+    "Discrete"
+  ],
+  "optional_concepts": [
+    "Discrete mathematics",
+    "Discrete structures"
+  ],
+  "acceptable_paraphrases": [
+    "Discrete mathematics",
+    "Discrete structures",
+    "Discrete category"
+  ],
+  "critical_errors": [
+    "Continuous",
+    "Continuous mathematics",
+    "Not applicable"
+  ],
+  "strict_keywords": [
+    "Discrete"
+  ],
+  "misconceptions": [
+    "Believing the answer is 'Continuous'",
+    "Confusing with 'Discrete mathematics' instead of 'Discrete'",
+    "Assuming it refers to a different concept entirely"
+  ],
+  "grading_notes": "Accept paraphrases but ensure 'Discrete' is explicitly mentioned. Critical errors include any answer that contradicts the core concept. Misconceptions often involve confusion with continuous concepts or incomplete terminology."
+}

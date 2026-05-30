@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import time
 from typing import Dict, Optional
 
 import ollama
@@ -163,6 +164,9 @@ def generate_rubric(question: str, expected: str, model: Optional[str] = None) -
 
     fallback = _make_fallback(expected)
     
+    start = time.perf_counter()
+    log("INFO", f"START rubric_generate (model={model})")
+
     # Use structured output format for reliable JSON
     rubric_format = {
         "type": "object",
@@ -178,7 +182,7 @@ def generate_rubric(question: str, expected: str, model: Optional[str] = None) -
         "required": REQUIRED_KEYS,
         "additionalProperties": False
     }
-    
+
     try:
         r = ollama.chat(
             model=model,
@@ -211,4 +215,7 @@ def generate_rubric(question: str, expected: str, model: Optional[str] = None) -
     except Exception as ex:
         log("WARNING", f"Rubric generation failed; using fallback: {ex}")
         return fallback
+    finally:
+        duration_ms = (time.perf_counter() - start) * 1000
+        log("INFO", f"END rubric_generate duration_ms={duration_ms:.0f} (model={model})")
 

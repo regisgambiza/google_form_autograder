@@ -1,0 +1,23 @@
+{
+  "required_concepts": [
+    "diameter",
+    "circumference",
+    "radius"
+  ],
+  "optional_concepts": [],
+  "acceptable_paraphrases": [
+    "Diameter = 13.6 cm | Circumference = 42.7 cm | 4 | 13.6 | 6.8 cm,13.6 cm,42.7 cm | 6.8,13.6,42.7 | 13.6cm | 6.8 , 13.6 , 42.7 | Radius:6.8 Diameter:13.6 circumference:42.7 | 13.6, 42.7"
+  ],
+  "critical_keywords": [
+    "diameter",
+    "circumference",
+    "radius"
+  ],
+  "strict_keywords": [],
+  "misconceptions": [
+    "Diameter and Circumference are the same.",
+    "Radius is not half of the diameter."
+  ],
+  "grading_notes": "Ensure that all required concepts are present, critical keywords are used. Acceptable paraphrases should be checked for correctness. Misconceptions listed should be noted as errors.",
+  "critical_errors": []
+}

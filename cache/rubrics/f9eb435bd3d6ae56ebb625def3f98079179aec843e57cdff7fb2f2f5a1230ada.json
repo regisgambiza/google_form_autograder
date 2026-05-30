@@ -1,0 +1,30 @@
+{
+  "required_concepts": [
+    "square numbers",
+    "last digit"
+  ],
+  "optional_concepts": [
+    "end in",
+    "squares of integers"
+  ],
+  "acceptable_paraphrases": [
+    "The last digit of square numbers is one of the following: 0, 1, 4, 5, 6, or 9",
+    "When squaring an integer, the result can end with these digits only: 0, 1, 4, 5, 6, or 9",
+    "The final digit of perfect squares will be one of 0, 1, 4, 5, 6, or 9"
+  ],
+  "critical_errors": [
+    "mistakenly stating that square numbers can end in 2",
+    "stating that all digits are possible last digits for square numbers"
+  ],
+  "strict_keywords": [
+    "square numbers",
+    "end",
+    "last digit",
+    "0 | 1 | 4 | 5 | 6 | or 9"
+  ],
+  "misconceptions": [
+    "believing that other digits can be the last digit of a square number",
+    "thinking that all single-digit numbers can be the last digit of a square number"
+  ],
+  "grading_notes": "Points should be awarded based on inclusion of required concepts, correctness in critical errors, and presence of strict keywords. Acceptable paraphrases are worth partial credit."
+}

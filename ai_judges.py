@@ -2,6 +2,7 @@
 import asyncio
 import json
 import re
+import time
 from typing import Dict, List
 
 try:
@@ -178,6 +179,9 @@ async def call_judge_async(
     retries: int
 ) -> Dict[str, object]:
     """Call a judge using Ollama with structured output."""
+    start = time.perf_counter()
+    log("INFO", f"START judge_{role} (model={model})")
+    
     payload = {
         "model": model,
         "messages": [
@@ -211,6 +215,8 @@ async def call_judge_async(
             obj = _normalize_decision(obj)
             obj = _fill_judge_defaults(obj)
             if _valid(obj):
+                duration_ms = (time.perf_counter() - start) * 1000
+                _log_judge_result(role, model, duration_ms, obj.get("decision", "ABSTAIN"), obj.get("confidence", 0.0))
                 return obj
 
         except json.JSONDecodeError as ex:
@@ -223,6 +229,11 @@ async def call_judge_async(
             log("WARNING", f"  Content: {repr(content)[:200]}")
     
     return _abstain("retries_exhausted")
+
+
+def _log_judge_result(role: str, model: str, duration_ms: float, decision: str, confidence: float):
+    """Log judge completion with timing and result."""
+    log("INFO", f"END judge_{role} duration_ms={duration_ms:.0f} decision={decision} confidence={confidence:.2f} (model={model})")
 
 
 async def run_all_judges_with_early_exit(
@@ -287,6 +298,8 @@ def _run_judges_sync(
     
     for role in JUDGE_PROMPTS:
         role_model = jury_models.get(role)
+        start = time.perf_counter()
+        log("INFO", f"START judge_{role} (model={role_model})")
         for i in range(retries):
             try:
                 response = ollama.chat(
@@ -301,15 +314,19 @@ def _run_judges_sync(
                 
                 raw = response.get("message", {}).get("content", "")
                 obj = parse_judge_response(raw) if isinstance(raw, str) else raw
-                
+
                 obj = _normalize_decision(obj)
                 obj = _fill_judge_defaults(obj)
                 if _valid(obj):
+                    duration_ms = (time.perf_counter() - start) * 1000
+                    _log_judge_result(role, role_model, duration_ms, obj.get("decision", "ABSTAIN"), obj.get("confidence", 0.0))
                     out.append(obj)
                     break
             except Exception as ex:
                 log("WARNING", f"Judge {role} sync attempt {i+1}/{retries} failed: {ex}")
         else:
+            duration_ms = (time.perf_counter() - start) * 1000
+            _log_judge_result(role, role_model, duration_ms, "ABSTAIN", 0.0)
             out.append(_abstain("retries_exhausted"))
     
     return out

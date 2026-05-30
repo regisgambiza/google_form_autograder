@@ -1,0 +1,29 @@
+{
+  "required_concepts": [
+    "boolean values",
+    "truthiness"
+  ],
+  "optional_concepts": [
+    "falsehoods in programming"
+  ],
+  "acceptable_paraphrases": [
+    "False is a boolean value representing falsity",
+    "true is the opposite of False",
+    "42 is not a boolean and does not represent truth or falsehood directly"
+  ],
+  "critical_errors": [
+    "True | true | Fals | false with leading capitalization errors",
+    "Kinda, maybe, sorta for boolean values"
+  ],
+  "strict_keywords": [
+    "False",
+    "false",
+    "F",
+    "f"
+  ],
+  "misconceptions": [
+    "believing that 42 can be used interchangeably as a boolean value",
+    "thinking that 'true' or 'True' without the capital T is correct"
+  ],
+  "grading_notes": "Ensure the answer strictly uses 'False', 'false', 'F', or 'f'. Acceptance of 'Kinda', 'maybe', or 'sorta' indicates a misconception."
+}

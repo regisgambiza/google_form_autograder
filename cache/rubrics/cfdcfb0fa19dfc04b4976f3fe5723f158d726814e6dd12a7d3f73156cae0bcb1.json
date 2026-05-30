@@ -1,0 +1,29 @@
+{
+  "required_concepts": [
+    "measurement value",
+    "unit of measurement"
+  ],
+  "optional_concepts": [],
+  "acceptable_paraphrases": [
+    "twenty-seven centimeters",
+    "27 cm in decimal form",
+    "27cm as a length"
+  ],
+  "critical_errors": [
+    "non-numeric response",
+    "incorrect unit (other than cm)",
+    "missing significant figures"
+  ],
+  "strict_keywords": [
+    "3a",
+    "27",
+    "cm"
+  ],
+  "misconceptions": [
+    "using incorrect units like mm or m",
+    "omitting the unit 'cm'",
+    "writing it as a fraction instead of a decimal",
+    "adding unnecessary zeros after the decimal point"
+  ],
+  "grading_notes": "Credit will be given for any response that includes the number 27 and the unit cm, in any valid format. Incorrect units or omissions will result in partial credit or no credit respectively."
+}

@@ -1,0 +1,29 @@
+{
+  "required_concepts": [
+    "lines of symmetry",
+    "rotational symmetry",
+    "order of rotational symmetry"
+  ],
+  "optional_concepts": [],
+  "acceptable_paraphrases": [
+    "symmetry and rotation alignment",
+    "axis of symmetry and turn symmetry order",
+    "reflective and rotational symmetry must agree"
+  ],
+  "critical_errors": [
+    "mentioning translational symmetry instead of rotational",
+    "ignoring the concept of order"
+  ],
+  "strict_keywords": [
+    "No",
+    "lines of symmetry",
+    "rotational symmetry",
+    "order must match"
+  ],
+  "misconceptions": [
+    "asserting that lines of symmetry and rotational symmetry are always present",
+    "stating that both types of symmetry have to be of the same order without a condition",
+    "believing that any arrangement can have matching lines and rotational symmetry"
+  ],
+  "grading_notes": "Ensure the answer addresses the necessity for these symmetries to align in terms of order. Misconceptions about always having multiple types of symmetry should be noted."
+}

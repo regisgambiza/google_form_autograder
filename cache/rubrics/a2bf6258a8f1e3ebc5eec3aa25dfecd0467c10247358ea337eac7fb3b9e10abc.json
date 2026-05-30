@@ -1,0 +1,33 @@
+{
+  "required_concepts": [
+    "A regular tridecagon (13-sided polygon) exists",
+    "A regular tridecagon has 13 lines of symmetry",
+    "A regular tridecagon has rotational symmetry of order 13"
+  ],
+  "optional_concepts": [
+    "Symmetry in polygons",
+    "Rotational symmetry",
+    "Lines of symmetry"
+  ],
+  "acceptable_paraphrases": [
+    "A regular tridecagon (13-sided polygon) is a shape that has these properties",
+    "She is incorrect because a regular tridecagon exists and meets these criteria",
+    "There is a 13-sided polygon called a tridecagon with the described symmetry"
+  ],
+  "critical_errors": [
+    "Mentioning rotational symmetry of order 14 instead of 13",
+    "Incorrectly stating that there are no lines or only one line of symmetry for a regular tridecagon"
+  ],
+  "strict_keywords": [
+    "tridecagon",
+    "13-sided polygon",
+    "lines of symmetry",
+    "rotational symmetry of order 13"
+  ],
+  "misconceptions": [
+    "A regular tridecagon cannot have 13 lines of symmetry or rotational symmetry of order 13",
+    "Incorrectly stating that there is no such shape as a tridecagon",
+    "Confusing the properties of other polygons with those of a tridecagon"
+  ],
+  "grading_notes": "Points should be deducted for critical errors and misconceptions. Acceptable paraphrases should not lose points unless they miss key information."
+}

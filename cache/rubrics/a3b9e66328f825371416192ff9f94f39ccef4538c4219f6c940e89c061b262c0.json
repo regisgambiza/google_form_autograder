@@ -1,0 +1,29 @@
+{
+  "required_concepts": [
+    "division of quantities",
+    "approximation"
+  ],
+  "optional_concepts": [
+    "remainder in division",
+    "fractions"
+  ],
+  "acceptable_paraphrases": [
+    "Around 7 cakes",
+    "Close to 7 cakes",
+    "More or less 7 cakes"
+  ],
+  "critical_errors": [
+    "exact number like '10 cakes' or '8 cakes' without approximation"
+  ],
+  "strict_keywords": [
+    "about",
+    "approximately",
+    "around",
+    "close to"
+  ],
+  "misconceptions": [
+    "Saying exactly 7 cakes without any approximation",
+    "Failing to recognize the need for rounding in division"
+  ],
+  "grading_notes": "Credit given for answers that show an understanding of approximate division, even if not perfectly phrased."
+}

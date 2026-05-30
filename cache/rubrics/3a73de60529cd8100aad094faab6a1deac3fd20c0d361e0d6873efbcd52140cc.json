@@ -1,0 +1,28 @@
+{
+  "required_concepts": [
+    "regular polygon",
+    "heptagon definition"
+  ],
+  "optional_concepts": [
+    "symmetry properties",
+    "interior angle calculations"
+  ],
+  "acceptable_paraphrases": [
+    "seven-sided regular polygon",
+    "regular seven-sided figure"
+  ],
+  "critical_errors": [
+    "irregular heptagon",
+    "hexagon/octagon confusion"
+  ],
+  "strict_keywords": [
+    "regular",
+    "heptagon"
+  ],
+  "misconceptions": [
+    "six sides instead of seven",
+    "confusing with irregular polygons",
+    "mixing with other polygon types"
+  ],
+  "grading_notes": "Both 'regular heptagon' and 'heptagon' are acceptable. Must explicitly indicate regularity. Partial credit for mentioning heptagon without specifying regularity."
+}

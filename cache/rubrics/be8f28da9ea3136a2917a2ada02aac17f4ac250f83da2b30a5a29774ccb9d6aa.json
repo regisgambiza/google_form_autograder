@@ -1,0 +1,30 @@
+{
+  "required_concepts": [
+    "radius",
+    "diameter"
+  ],
+  "optional_concepts": [],
+  "acceptable_paraphrases": [
+    "False: Radius cannot be greater than diameter",
+    "Incorrect, as radius can never exceed the diameter",
+    "Never true because R>D and D<D"
+  ],
+  "critical_errors": [
+    "radius is not half of a diameter",
+    "diameter is not twice the radius"
+  ],
+  "strict_keywords": [
+    "never",
+    "false",
+    "radius cannot be greater than diameter",
+    "R>D",
+    "D<D"
+  ],
+  "misconceptions": [
+    "radius is equal to diameter",
+    "diameter can be less than radius",
+    "radius is half of a diameter (implying the reverse)",
+    "R<D and D>R"
+  ],
+  "grading_notes": "Ensure the answer explicitly states that the statement is never true, false, or incorrect due to the relationship between radius and diameter. Avoid any implication that these values can be equal or that radius is half of diameter."
+}

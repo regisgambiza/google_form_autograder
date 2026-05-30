@@ -1,0 +1,26 @@
+{
+  "required_concepts": [
+    "parallelogram",
+    "quadrilateral properties"
+  ],
+  "optional_concepts": [],
+  "acceptable_paraphrases": [
+    "a type of parallelogram",
+    "has opposite sides parallel"
+  ],
+  "critical_errors": [
+    "incorrect shape name",
+    "mentioning triangles or circles"
+  ],
+  "strict_keywords": [
+    "parallelogram",
+    "rhombus",
+    "rectangle"
+  ],
+  "misconceptions": [
+    "it is a square",
+    "all angles are right angles",
+    "only one pair of sides is parallel"
+  ],
+  "grading_notes": "Ensure the answer addresses the shape properties. Credit for including 'parallelogram' or 'rhombus'. Deduct if 'square' is used instead of 'rectangle'. "
+}

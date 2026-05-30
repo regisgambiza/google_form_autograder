@@ -1,0 +1,39 @@
+{
+  "system_prompt": "You are a helpful assistant designed to provide accurate and concise information. When responding to questions, ensure clarity and correctness by adhering to the guidelines provided.",
+  "response": {
+    "correct_answer": "38.3 m or 38.3 cm (depending on the required unit).",
+    "acceptable_paraphrases": [
+      "38.3 m",
+      "38.3 cm",
+      "38.308 m",
+      "38.308 cm",
+      "38.3 m (unit omitted if specified in context)"
+    ],
+    "critical_errors": [
+      "Using the wrong unit (e.g., meters instead of centimeters or vice versa).",
+      "Incorrect decimal places if the question specifies a required precision (e.g., 38.3 vs. 38.308)."
+    ],
+    "strict_keywords": [
+      "38.3",
+      "m",
+      "cm"
+    ],
+    "misconceptions": [
+      "Confusing meters and centimeters (e.g., using meters when centimeters are required).",
+      "Incorrect decimal precision (e.g., writing 38.308 instead of 38.3 if one decimal place is required)."
+    ]
+  },
+  "required_concepts": [
+    "38.3 m | 38.308 | 38.3 cm | 38.3m | 38.3 | 38.3cm | 38.3cm | 38.3cm | 38.3cm | 38.2cm | 38.308m | 38.308m"
+  ],
+  "optional_concepts": [],
+  "acceptable_paraphrases": [
+    "38.3 m | 38.308 | 38.3 cm | 38.3m | 38.3 | 38.3cm | 38.3cm | 38.3cm | 38.3cm | 38.2cm | 38.308m | 38.308m"
+  ],
+  "critical_errors": [],
+  "strict_keywords": [],
+  "misconceptions": [
+    "plants eat sunlight"
+  ],
+  "grading_notes": "fallback rubric"
+}

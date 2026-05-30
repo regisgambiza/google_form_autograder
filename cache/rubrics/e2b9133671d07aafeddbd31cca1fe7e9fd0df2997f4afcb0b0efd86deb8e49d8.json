@@ -1,0 +1,31 @@
+{
+  "required_concepts": [
+    "evaluate the expression",
+    "determine if the statement is true"
+  ],
+  "optional_concepts": [],
+  "acceptable_paraphrases": [
+    "8+6-12=2 yes",
+    "6",
+    "8+6-12=2 YES",
+    "8+6-12 =2 yes",
+    "8+6-12=2 so yes",
+    "Yass",
+    "Yes, Vitor is correct.",
+    "2 YES",
+    "Ya"
+  ],
+  "critical_keywords": [
+    "8+6-12",
+    "2",
+    "yes"
+  ],
+  "misconceptions": [
+    "Incorrect evaluation of the expression (e.g., 8+6-12=0)",
+    "Failing to explicitly state 'yes' or a similar affirmative phrase",
+    "Providing only the result without context (e.g., just writing 2)"
+  ],
+  "grading_notes": "Ensure that students clearly show their work and use appropriate language. Acceptable paraphrases should be mathematically correct and include both the expression and its evaluated result.",
+  "critical_errors": [],
+  "strict_keywords": []
+}

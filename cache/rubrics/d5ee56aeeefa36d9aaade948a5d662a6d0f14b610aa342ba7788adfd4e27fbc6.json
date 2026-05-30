@@ -1,0 +1,32 @@
+{
+  "required_concepts": [
+    "finite 2D shape",
+    "lines of symmetry",
+    "rotational symmetry",
+    "order of rotational symmetry"
+  ],
+  "optional_concepts": [],
+  "acceptable_paraphrases": [
+    "Sometimes true bc some shapes have lines but not rotation",
+    "True if it's a geometric shape",
+    "Sometimes true depending on the shape",
+    "Always true for squares"
+  ],
+  "critical_errors": [
+    "always false",
+    "never true"
+  ],
+  "strict_keywords": [
+    "2D",
+    "shape",
+    "lines of symmetry",
+    "rotational symmetry",
+    "order"
+  ],
+  "misconceptions": [
+    "always true without specifying conditions",
+    "always false without specifying exceptions",
+    "rotation order is unrelated to lines of symmetry"
+  ],
+  "grading_notes": "Credit for clear distinction between lines of symmetry and rotation order. Deduct points for vague or incorrect definitions."
+}

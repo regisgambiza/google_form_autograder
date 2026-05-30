@@ -1,0 +1,31 @@
+{
+  "required_concepts": [
+    "length measurement",
+    "unit conversion"
+  ],
+  "optional_concepts": [
+    "precision in measurements",
+    "significant figures"
+  ],
+  "acceptable_paraphrases": [
+    "the length is approximately 38.3 cm",
+    "the object's dimension can be rounded to 38.308 m or 38.3 cm",
+    "the measurement rounds to 38.3 centimeters"
+  ],
+  "critical_errors": [
+    "inconsistent use of units",
+    "wrong numerical value"
+  ],
+  "strict_keywords": [
+    "2c",
+    "38.3",
+    "cm",
+    "m"
+  ],
+  "misconceptions": [
+    "mistaking this for a calculation problem",
+    "using a different unit without conversion",
+    "ignoring the precision and rounding off incorrectly"
+  ],
+  "grading_notes": "Ensure the answer includes the correct value with proper units and precision. Watch out for incorrect conversions or misinterpretations of the question."
+}

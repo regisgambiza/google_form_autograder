@@ -1,0 +1,30 @@
+{
+  "required_concepts": [
+    "lines of symmetry in a regular hexagon",
+    "number of lines equals number of sides"
+  ],
+  "optional_concepts": [
+    "axes through opposite vertices",
+    "axes through midpoints of opposite sides"
+  ],
+  "acceptable_paraphrases": [
+    "six lines of symmetry",
+    "six axes of symmetry",
+    "each side has a corresponding line"
+  ],
+  "critical_errors": [
+    "incorrect numerical answer (e.g., 3, 4, 5)",
+    "confusing with rotational symmetry"
+  ],
+  "strict_keywords": [
+    "lines of symmetry",
+    "regular hexagon",
+    "six"
+  ],
+  "misconceptions": [
+    "believes only 3 lines exist (confusing with triangles)",
+    "thinks rotational symmetry counts",
+    "confuses with diagonals"
+  ],
+  "grading_notes": "Answer must explicitly state '6' and specify 'lines of symmetry'. Penalize for incorrect numerical answers or conflating symmetry types."
+}

@@ -1,0 +1,35 @@
+{
+  "required_concepts": [
+    "two circles",
+    "same center",
+    "small circle radius 1.5 cm",
+    "larger circle diameter 5 cm"
+  ],
+  "optional_concepts": [],
+  "acceptable_paraphrases": [
+    "The diagram shows two circles with the same centre",
+    "Two circles with the same center",
+    "The small circle has a radius of 1.5 cm, The larger circle has a diameter of 5 cm",
+    "The diagram shows a circle with radius 1.5 cm and another with diameter 5 cm"
+  ],
+  "critical_keywords": [
+    "two",
+    "circles",
+    "same centre",
+    "radius",
+    "diameter"
+  ],
+  "misconceptions": [
+    "A single circle is described instead of two circles",
+    "The center or origin of the circles is not specified as being the same",
+    "Incorrect values for the radius and diameter are provided (e.g., 1.6 cm, 4.9 cm)",
+    "The term 'center' is misspelled as 'centre' with a specific spelling error"
+  ],
+  "example_responses": [
+    "Two circles with the same center, small circle has radius 1.5 cm and large one diameter of 5 cm",
+    "The diagram shows two circles sharing the same centre, where the smaller one has a radius of 1.5 cm while the larger one has a diameter of 5 cm"
+  ],
+  "critical_errors": [],
+  "strict_keywords": [],
+  "grading_notes": "fallback rubric"
+}

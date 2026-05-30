@@ -1,0 +1,29 @@
+{
+  "required_concepts": [
+    "pentagon",
+    "five-sided polygon"
+  ],
+  "optional_concepts": [
+    "regular polygon",
+    "equal sides and angles"
+  ],
+  "acceptable_paraphrases": [
+    "five-sided figure",
+    "regular pentagon",
+    "pentagon shape"
+  ],
+  "critical_errors": [
+    "mentioning a non-pentagon shape (e.g., hexagon, quadrilateral)",
+    "incorrect side count"
+  ],
+  "strict_keywords": [
+    "pentagon",
+    "five-sided"
+  ],
+  "misconceptions": [
+    "confusing pentagon with hexagon",
+    "believing all pentagons are regular",
+    "thinking pentagons have six sides"
+  ],
+  "grading_notes": "Both 'regular pentagon' and 'pentagon' are correct. Partial credit may be given for mentioning five sides without specifying regularity, but critical errors involve incorrect shape identification."
+}

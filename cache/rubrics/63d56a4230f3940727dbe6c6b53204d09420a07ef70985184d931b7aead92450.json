@@ -1,0 +1,29 @@
+{
+  "required_concepts": [
+    "regular pentagon",
+    "symmetries"
+  ],
+  "optional_concepts": [],
+  "acceptable_paraphrases": [
+    "a regular pentagon has these properties",
+    "Yes, a regular pentagon",
+    "Correct",
+    "Mae is correct"
+  ],
+  "critical_errors": [
+    "regular pentagon does not have",
+    "pentagon with more than 5 sides"
+  ],
+  "strict_keywords": [
+    "regular pentagon",
+    "symmetries",
+    "five sides"
+  ],
+  "misconceptions": [
+    "A regular pentagon has more than 5 sides",
+    "There are other shapes with the same symmetries aside from a regular pentagon",
+    "Regular pentagon means irregular shape",
+    "Pentagon refers to any five-sided figure, not necessarily a regular one"
+  ],
+  "grading_notes": "Ensure the answer includes that a regular pentagon has exactly 5 equal sides and symmetrical properties. Penalize for mentioning more than 5 sides or other shapes with similar properties."
+}

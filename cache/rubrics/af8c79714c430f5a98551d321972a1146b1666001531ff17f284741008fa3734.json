@@ -1,0 +1,25 @@
+{
+  "required_concepts": [
+    "Euler's formula",
+    "convex polyhedron"
+  ],
+  "optional_concepts": [],
+  "acceptable_paraphrases": [
+    "It does not satisfy Euler’s formula",
+    "Using Euler’s formula doesn't equal 2",
+    "Because it violates Euler's formula",
+    "Impossible because using the formula gives a different result"
+  ],
+  "critical_keywords": [
+    "Euler's",
+    "formula",
+    "2"
+  ],
+  "misconceptions": [
+    "The shape can exist as a convex polyhedron",
+    "Using Euler’s formula equals 8 or any number other than 2"
+  ],
+  "grading_notes": "Award full points if the answer includes the correct application of Euler's formula and concludes that it cannot be a convex polyhedron. Deduct points for mentioning a value other than 2 when using Euler’s formula.",
+  "critical_errors": [],
+  "strict_keywords": []
+}

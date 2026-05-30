@@ -1,0 +1,29 @@
+{
+  "required_concepts": [
+    "whether all four sides are equal in length",
+    "all interior angles are not necessarily 90 degrees"
+  ],
+  "optional_concepts": [
+    "Rhombus can be a special case of a rectangle if it has right angles",
+    "parallelogram as the broader category that includes rhombuses without right angles"
+  ],
+  "acceptable_paraphrases": [
+    "square and rhombus are both types of parallelograms with equal sides",
+    "a rhombus is always a type of quadrilateral with all sides equal but not necessarily right-angled"
+  ],
+  "critical_errors": [
+    "stating that all angles in a rhombus are 90 degrees",
+    "claiming that a rhombus has lines of symmetry only when it's a square"
+  ],
+  "strict_keywords": [
+    "sides equal",
+    "rhombus",
+    "angles not necessarily right-angled"
+  ],
+  "misconceptions": [
+    "all angles in a rhombus are always 90 degrees",
+    "a rhombus has lines of symmetry only if it is also a square",
+    "believing that the shape must be both a rectangle and a rhombus to have all sides equal"
+  ],
+  "grading_notes": "Award full points for answers containing required concepts, optional bonus content, or acceptable paraphrases. Deduct points for critical errors. Misconceptions should result in partial loss of points."
+}

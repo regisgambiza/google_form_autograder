@@ -1,0 +1,43 @@
+{
+  "required_concepts": [
+    "5b has 6 vertices",
+    "number of vertices is 6",
+    "V = 6",
+    "using Euler's formula (V+F-E=2)",
+    "12 edges or corners"
+  ],
+  "optional_concepts": [
+    "vertices and corners are the same thing",
+    "12 vertices or corners",
+    "V+F−E=2 should be used for verification"
+  ],
+  "acceptable_paraphrases": [
+    "5b has 6 verticle",
+    "number of verticles is 6",
+    "there are 6 vertices in 5b",
+    "the figure has 6 vertices",
+    "vertices of 5b = 6",
+    "V+F−E=2 can be used to verify the number of vertices"
+  ],
+  "critical_errors": [
+    "incorrect number of vertices (not 6)",
+    "missing application of Euler's formula",
+    "failure to mention V or vertices explicitly in the answer"
+  ],
+  "strict_keywords": [
+    "vertices",
+    "vertex",
+    "V",
+    "12 edges or corners",
+    "Euler's formula",
+    "V+F-E=2",
+    "6"
+  ],
+  "misconceptions": [
+    "mentioning faces without context of Euler's formula",
+    "using incorrect terminology like 'verticle'",
+    "stating the number as a variable without solving for it",
+    "ignoring the application of Euler's formula to verify the solution"
+  ],
+  "grading_notes": "Points should be deducted for any critical errors. Acceptable paraphrases can earn partial credit. Misconceptions indicate misunderstanding and may result in reduced points."
+}

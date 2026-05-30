@@ -1,0 +1,31 @@
+{
+  "required_concepts": [
+    "four triangular faces",
+    "tetrahedron",
+    "triangular pyramid"
+  ],
+  "optional_concepts": [
+    "pyramid",
+    "triangular base pyramid"
+  ],
+  "acceptable_paraphrases": [
+    "A shape with four sides",
+    "A polyhedron made of triangles only",
+    "A solid figure with four triangular faces"
+  ],
+  "critical_errors": [
+    "mistakenly describes a square or rectangular face",
+    "refers to any other type of pyramid"
+  ],
+  "strict_keywords": [
+    "tetrahedron",
+    "triangular pyramid",
+    "four triangular faces"
+  ],
+  "misconceptions": [
+    "Confusing with other pyramids (e.g., square pyramid)",
+    "Describing the shape as having a base that is not triangular",
+    "Stating it has more or fewer than four faces"
+  ],
+  "grading_notes": "Look for clear identification of the tetrahedron and its defining characteristic - four triangular faces. Deduct points for misidentifying other shapes or structures."
+}

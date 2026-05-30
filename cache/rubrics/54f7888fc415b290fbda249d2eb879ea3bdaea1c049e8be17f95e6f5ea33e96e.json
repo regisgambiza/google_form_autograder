@@ -1,0 +1,33 @@
+{
+  "required_concepts": [
+    "all sides are equal",
+    "regular hexagon",
+    "lines of symmetry",
+    "number of sides equals number of lines of symmetry"
+  ],
+  "optional_concepts": [],
+  "acceptable_paraphrases": [
+    "each side is the same length",
+    "equilateral hexagon",
+    "hexagon with all sides congruent",
+    "symmetry equal to the number of sides"
+  ],
+  "critical_errors": [
+    "incorrect statement about lines of symmetry",
+    "referring to a non-regular hexagon"
+  ],
+  "strict_keywords": [
+    "always true",
+    "6 sides",
+    "6 lines of symmetry",
+    "equal sides",
+    "hexagon"
+  ],
+  "misconceptions": [
+    "only some regular hexagons have equal sides",
+    "the number of lines of symmetry is not always the same as the number of sides",
+    "lines of symmetry are related to angles, not just sides",
+    "non-regular polygons can also have an equal number of sides and lines of symmetry"
+  ],
+  "grading_notes": "Credit will be given for correct phrasings that convey the core concepts. Deduct points for introducing unrelated ideas or misconceptions."
+}

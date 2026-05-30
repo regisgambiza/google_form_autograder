@@ -1,0 +1,27 @@
+{
+  "required_concepts": [
+    "number of lines of symmetry",
+    "order of rotational symmetry",
+    "regular polygon"
+  ],
+  "optional_concepts": [],
+  "acceptable_paraphrases": [
+    "For a regular polygon, the number of lines of symmetry equals its order of rotational symmetry",
+    "A regular polygon's lines of symmetry and its rotational symmetry order must be equal",
+    "If a regular polygon has n sides, it will have n lines of symmetry and rotate 360°/n degrees to look the same"
+  ],
+  "critical_errors": [
+    "incorrect statement about the number of lines of symmetry or order of rotational symmetry",
+    "mentioning an irregular polygon"
+  ],
+  "strict_keywords": [
+    "lines of symmetry",
+    "rotational symmetry",
+    "regular polygon"
+  ],
+  "misconceptions": [
+    "believing that any polygon can have equal lines of symmetry and order of rotational symmetry",
+    "stating that the number of lines of symmetry is always less than or greater than the order of rotational symmetry for a regular polygon"
+  ],
+  "grading_notes": "Credit should be given for identifying the correct relationship between the concepts. Points may be deducted for incorrect statements, and full credit if all required concepts are present and accurate."
+}

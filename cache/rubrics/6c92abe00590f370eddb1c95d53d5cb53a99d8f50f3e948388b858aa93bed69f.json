@@ -1,0 +1,26 @@
+{
+  "required_concepts": [
+    "conversion from meters to centimeters"
+  ],
+  "optional_concepts": [],
+  "acceptable_paraphrases": [
+    "2544.7 cm",
+    "25.45 m",
+    "2544.7cn",
+    "2544.7cm"
+  ],
+  "strict_keywords": [
+    "6",
+    "meters",
+    "centimeters"
+  ],
+  "critical_errors": [
+    "incorrect conversion factor (e.g., using decimeters instead of centimeters)"
+  ],
+  "misconceptions": [
+    "believing the conversion is 1 meter = 100 dm",
+    "using an incorrect number of significant figures",
+    "not including units in the answer"
+  ],
+  "grading_notes": "Ensure the answer uses the correct conversion factor and includes appropriate precision. Watch for unit consistency and clarity."
+}

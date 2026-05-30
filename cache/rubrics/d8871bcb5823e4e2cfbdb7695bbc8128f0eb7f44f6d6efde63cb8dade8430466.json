@@ -1,0 +1,34 @@
+{
+  "required_concepts": [
+    "Circumference formula (C = πd)",
+    "Solving for diameter (d = C/π)",
+    "Rounding to one decimal place"
+  ],
+  "optional_concepts": [
+    "Understanding π as a constant (~3.1416)",
+    "Relationship between radius and diameter"
+  ],
+  "acceptable_paraphrases": [
+    "Using π ≈ 3.14 or 22/7",
+    "Expressing diameter as circumference divided by π",
+    "Rounding to tenths place"
+  ],
+  "critical_errors": [
+    "Using radius formula instead of diameter",
+    "Incorrectly rounding to two decimal places",
+    "Forgetting to divide by π"
+  ],
+  "strict_keywords": [
+    "circumference",
+    "diameter",
+    "π",
+    "rounding",
+    "one decimal place"
+  ],
+  "misconceptions": [
+    "Confusing radius with diameter",
+    "Using C = 2πr without adjusting for diameter",
+    "Rounding too early in calculation"
+  ],
+  "grading_notes": "Ensure correct formula application and precise rounding. Partial credit may be given for correct method with arithmetic errors."
+}

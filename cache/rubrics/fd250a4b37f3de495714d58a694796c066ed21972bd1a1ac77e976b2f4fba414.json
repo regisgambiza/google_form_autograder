@@ -1,0 +1,33 @@
+{
+  "required_concepts": [
+    "vertices",
+    "V"
+  ],
+  "optional_concepts": [
+    "number_of_vertices",
+    "vertices_count"
+  ],
+  "acceptable_paraphrases": [
+    "six vertices",
+    "the polyhedron has six vertices",
+    "there are six vertices"
+  ],
+  "critical_errors": [
+    "incorrect number of vertices",
+    "missing vertices count"
+  ],
+  "strict_keywords": [
+    "3",
+    "6",
+    "V=",
+    "=",
+    "vertices",
+    "verticle"
+  ],
+  "misconceptions": [
+    "believing the shape is a cube (only cubes have 8 vertices)",
+    "mentioning edges or faces instead of vertices",
+    "stating V=4 or any other incorrect number"
+  ],
+  "grading_notes": "Ensure the answer includes '6' in some form and correctly uses the variable V. Avoid accepting answers that mix up concepts like edges or faces."
+}

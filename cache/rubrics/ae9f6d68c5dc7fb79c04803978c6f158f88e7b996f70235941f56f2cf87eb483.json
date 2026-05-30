@@ -1,0 +1,31 @@
+{
+  "required_concepts": [
+    "variability of truth value",
+    "conditional validity"
+  ],
+  "optional_concepts": [
+    "specific scenarios",
+    "context-dependent reasoning"
+  ],
+  "acceptable_paraphrases": [
+    "not always true",
+    "depends on circumstances",
+    "occasionally valid"
+  ],
+  "critical_errors": [
+    "claims universal truth",
+    "denies variability",
+    "provides no justification"
+  ],
+  "strict_keywords": [
+    "sometimes",
+    "varies",
+    "conditional"
+  ],
+  "misconceptions": [
+    "believes statement is always true",
+    "thinks statement is universally false",
+    "ignores contextual factors"
+  ],
+  "grading_notes": "Award full credit for acknowledging variability. Deduct points for absolute claims without qualification."
+}

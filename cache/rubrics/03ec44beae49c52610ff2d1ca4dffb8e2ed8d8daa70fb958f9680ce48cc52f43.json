@@ -1,0 +1,28 @@
+{
+  "required_concepts": [
+    "hexagonal bases",
+    "rectangular side faces"
+  ],
+  "optional_concepts": [
+    "congruence of bases",
+    "number of side faces"
+  ],
+  "acceptable_paraphrases": [
+    "A hexagonal prism has two identical hexagon-shaped bases and six rectangle-like side faces.",
+    "Hexagonal prism features a pair of matching hexagons as its top and bottom, with six rectangle-shaped sides connecting them."
+  ],
+  "critical_errors": [
+    "mentioning octagonal instead of hexagonal",
+    "incorrect number of side faces"
+  ],
+  "strict_keywords": [
+    "hexagonal bases",
+    "rectangular side faces"
+  ],
+  "misconceptions": [
+    "Confusing the shape of the base (e.g., thinking it's a pentagon or octagon)",
+    "Incorrectly stating that there are more than six side faces",
+    "Describing the side faces as squares instead of rectangles"
+  ],
+  "grading_notes": "Ensure the answer includes the correct base and side face shapes. Minor variations in language are acceptable."
+}

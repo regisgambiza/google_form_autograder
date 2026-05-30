@@ -58,25 +58,32 @@ def _question_cache_key(question: str, expected: Union[str, List[str]]) -> str:
 
 def get_or_generate_rubric(question: str, expected: Union[str, List[str]], question_id: Optional[str] = None) -> Dict:
     """Get rubric from cache or generate and cache it.
-    
+
     One rubric per question is reused for all students, dramatically reducing LLM calls.
     """
     qkey = _question_cache_key(question, expected)
-    
+
     if qkey in QUESTION_RUBRIC_CACHE:
-        log("DEBUG", f"rubric_cache_hit=True")
+        log("DEBUG", f"rubric_cache_hit=True (question_id={question_id})")
         return QUESTION_RUBRIC_CACHE[qkey]
     
+    start = time.perf_counter()
+    log("INFO", f"START rubric_generate (model=gemma3:12b, question_id={question_id})")
+
     # Generate new rubric
     exp_text = _expected_text(expected)
     rubric = generate_rubric(question, exp_text)
-    
+
+    duration_ms = (time.perf_counter() - start) * 1000
+    log("INFO", f"END rubric_generate duration_ms={duration_ms:.0f} (question_id={question_id})")
+    log("INFO", f"rubric_cache_miss=True generated_for={question_id}")
+
     # Add expected values to acceptable paraphrases
     if isinstance(expected, list) and expected:
         rubric["acceptable_paraphrases"] = list(dict.fromkeys(
             [str(x) for x in rubric.get("acceptable_paraphrases", [])] + [str(x) for x in expected]
         ))
-    
+
     # Cache for future use
     QUESTION_RUBRIC_CACHE[qkey] = rubric
     log("DEBUG", f"rubric_cache_miss=True generated_for={question_id or 'unknown'}")
@@ -91,6 +98,7 @@ def _cache_key(answer: str, question_hash: str) -> str:
 def evaluate_answer(answer: str, expected: Union[str, List[str]], question: str) -> EvaluationResult:
     cfg = load_config()
     start = time.perf_counter()
+    log("INFO", f"START evaluate_answer (answer_len={len(answer)}, question_hash={_qhash(question, expected)[:8]})")
     max_latency_ms = float(cfg.get("max_latency_per_answer_seconds", 30.0)) * 1000.0
     qh = _qhash(question, expected)
     ck = _cache_key(answer, qh)
@@ -144,11 +152,13 @@ def evaluate_answer(answer: str, expected: Union[str, List[str]], question: str)
         lat = (time.perf_counter() - start) * 1000.0
         res = EvaluationResult(answer, "YES", emb_score, float(concept["semantic_score"]), float(concept["concept_score"]), float(concept["semantic_score"]), False, "", list(concept["missing_concepts"]), list(concept["accepted_concepts"]), 1.0, emb_score, False, lat, "embedding")
         RESULT_CACHE[ck] = res
+        log("INFO", f"stage=embedding auto_accept=True score={emb_score:.3f} latency_ms={lat:.0f}")
         return res
     if emb_score < float(emb_th.get("auto_reject", 0.35)):
         lat = (time.perf_counter() - start) * 1000.0
         res = EvaluationResult(answer, "NO", emb_score, float(concept["semantic_score"]), float(concept["concept_score"]), float(concept["semantic_score"]), False, "", list(concept["missing_concepts"]), list(concept["accepted_concepts"]), 1.0, emb_score, False, lat, "embedding")
         RESULT_CACHE[ck] = res
+        log("INFO", f"stage=embedding auto_reject=True score={emb_score:.3f} latency_ms={lat:.0f}")
         return res
 
     judges = run_judges(answer, question, exp_text, rubric, retries=int(cfg.get("retry_attempts", 3)))

@@ -1,0 +1,35 @@
+{
+  "required_concepts": [
+    "circle with a given diameter",
+    "chord within the circle",
+    "diameter value: 5 cm"
+  ],
+  "optional_concepts": [
+    "radius calculation (2.5 cm)",
+    "chord length: 4 cm",
+    "chord divided into two equal segments of 2 cm each"
+  ],
+  "acceptable_paraphrases": [
+    "The large circle is 5cm.",
+    "The chord is 4cm.",
+    "The diagram shows a circle with diameter 5 cm",
+    "There is a chord on the top divided in half 2cm each",
+    "A horizontal line (chord) is split into two equal segments of 2 cm."
+  ],
+  "critical_errors": [
+    "Incorrect or missing diameter value",
+    "Misplaced or incorrect radius calculation"
+  ],
+  "strict_keywords": [
+    "diameter: 5 cm",
+    "chord length: 4 cm",
+    "segments of 2 cm each"
+  ],
+  "misconceptions": [
+    "Confusing chord length with diameter",
+    "Incorrectly stating the radius as 2 cm instead of 2.5 cm",
+    "Ignoring or incorrectly mentioning the chord's division into two equal segments",
+    "Incorporating unrelated measurements (e.g., 13 cm)"
+  ],
+  "grading_notes": "Ensure that the answer includes the correct diameter and chord length, mentions the division of the chord into equal segments if applicable, and avoids common misconceptions."
+}

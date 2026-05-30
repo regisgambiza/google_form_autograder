@@ -1,0 +1,37 @@
+{
+  "required_concepts": [
+    "Some parallelograms are trapeziums",
+    "Trapezium is different from a parallelogram",
+    "All parall are trapes",
+    "Some trapeziuns are Parallelograms"
+  ],
+  "optional_concepts": [
+    "Al iscoceles trapezoids",
+    "They are not the same",
+    "Iscololes trapezoid",
+    "All isosceles trapezoid",
+    "Idk",
+    "No trapeziums are parallelograms"
+  ],
+  "acceptable_paraphrases": [
+    "Some quadrilaterals fit both categories but not all",
+    "There can be overlap between the two shapes but they are distinct in definition"
+  ],
+  "critical_errors": [
+    "All parallelograms are trapeziums",
+    "No trapeziums are parallelograms"
+  ],
+  "strict_keywords": [
+    "parallelograms",
+    "trapeziums",
+    "some",
+    "not all",
+    "isosceles"
+  ],
+  "misconceptions": [
+    "Believing that all parallelograms fit the definition of a trapezoid",
+    "Confusing the properties of isosceles trapezoids with those of parallelograms",
+    "Thinking that no overlap exists between the two shapes"
+  ],
+  "grading_notes": "Ensure the answer includes the key concepts and does not contain critical errors or common misconceptions."
+}

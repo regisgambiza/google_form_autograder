@@ -1,0 +1,27 @@
+{
+  "required_concepts": [
+    "pentagon",
+    "regular polygon"
+  ],
+  "optional_concepts": [
+    "five sides",
+    "equal sides and angles"
+  ],
+  "acceptable_paraphrases": [
+    "A pentagon with all equal sides",
+    "A five-sided figure with identical angles"
+  ],
+  "critical_errors": [
+    "irregular pentagon",
+    "polygon with more or fewer than five sides"
+  ],
+  "strict_keywords": [
+    "regular",
+    "pentagon"
+  ],
+  "misconceptions": [
+    "Any pentagon is a regular pentagon",
+    "The pentagon has unequal sides or angles"
+  ],
+  "grading_notes": "Ensure the answer specifies 'regular' and 'pentagon'. Accept paraphrases that accurately describe a regular pentagon."
+}

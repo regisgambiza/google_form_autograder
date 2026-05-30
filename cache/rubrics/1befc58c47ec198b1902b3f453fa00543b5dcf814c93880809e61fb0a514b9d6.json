@@ -1,0 +1,37 @@
+{
+  "required_concepts": [
+    "diagonals of a square are perpendicular",
+    "perpendicular"
+  ],
+  "optional_concepts": [
+    "4 lines of symmetry",
+    "square has 4 equal sides",
+    "right angles"
+  ],
+  "acceptable_paraphrases": [
+    "The diagonals are perpendicular",
+    "the diagonals are perpendicular",
+    "It has 4 lines of symmetry that cut diagonally and in half",
+    "Square diagonals not shared by all rectangles is that they are perpendicular",
+    "Perpendicular bisectors",
+    "They are perpendicular bisectors",
+    "Diagonals intersect at right angles (90 degrees)",
+    "The diagonals of a square meet at 90°"
+  ],
+  "critical_errors": [
+    "diagonals not being described as perpendicular",
+    "incorrect description of diagonal properties for rectangles"
+  ],
+  "strict_keywords": [
+    "perpendicular",
+    "intersect",
+    "right angles",
+    "diagonals"
+  ],
+  "misconceptions": [
+    "Diagonals are only equal in length",
+    "All squares have the same size diagonals",
+    "The diagonals bisect at any angle other than 90 degrees"
+  ],
+  "grading_notes": "Ensure that the answer includes a clear statement about the perpendicularity of the diagonals. Additional information like symmetry or equal sides can be included but is not required for full credit."
+}

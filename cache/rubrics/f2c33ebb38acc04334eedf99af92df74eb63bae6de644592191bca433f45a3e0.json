@@ -1,0 +1,27 @@
+{
+  "required_concepts": [
+    "length of wire",
+    "insufficient length"
+  ],
+  "optional_concepts": [],
+  "acceptable_paraphrases": [
+    "Not enough wire",
+    "The 1 meter wire is too short",
+    "There isn't sufficient wire provided"
+  ],
+  "critical_errors": [
+    "incorrect numerical values",
+    "mentioning excess wire"
+  ],
+  "strict_keywords": [
+    "wire",
+    "m",
+    "not",
+    "enough"
+  ],
+  "misconceptions": [
+    "believing the length of wire is sufficient",
+    "thinking '1 m' means it's just enough"
+  ],
+  "grading_notes": "Focus on whether the answer clearly indicates that 1 meter of wire is insufficient."
+}

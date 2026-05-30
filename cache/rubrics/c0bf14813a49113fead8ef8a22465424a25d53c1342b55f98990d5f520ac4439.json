@@ -1,0 +1,30 @@
+{
+  "required_concepts": [
+    "unit conversion",
+    "measurement precision"
+  ],
+  "optional_concepts": [
+    "significant figures",
+    "accuracy in measurements"
+  ],
+  "acceptable_paraphrases": [
+    "39.25 cm (rounded to two decimal places)",
+    "39.30 cm | 39.30",
+    "39.30 centimeters"
+  ],
+  "critical_errors": [
+    "incorrect unit",
+    "no units provided"
+  ],
+  "strict_keywords": [
+    "39.3",
+    "cm",
+    "centimeter"
+  ],
+  "misconceptions": [
+    "Using 'm' instead of 'cm'",
+    "Rounding to more than three decimal places",
+    "Failing to include the unit"
+  ],
+  "grading_notes": "Answers with correct numerical values but incorrect units will be considered partially correct. Rounding errors within a reasonable range (e.g., 39.2 or 39.4) are acceptable."
+}

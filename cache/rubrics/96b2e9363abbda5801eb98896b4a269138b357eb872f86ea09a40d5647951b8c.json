@@ -1,0 +1,35 @@
+{
+  "required_concepts": [
+    "square of a number ending in 4",
+    "powers of 2",
+    "prime factorization"
+  ],
+  "optional_concepts": [
+    "exponentiation",
+    "large numbers"
+  ],
+  "acceptable_paraphrases": [
+    "(608) squared ends with 4",
+    "the square of 608 has a unit digit of 4",
+    "square of 608 is divisible by 4",
+    "2 raised to the power of 7",
+    "prime factors include 2 and 5"
+  ],
+  "critical_errors": [
+    "incorrectly stating that (608)² does not end in 4",
+    "misidentifying powers of 2 or 5 as incorrect",
+    "omitting any mention of prime factorization"
+  ],
+  "strict_keywords": [
+    "ends in 4",
+    "2^7",
+    "power of 2",
+    "prime factors include 2 and 5"
+  ],
+  "misconceptions": [
+    "stating (608)² ends with a digit other than 4",
+    "identifying incorrect powers or exponents",
+    "failing to recognize the role of prime factorization in determining divisibility"
+  ],
+  "grading_notes": "Points will be awarded for correctly identifying key concepts and their implications. Misunderstandings about number properties, especially regarding square endings and prime factors, should be noted."
+}

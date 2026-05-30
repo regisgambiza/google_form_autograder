@@ -1,0 +1,27 @@
+{
+  "required_concepts": [
+    "corresponding",
+    "equal"
+  ],
+  "optional_concepts": [],
+  "acceptable_paraphrases": [
+    "matching sides and angles",
+    "identical sides and angles",
+    "same sides and angles",
+    "Congruent shapes have equal sides and angles"
+  ],
+  "critical_errors": [
+    "misspelled words",
+    "incorrect plural forms like side/s or angle/s"
+  ],
+  "strict_keywords": [
+    "corresponding",
+    "equal"
+  ],
+  "misconceptions": [
+    "sides and angles are not the same",
+    "only one set of corresponding parts is mentioned (e.g., just sides or just angles)",
+    "shapes with different number of sides can be congruent"
+  ],
+  "grading_notes": "Credit should be given for any variation that accurately conveys 'corresponding' or 'equal'. Misconceptions listed are common pitfalls and will result in no credit."
+}

@@ -1,4 +1,5 @@
 ﻿import re
+import time
 from dataclasses import dataclass
 from fractions import Fraction
 from typing import List, Optional, Union
@@ -6,6 +7,7 @@ from typing import List, Optional, Union
 from sympy import simplify, sympify
 
 from normalization import normalize
+from logger import log
 
 UNITS = ["°c", "°f", "k", "kg", "m", "km", "cm", "mph", "kph", "$", "%", "degrees"]
 
@@ -58,16 +60,22 @@ def algebra_equal(a: str, b: str) -> bool:
 
 def run_deterministic_checks(answer: str, expected: Union[str, List[str]], numeric_tolerance: float = 0.01) -> DeterministicResult:
     """Run stage-2 deterministic checks; returns first high-confidence hit."""
+    start = time.perf_counter()
+    log("INFO", f"START deterministic_checks (answer_len={len(answer)}, expected_count={1 if isinstance(expected, str) else len(expected)})")
     exp_list = expected if isinstance(expected, list) else [expected]
     na = normalize(answer)
     ne_list = [normalize(e) for e in exp_list]
 
     if na in ne_list:
+        duration_ms = (time.perf_counter() - start) * 1000
+        log("INFO", f"END deterministic_checks duration_ms={duration_ms:.0f} method=exact_normalized accepted=True")
         return DeterministicResult(True, 1.0, "exact_normalized")
 
     if isinstance(expected, list):
         matches = sum(1 for e in expected if normalize(e) in na)
         if matches == len(expected) and matches > 0:
+            duration_ms = (time.perf_counter() - start) * 1000
+            log("INFO", f"END deterministic_checks duration_ms={duration_ms:.0f} method=multiple_answer accepted=True")
             return DeterministicResult(True, 0.97, "multiple_answer")
 
     for exp in exp_list:
@@ -81,11 +89,17 @@ def run_deterministic_checks(answer: str, expected: Union[str, List[str]], numer
             av = float(af)
             ev = float(ef)
             if av == ev:
+                duration_ms = (time.perf_counter() - start) * 1000
+                log("INFO", f"END deterministic_checks duration_ms={duration_ms:.0f} method=numeric_equivalence accepted=True")
                 return DeterministicResult(True, 0.99, "numeric_equivalence")
             if ev != 0 and abs(av - ev) / abs(ev) <= numeric_tolerance:
+                duration_ms = (time.perf_counter() - start) * 1000
+                log("INFO", f"END deterministic_checks duration_ms={duration_ms:.0f} method=numeric_tolerance accepted=True")
                 return DeterministicResult(True, 0.98, "numeric_tolerance")
 
         if algebra_equal(answer, exp):
+            duration_ms = (time.perf_counter() - start) * 1000
+            log("INFO", f"END deterministic_checks duration_ms={duration_ms:.0f} method=algebraic_equivalence accepted=True")
             return DeterministicResult(True, 0.98, "algebraic_equivalence")
 
         if "=" in answer and "=" in exp:
@@ -93,11 +107,17 @@ def run_deterministic_checks(answer: str, expected: Union[str, List[str]], numer
                 a_l, a_r = [sympify(x) for x in answer.split("=", 1)]
                 e_l, e_r = [sympify(x) for x in exp.split("=", 1)]
                 if simplify((a_l - a_r) - (e_l - e_r)) == 0:
+                    duration_ms = (time.perf_counter() - start) * 1000
+                    log("INFO", f"END deterministic_checks duration_ms={duration_ms:.0f} method=equation_equivalence accepted=True")
                     return DeterministicResult(True, 0.97, "equation_equivalence")
             except Exception:
                 pass
 
         if re.search(r"\(\s*[-\d\.]+\s*,\s*[-\d\.]+\s*\)", exp) and re.search(r"<\s*x\s*<", answer.lower()):
+            duration_ms = (time.perf_counter() - start) * 1000
+            log("INFO", f"END deterministic_checks duration_ms={duration_ms:.0f} method=interval_equivalence accepted=True")
             return DeterministicResult(True, 0.96, "interval_equivalence")
-
+    
+    duration_ms = (time.perf_counter() - start) * 1000
+    log("INFO", f"END deterministic_checks duration_ms={duration_ms:.0f} method=none accepted=False")
     return DeterministicResult(False, 0.0, "none")

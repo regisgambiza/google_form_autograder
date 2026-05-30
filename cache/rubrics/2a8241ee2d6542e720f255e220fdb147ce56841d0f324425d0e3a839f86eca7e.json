@@ -1,0 +1,37 @@
+{
+  "required_concepts": [
+    "equal sides",
+    "equal angles",
+    "same sides",
+    "same angles"
+  ],
+  "optional_concepts": [
+    "identical sides",
+    "identical angles",
+    "corresponding sides",
+    "corresponding angles"
+  ],
+  "acceptable_paraphrases": [
+    "same sides and same angles",
+    "equal and equal",
+    "identical and identical",
+    "corresponding and corresponding",
+    "equal sides and equal angles"
+  ],
+  "critical_errors": [
+    "different sides/angles",
+    "proportional sides",
+    "parallel sides",
+    "similar instead of congruent"
+  ],
+  "strict_keywords": [
+    "equal",
+    "same",
+    "congruent"
+  ],
+  "misconceptions": [
+    "congruent means all sides/angles are equal in measure",
+    "congruent shapes have proportional sides"
+  ],
+  "grading_notes": "Answers must explicitly address both sides and angles. Terms like 'equal' or 'same' for both are required. 'Corresponding' may be used but is not mandatory. Avoid terms like 'parallel' or 'similar'."
+}

@@ -1,0 +1,31 @@
+{
+  "required_concepts": [
+    "Square is a type of rectangle",
+    "Both are quadrilaterals with four right angles"
+  ],
+  "optional_concepts": [
+    "Opposite sides are equal in rectangles",
+    "All sides equal in squares"
+  ],
+  "acceptable_paraphrases": [
+    "Rectangle or square",
+    "Square and rectangle",
+    "Rectangles and squares",
+    "Both are quadrilaterals"
+  ],
+  "critical_errors": [
+    "Treat square and rectangle as separate categories",
+    "Include non-quadrilateral shapes"
+  ],
+  "strict_keywords": [
+    "rectangle",
+    "square",
+    "quadrilateral"
+  ],
+  "misconceptions": [
+    "Believe squares are not rectangles",
+    "Think rectangles must have all sides equal",
+    "Confuse square properties with rectangle properties"
+  ],
+  "grading_notes": "Award full credit for recognizing square as a special case of rectangle. Penalize only if student explicitly separates them into distinct categories. Accept variations in terminology as long as core relationship is correct."
+}

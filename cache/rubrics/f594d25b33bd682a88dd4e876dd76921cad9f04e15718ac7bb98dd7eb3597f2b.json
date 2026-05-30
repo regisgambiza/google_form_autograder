@@ -1,0 +1,27 @@
+{
+  "required_concepts": [
+    "kite shape",
+    "diagonals of a kite"
+  ],
+  "optional_concepts": [],
+  "acceptable_paraphrases": [
+    "A kite with diagonals that intersect at right angles",
+    "Kite with perpendicular diagonals"
+  ],
+  "critical_errors": [
+    "mentioning equal sides without reference to diagonals",
+    "describing the kite as having parallel sides"
+  ],
+  "strict_keywords": [
+    "kite",
+    "diagonals",
+    "intersect",
+    "perpendicular"
+  ],
+  "misconceptions": [
+    "describing a kite with only one pair of adjacent equal sides",
+    "claiming that the diagonals are both bisected by each other",
+    "stating that all angles in a kite are equal"
+  ],
+  "grading_notes": "Ensure the answer references the key characteristics of a kite and its diagonals. Watch for common misconceptions related to side lengths and angle measures."
+}

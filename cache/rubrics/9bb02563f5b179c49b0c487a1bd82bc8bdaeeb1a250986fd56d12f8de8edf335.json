@@ -1,0 +1,27 @@
+{
+  "required_concepts": [
+    "circumference formula",
+    "radius"
+  ],
+  "optional_concepts": [],
+  "acceptable_paraphrases": [
+    "False because the circumference calculation",
+    "The hand moves a distance of approximately 37.7 cm",
+    "Circumference is less than 38 cm"
+  ],
+  "critical_errors": [
+    "confusing radius with diameter",
+    "incorrectly rounding to 38 cm"
+  ],
+  "strict_keywords": [
+    "circumference",
+    "radius",
+    "cm"
+  ],
+  "misconceptions": [
+    "believing the hand moves exactly 38 cm",
+    "rounding 37.7 cm up to 38 cm incorrectly",
+    "confusing radius with diameter in the formula"
+  ],
+  "grading_notes": "Students should understand that circumference is calculated as π times twice the radius, and recognize that rounding 37.7 cm to the nearest whole number is not correct."
+}

@@ -1,10 +1,12 @@
 import json
 import re
+import time
 from typing import Dict, Optional, Tuple
 
 import ollama
 
 from evaluator_config import load_config
+from logger import log
 
 
 def _extract_json(raw: str) -> dict:
@@ -23,6 +25,8 @@ def _extract_json(raw: str) -> dict:
 
 def invoke_reasoning_fallback(answer: str, question: str, rubric: Dict[str, object], judge_scores: Dict[str, float], model: Optional[str] = None) -> Tuple[str, float, str]:
     """Run reasoning fallback and strip hidden chain-of-thought tags."""
+    start = time.perf_counter()
+    log("INFO", f"START reasoning_fallback (model=gemma3:12b)")
     cfg = load_config()
     model = model or cfg.get("reasoning_model")
     prompt = (
@@ -44,8 +48,12 @@ def invoke_reasoning_fallback(answer: str, question: str, rubric: Dict[str, obje
         decision = str(data.get("decision", "NO")).strip().upper()
         if decision not in {"YES", "NO"}:
             decision = "NO"
+        duration_ms = (time.perf_counter() - start) * 1000
+        log("INFO", f"END reasoning_fallback duration_ms={duration_ms:.0f} decision={decision}")
         return decision, float(data.get("confidence", 0.5)), str(data.get("reason_short", "fallback"))
-    except Exception:
+    except Exception as ex:
+        duration_ms = (time.perf_counter() - start) * 1000
+        log("INFO", f"END reasoning_fallback duration_ms={duration_ms:.0f} decision=NO failed={ex}")
         return "NO", 0.5, "reasoning_fallback_failed"
 
 

@@ -1,0 +1,35 @@
+{
+  "required_concepts": [
+    "unit conversion",
+    "metric system"
+  ],
+  "optional_concepts": [
+    "decimal precision",
+    "unit notation"
+  ],
+  "acceptable_paraphrases": [
+    "39.3 m",
+    "39.3 m",
+    "39.3 cm",
+    "39.3 cm",
+    "39.3m",
+    "39.3 cm",
+    "39.3m"
+  ],
+  "critical_errors": [
+    "incorrect unit (e.g., feet/inches)",
+    "wrong numerical value (e.g., 39.25)",
+    "missing unit"
+  ],
+  "strict_keywords": [
+    "m",
+    "cm",
+    "39.3"
+  ],
+  "misconceptions": [
+    "confusing meters vs centimeters",
+    "incorrect decimal placement",
+    "non-metric unit usage"
+  ],
+  "grading_notes": "Units are mandatory for full credit. Numerical value must match 39.3 exactly. 39.25 is incorrect unless specified otherwise."
+}

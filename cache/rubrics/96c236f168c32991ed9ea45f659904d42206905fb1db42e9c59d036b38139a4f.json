@@ -1,0 +1,36 @@
+{
+  "required_concepts": [
+    "tangents",
+    "circle",
+    "radius",
+    "diameter"
+  ],
+  "optional_concepts": [
+    "parallel lines",
+    "distance between tangents"
+  ],
+  "acceptable_paraphrases": [
+    "Two tangents touch the circle",
+    "The diagram shows one circle with 2 tangent and a diameter",
+    "This circle has a radius of 2cm",
+    "There are 2 tangents",
+    "4 cm is the diameter of the circle"
+  ],
+  "critical_errors": [
+    "incorrect number of tangents",
+    "mentioning circumference instead of radius or diameter"
+  ],
+  "strict_keywords": [
+    "tangents",
+    "circle",
+    "radius",
+    "diameter"
+  ],
+  "misconceptions": [
+    "mentioning circumference without specifying radius or diameter",
+    "stating the circle has a half-diameter of 2 cm (indicating confusion about radius vs. diameter)",
+    "incorrectly stating the distance between tangents is the same as the radius",
+    "saying the distance between lines is 4 cm instead of 2 cm"
+  ],
+  "grading_notes": "Correct answers should include both tangents, specify the circle's radius or diameter (or use correct terminology), and indicate that the diagram shows a circle with two parallel tangent lines. Incorrectly stating the distance between lines as 4 cm would be considered a critical error."
+}

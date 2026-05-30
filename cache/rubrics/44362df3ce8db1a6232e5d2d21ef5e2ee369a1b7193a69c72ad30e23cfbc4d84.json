@@ -1,0 +1,27 @@
+{
+  "required_concepts": [
+    "11 edges",
+    "E=11"
+  ],
+  "optional_concepts": [],
+  "acceptable_paraphrases": [
+    "Shape C has eleven edges",
+    "The shape's edge count is 11",
+    "There are a total of 11 edges on the given shape"
+  ],
+  "critical_errors": [
+    "Incorrect number of edges (not 11)",
+    "Any other incorrect numerical value for edges"
+  ],
+  "strict_keywords": [
+    "edges",
+    "E=11",
+    "11"
+  ],
+  "misconceptions": [
+    "Numbering the edges in a way that does not equal 11 (e.g., listing 10, or fewer than 10 numbers multiple times)",
+    "Incorrectly stating there are '9' or '4' or '10' edges",
+    "Not understanding that E refers to edge count"
+  ],
+  "grading_notes": "Ensure the answer includes both the numerical value and its representation in E="
+}

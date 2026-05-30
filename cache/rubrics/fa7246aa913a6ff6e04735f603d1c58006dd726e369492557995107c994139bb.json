@@ -1,0 +1,33 @@
+{
+  "required_concepts": [
+    "octagon",
+    "lines of symmetry"
+  ],
+  "optional_concepts": [
+    "2c",
+    "8",
+    "symmetry"
+  ],
+  "acceptable_paraphrases": [
+    "8 lines of symmetry",
+    "an octagon has 8 lines of symmetry",
+    "the figure is an octagon with 8 lines of symmetry",
+    "it's an octagon and it has 8 lines of symmetry",
+    "the shape in question is an octagon with 8 symmetrical lines"
+  ],
+  "critical_errors": [
+    "incorrect number of lines of symmetry (not 8)",
+    "identifying the figure as something other than an octagon"
+  ],
+  "strict_keywords": [
+    "octagon",
+    "lines",
+    "symmetry"
+  ],
+  "misconceptions": [
+    "believing that all polygons have a fixed number of lines of symmetry",
+    "mistaking the shape for another polygon with fewer or more sides",
+    "mentioning incorrect number of lines of symmetry other than 8"
+  ],
+  "grading_notes": "Ensure the answer includes both the correct numerical value and description of the figure. Look out for students who might confuse this octagon with a square or a triangle."
+}

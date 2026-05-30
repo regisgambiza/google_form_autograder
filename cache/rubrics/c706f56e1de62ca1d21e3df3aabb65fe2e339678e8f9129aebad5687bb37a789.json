@@ -1,0 +1,28 @@
+{
+  "required_concepts": [
+    "conversion between units of length"
+  ],
+  "optional_concepts": [
+    "repeated measurement consistency"
+  ],
+  "acceptable_paraphrases": [
+    "8 centimeters",
+    "0.038 kilometers",
+    "38 decimeters"
+  ],
+  "critical_errors": [
+    "inconsistent measurements",
+    "incorrect conversion factors"
+  ],
+  "strict_keywords": [
+    "centimeters",
+    "meters",
+    "replication"
+  ],
+  "misconceptions": [
+    "using incorrect units (e.g., inches, feet)",
+    "mistaking centimeters for millimeters or decimeters",
+    "failing to recognize the significance of precision in measurements"
+  ],
+  "grading_notes": "Points should be awarded based on correct conversion and consistency. Incorrect unit usage will result in deduction."
+}

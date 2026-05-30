@@ -1,0 +1,36 @@
+{
+  "required_concepts": [
+    "circumference calculation",
+    "π approximation",
+    "rounding rules"
+  ],
+  "optional_concepts": [
+    "unit conversion",
+    "significant figures"
+  ],
+  "acceptable_paraphrases": [
+    "28.3 cm",
+    "28.26",
+    "28.5 cm",
+    "28.3",
+    "28.5"
+  ],
+  "critical_errors": [
+    "incorrect formula (e.g., area instead of circumference)",
+    "using π ≈ 3.1416 without rounding",
+    "no rounding applied"
+  ],
+  "strict_keywords": [
+    "circumference",
+    "π",
+    "radius",
+    "diameter",
+    "rounding"
+  ],
+  "misconceptions": [
+    "confusing diameter and radius",
+    "using π ≈ 3.1416 without rounding",
+    "miscalculating decimal places"
+  ],
+  "grading_notes": "Ensure correct formula (C=πd or C=2πr) and rounding to one decimal place. Accept minor variations from different π approximations (e.g., 3.14 vs 3.1416)."
+}

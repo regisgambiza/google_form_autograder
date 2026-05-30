@@ -1,0 +1,29 @@
+{
+  "required_concepts": [
+    "continuous data",
+    "examples of continuous variables"
+  ],
+  "optional_concepts": [
+    "measurement scales",
+    "real-world applications"
+  ],
+  "acceptable_paraphrases": [
+    "duration of shopping trip",
+    "length of time spent shopping",
+    "shopping time duration"
+  ],
+  "critical_errors": [
+    "discrete data examples",
+    "non-numeric measurements"
+  ],
+  "strict_keywords": [
+    "continuous",
+    "time",
+    "shopping"
+  ],
+  "misconceptions": [
+    "time is discrete",
+    "confusing categorical data with continuous"
+  ],
+  "grading_notes": "Ensure the answer explicitly identifies continuous data characteristics and avoids discrete measurements."
+}

@@ -1,11 +1,13 @@
 ﻿import json
 import math
 import os
+import time
 from typing import List
 
 import ollama
 
 from evaluator_config import load_config, sha256_text
+from logger import log
 
 PREFERRED_MODELS = ["mxbai-embed-large", "nomic-embed-text", "all-minilm"]
 
@@ -19,7 +21,11 @@ def get_embedding(text: str, model: str) -> List[float]:
     if os.path.exists(path):
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)["embedding"]
+    start = time.perf_counter()
+    log("INFO", f"START embedding_generate (model={model})")
     emb = ollama.embeddings(model=model, prompt=text, options={"num_ctx": num_ctx})["embedding"]
+    duration_ms = (time.perf_counter() - start) * 1000
+    log("INFO", f"END embedding_generate duration_ms={duration_ms:.0f} (model={model})")
     with open(path, "w", encoding="utf-8") as f:
         json.dump({"embedding": emb}, f)
     return emb

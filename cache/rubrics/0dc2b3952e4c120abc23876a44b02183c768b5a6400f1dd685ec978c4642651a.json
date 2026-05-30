@@ -1,0 +1,26 @@
+{
+  "required_concepts": [
+    "negation of a statement",
+    "truth value in logic"
+  ],
+  "optional_concepts": [
+    "contradiction in logical statements"
+  ],
+  "acceptable_paraphrases": [
+    "always false",
+    "false in all cases"
+  ],
+  "critical_errors": [
+    "stating it is sometimes true or can be true under certain conditions"
+  ],
+  "strict_keywords": [
+    "never",
+    "true"
+  ],
+  "misconceptions": [
+    "believing the statement could be true in some scenarios",
+    "thinking 'never' means always false but not never true",
+    "assuming it's a matter of degree rather than an absolute truth value"
+  ],
+  "grading_notes": "Ensure the answer uses clear and unambiguous language. Look for evidence that the student understands the concept of negation and absolute truth values."
+}

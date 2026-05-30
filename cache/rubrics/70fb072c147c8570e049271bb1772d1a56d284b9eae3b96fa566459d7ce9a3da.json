@@ -1,0 +1,34 @@
+{
+  "required_concepts": [
+    "parallelogram",
+    "rhombus"
+  ],
+  "optional_concepts": [
+    "rectangle",
+    "square"
+  ],
+  "acceptable_paraphrases": [
+    "quadrilateral with opposite sides parallel",
+    "a special type of parallelogram",
+    "having all four sides of equal length"
+  ],
+  "critical_errors": [
+    "trapezoid",
+    "kite",
+    "circle",
+    "triangle"
+  ],
+  "strict_keywords": [
+    "parallelogram",
+    "rhombus",
+    "rectangle",
+    "square"
+  ],
+  "misconceptions": [
+    "all rhombuses are squares",
+    "all rectangles are parallelograms but not all parallelograms are rectangles",
+    "a rhombus cannot be a square",
+    "the opposite sides of a rhombus are not parallel"
+  ],
+  "grading_notes": "Credit should be given for any correct classification that includes at least one form of the required concepts. Points may be deducted if critical errors are present or misconceptions are evident."
+}

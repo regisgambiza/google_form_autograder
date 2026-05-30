@@ -1,0 +1,28 @@
+{
+  "required_concepts": [
+    "measurement value",
+    "units"
+  ],
+  "optional_concepts": [],
+  "acceptable_paraphrases": [
+    "27 centimeters",
+    "27 cm in the diagram marked as C",
+    "Match the measurement of 27cm to option C"
+  ],
+  "critical_errors": [
+    "incorrect numerical value",
+    "absence of units (cm)"
+  ],
+  "strict_keywords": [
+    "27",
+    "cm",
+    "C"
+  ],
+  "misconceptions": [
+    "including extra decimal places like 27.00 cm",
+    "omitting the 'cm' unit",
+    "choosing an incorrect diagram option",
+    "writing in words instead of numeric format like twenty-seven cm"
+  ],
+  "grading_notes": "Ensure the answer includes both the correct number and unit, and that it matches the correct diagram option."
+}

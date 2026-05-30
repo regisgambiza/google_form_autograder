@@ -1,0 +1,34 @@
+{
+  "required_concepts": [
+    "Diameter calculation (2×radius)",
+    "Circumference formula (π×diameter)",
+    "Unit consistency (meters)"
+  ],
+  "optional_concepts": [
+    "Precision with π value (e.g., 3.1416)",
+    "Rounding conventions (e.g., 13.188→13.2)"
+  ],
+  "acceptable_paraphrases": [
+    "D=4.2, C=13.2",
+    "Radius:2.1, Diameter:4.2, Circumference:13.2",
+    "4.2m diameter → 13.2m circumference"
+  ],
+  "critical_errors": [
+    "Missing diameter/circumference values",
+    "Using radius instead of diameter in circumference calculation",
+    "Unit mismatch (e.g., cm vs meters)"
+  ],
+  "strict_keywords": [
+    "diameter",
+    "circumference",
+    "radius",
+    "meters",
+    "π"
+  ],
+  "misconceptions": [
+    "Circumference calculated as π×radius instead of π×diameter",
+    "Confusing radius (2.1) with diameter (4.2)",
+    "Ignoring unit conversion between cm/m"
+  ],
+  "grading_notes": "fallback rubric"
+}

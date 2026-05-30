@@ -1,0 +1,30 @@
+{
+  "required_concepts": [
+    "congruent triangles",
+    "corresponding sides equal"
+  ],
+  "optional_concepts": [
+    "rounding measurements",
+    "unit conversion (cm to mm)"
+  ],
+  "acceptable_paraphrases": [
+    "Yes, the triangles are congruent",
+    "The triangles are congruent because their corresponding sides are equal",
+    "Congruent means that the triangles have the same size and shape"
+  ],
+  "critical_errors": [
+    "inconsistent unit usage",
+    "incorrectly stating non-congruence when measurements round to the same value"
+  ],
+  "strict_keywords": [
+    "congruent",
+    "corresponding sides",
+    "equal lengths"
+  ],
+  "misconceptions": [
+    "Congruent triangles do not have to use the same units of measurement (e.g., cm and mm are acceptable as long as they round correctly)",
+    "The presence of a single line does not imply congruence",
+    "Equal angles alone do not guarantee congruence; corresponding sides must also be equal"
+  ],
+  "grading_notes": "Ensure that the answer clearly states that corresponding sides are equal, and consider units in context (rounding to the same value is acceptable). Avoid marking correct answers wrong for using different but equivalent units."
+}

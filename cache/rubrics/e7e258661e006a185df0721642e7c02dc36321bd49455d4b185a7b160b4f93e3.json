@@ -1,0 +1,34 @@
+{
+  "required_concepts": [
+    "continuous mass distribution",
+    "non-discrete mass",
+    "density as a continuous property"
+  ],
+  "optional_concepts": [
+    "integration for mass calculation",
+    "examples of continuous vs. discrete mass systems",
+    "fluid dynamics applications"
+  ],
+  "acceptable_paraphrases": [
+    "mass spread continuously",
+    "non-quantized mass distribution",
+    "continuous density variation"
+  ],
+  "critical_errors": [
+    "discrete mass description",
+    "quantized mass references",
+    "lack of continuity terminology"
+  ],
+  "strict_keywords": [
+    "continuous",
+    "distribution",
+    "mass",
+    "density"
+  ],
+  "misconceptions": [
+    "mass is only discrete",
+    "confusing quantized vs continuous systems",
+    "ignoring spatial distribution"
+  ],
+  "grading_notes": "Ensure the response explicitly addresses continuity in mass distribution. Penalize for incorrect terminology about mass quantization."
+}

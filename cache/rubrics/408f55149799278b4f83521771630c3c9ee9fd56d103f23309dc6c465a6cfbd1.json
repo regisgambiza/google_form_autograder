@@ -1,0 +1,37 @@
+{
+  "required_concepts": [
+    "A rectangle can have unequal adjacent sides",
+    "A rhombus requires all four sides to be equal",
+    "A kite does not have two pairs of opposite parallel sides"
+  ],
+  "optional_concepts": [
+    "Rectangles have four right angles",
+    "Kites and parallelograms are different in their side relationships"
+  ],
+  "acceptable_paraphrases": [
+    "A rectangle can be longer than a rhombus",
+    "Sides of a rectangle need not be equal",
+    "A square is a special type of rectangle but not all rectangles are squares",
+    "A rectangle with unequal adjacent sides does not have all sides equal"
+  ],
+  "critical_errors": [
+    "Stating or implying that a rectangle always has four equal sides",
+    "Incorrectly stating that opposite sides of a rectangle are parallel (unless contextually correct)"
+  ],
+  "strict_keywords": [
+    "rectangle",
+    "sides",
+    "equal",
+    "rhombus",
+    "kite",
+    "parallelogram"
+  ],
+  "misconceptions": [
+    "Confusing a rectangle with a square or rhombus",
+    "Thinking that all sides of a rectangle must be equal",
+    "Believing that a kite has two pairs of parallel sides",
+    "Incorrectly stating that rectangles always have the same height",
+    "Misunderstanding the properties of parallelograms and their differences from kites"
+  ],
+  "grading_notes": "Look for clear, specific references to the concepts. Acceptable paraphrases should be recognized as correct if they convey the necessary information. Penalize for mixing up properties or assuming conditions not stated in the question."
+}

@@ -1,0 +1,32 @@
+{
+  "required_concepts": [
+    "Statement",
+    "sometimes true",
+    "conditional truth"
+  ],
+  "optional_concepts": [
+    "variable conditions",
+    "context-dependent truth"
+  ],
+  "acceptable_paraphrases": [
+    "Can be true in some cases but not others",
+    "Depends on the situation",
+    "Truth varies based on context"
+  ],
+  "critical_errors": [
+    "Always true",
+    "Never true",
+    "Absolute certainty of truth"
+  ],
+  "strict_keywords": [
+    "sometimes",
+    "true",
+    "Statement"
+  ],
+  "misconceptions": [
+    "believes it is always true",
+    "thinks it is never true",
+    "confuses with absolute statements like 'always' or 'never'"
+  ],
+  "grading_notes": "Credit for including the idea of context-dependency. Deduct points for absolutist language."
+}

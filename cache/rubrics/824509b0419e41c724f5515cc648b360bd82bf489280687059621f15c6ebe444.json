@@ -1,0 +1,34 @@
+{
+  "required_concepts": [
+    "powers of two",
+    "multiplication of numbers ending in certain digits"
+  ],
+  "optional_concepts": [
+    "exponent rules",
+    "modular arithmetic"
+  ],
+  "acceptable_paraphrases": [
+    "(753 * 753) ends in 9",
+    "The square of a number ending in 3 results in a product ending in 9"
+  ],
+  "critical_errors": [
+    "Incorrect calculation of the power or modulus operation",
+    "Misinterpreting the base and exponent values"
+  ],
+  "strict_keywords": [
+    "753²",
+    "ends in 9",
+    "2⁸",
+    "2²",
+    "2⁹",
+    "1",
+    "2⁷",
+    "-1²"
+  ],
+  "misconceptions": [
+    "Believing the last digit is determined by the first digit of the number (753)",
+    "Incorrectly thinking the power operation affects the base 753 instead of focusing on the units place (3)",
+    "Forgetting to consider modular arithmetic or only focusing on full powers without considering last digits"
+  ],
+  "grading_notes": "Points should be awarded for correct use of keywords and concepts. Partial credit can be given for partial understanding, but critical errors must result in deduction."
+}

@@ -1,0 +1,31 @@
+{
+  "required_concepts": [
+    "radius",
+    "diameter",
+    "circumference"
+  ],
+  "optional_concepts": [
+    "formula for circumference (C = πD or C = 2πR)"
+  ],
+  "acceptable_paraphrases": [
+    "Radius: 2.1 m | Diameter: 4.2 m | Circumference: 13.2 m",
+    "The radius is 2.1 meters, the diameter is 4.2 meters, and the circumference is 13.2 meters.",
+    "r = 2.1m; d = 4.2m; C = 13.2m"
+  ],
+  "critical_errors": [
+    "Incorrect values for radius, diameter, or circumference",
+    "Use of incorrect units (e.g., cm instead of m)",
+    "Forgetting to include any required value (radius, diameter, circumference)"
+  ],
+  "strict_keywords": [
+    "Radius: 2.1m",
+    "Diameter: 4.2m",
+    "Circumference: 13.2m"
+  ],
+  "misconceptions": [
+    "Using incorrect formulas or values (e.g., R = 2.1, D = 8.4, C = 26.4)",
+    "Confusing the radius with the diameter or vice versa",
+    "Failing to include all required measurements (radius, diameter, and circumference)"
+  ],
+  "grading_notes": "Ensure that the student correctly identifies and uses the given radius or diameter to calculate the other values using appropriate formulas."
+}

@@ -1,0 +1,30 @@
+{
+  "required_concepts": [
+    "quadrilateral",
+    "parallel sides"
+  ],
+  "optional_concepts": [
+    "diagonals bisect at right angles",
+    "equal opposite sides"
+  ],
+  "acceptable_paraphrases": [
+    "shape with two pairs of parallel sides",
+    "opposite sides are equal and parallel"
+  ],
+  "critical_errors": [
+    "not a quadrilateral",
+    "sides not parallel",
+    "only one pair of parallel sides"
+  ],
+  "strict_keywords": [
+    "parallelogram",
+    "rhombus",
+    "parallel"
+  ],
+  "misconceptions": [
+    "all sides are equal but angles are not right angles",
+    "shape has only one pair of parallel sides",
+    "diagonals do not bisect at right angles"
+  ],
+  "grading_notes": "Parallelograms and rhombi both meet the criteria, with rhombus being a more specific case. Credit for either is acceptable."
+}

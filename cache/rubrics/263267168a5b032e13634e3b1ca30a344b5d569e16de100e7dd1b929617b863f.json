@@ -1,0 +1,27 @@
+{
+  "required_concepts": [
+    "Trapezium",
+    "Property b",
+    "B varies with C"
+  ],
+  "optional_concepts": [],
+  "acceptable_paraphrases": [
+    "trapezoid: none | property B | no | not applicable | c | C | - | B | B depends on C | property B is dependent on C | B varies as a function of C"
+  ],
+  "critical_errors": [
+    "Incorrect identification of the shape (not trapezium)",
+    "Presence of any non-zero values in 'none' fields",
+    "Absence or incorrect representation of 'B varies with C'"
+  ],
+  "strict_keywords": [
+    "trapezium",
+    "property b",
+    "B varies c"
+  ],
+  "misconceptions": [
+    "Assuming a constant B regardless of the value of C",
+    "Incorrectly indicating any property as 'none' when it should be present or vary with C",
+    "Misidentifying property relationships (e.g., stating B is independent of C)"
+  ],
+  "grading_notes": "Ensure that all required concepts are clearly stated. Acceptance of paraphrases allows for different phrasings but maintains the core meaning."
+}

@@ -1,0 +1,38 @@
+{
+  "required_concepts": [
+    "4 vertices",
+    "Euler's formula (V + F - E = 2)",
+    "number of faces (F)",
+    "number of edges (E)"
+  ],
+  "optional_concepts": [
+    "example of a shape with given properties"
+  ],
+  "acceptable_paraphrases": [
+    "4 corners",
+    "tetrahedron-like structure",
+    "closed 3D figure with 4 vertices and 6 edges",
+    "2 is the number calculated by Euler's formula"
+  ],
+  "critical_errors": [
+    "incorrect application of Euler's formula (V + F - E ≠ 2)",
+    "missing or incorrect calculation of face count (F)",
+    "wrong vertex, edge, or face count that does not fit with other given values"
+  ],
+  "strict_keywords": [
+    "4",
+    "vertices",
+    "edges",
+    "faces",
+    "V + F - E = 2",
+    "Euler's formula",
+    "polyhedron"
+  ],
+  "misconceptions": [
+    "confusing vertices with edges or faces",
+    "assuming a specific shape without given evidence",
+    "incorrectly applying formulas for planar shapes to 3D shapes",
+    "calculating only one part of the equation (V, F, E) but not using Euler's formula"
+  ],
+  "grading_notes": "Points should be deducted for any critical errors or misconceptions. Acceptable paraphrases and optional concepts can earn bonus points if included."
+}

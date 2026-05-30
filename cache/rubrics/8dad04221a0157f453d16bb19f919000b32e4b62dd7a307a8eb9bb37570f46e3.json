@@ -1,0 +1,25 @@
+{
+  "required_concepts": [
+    "Euler’s formula",
+    "vertices"
+  ],
+  "optional_concepts": [],
+  "acceptable_paraphrases": [
+    "Yes, Dylan is correct",
+    "Yeas he's right",
+    "He is correct",
+    "Yeah cus 10+12-20=2",
+    "10+12-20=2 Yes"
+  ],
+  "critical_keywords": [
+    "10+12-20=2",
+    "Yes"
+  ],
+  "misconceptions": [
+    "No, because it doesn’t follow Eulers formula",
+    "10-12+20=18"
+  ],
+  "grading_notes": "Ensure the answer includes the correct application of Euler's formula and the calculation. Accept minor variations in wording as long as the core concepts are covered.",
+  "critical_errors": [],
+  "strict_keywords": []
+}

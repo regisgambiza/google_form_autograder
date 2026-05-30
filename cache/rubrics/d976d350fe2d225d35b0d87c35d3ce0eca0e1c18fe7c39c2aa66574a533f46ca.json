@@ -1,0 +1,31 @@
+{
+  "required_concepts": [
+    "quadrilateral",
+    "two pairs of adjacent sides are equal",
+    "non-parallel opposite sides"
+  ],
+  "optional_concepts": [
+    "diagonals perpendicular to each other",
+    "one pair of opposite angles equal",
+    "axisymmetric figure"
+  ],
+  "acceptable_paraphrases": [
+    "tetragon with two distinct pairs of equal adjacent sides",
+    "a quadrilateral where only the edges, not the corners, are equally matched in pairs"
+  ],
+  "critical_errors": [
+    "identifying it as a parallelogram or rectangle",
+    "claiming all four sides are equal",
+    "stating that opposite sides are parallel"
+  ],
+  "strict_keywords": [
+    "kite",
+    "two pairs of adjacent sides"
+  ],
+  "misconceptions": [
+    "describing it as a square or rhombus",
+    "mentioning only one pair of equal sides",
+    "assuming diagonals bisect angles"
+  ],
+  "grading_notes": "Credit for including all required concepts and avoiding critical errors, with partial credit for optional concepts."
+}

@@ -1,0 +1,29 @@
+{
+  "required_concepts": [
+    "Discrete data is countable and has distinct categories with no in-between values",
+    "Age in years is recorded as whole numbers without fractions"
+  ],
+  "optional_concepts": [
+    "Examples of discrete measurement: 25 years old vs 25.5 years old",
+    "Contextual use of decimal precision in age measurement"
+  ],
+  "acceptable_paraphrases": [
+    "Countable whole numbers",
+    "Distinct categories with no intermediate values",
+    "Recorded as integers"
+  ],
+  "critical_errors": [
+    "Labeling age as continuous data",
+    "Ignoring the standard practice of whole-number recording"
+  ],
+  "strict_keywords": [
+    "Discrete",
+    "Countable",
+    "Whole numbers"
+  ],
+  "misconceptions": [
+    "Believing age can be measured with decimal precision in all contexts",
+    "Confusing discrete with continuous due to potential fractional measurements"
+  ],
+  "grading_notes": "Accept discrete/continuous debate but prioritize standard statistical classification. Penalize for ignoring whole-number recording convention."
+}

@@ -1,0 +1,28 @@
+{
+  "required_concepts": [
+    "kite has one pair of equal opposite angles",
+    "angles in a quadrilateral add up to 360°"
+  ],
+  "optional_concepts": [],
+  "acceptable_paraphrases": [
+    "A kite must have at least one pair of equal opposite angles",
+    "Kites cannot have all four angles different",
+    "The sum of the angles in any quadrilateral is 360 degrees"
+  ],
+  "critical_errors": [
+    "Angles are all different and not a kite",
+    "Total angle does not add to 360°"
+  ],
+  "strict_keywords": [
+    "kite",
+    "equal opposite angles",
+    "angles add up to 360°"
+  ],
+  "misconceptions": [
+    "A kite must have two pairs of equal angles",
+    "The sum of the given angles is correct and forms a kite",
+    "All four angles in a kite are different",
+    "Kite has one pair of opposite but not necessarily equal sides"
+  ],
+  "grading_notes": "Grading should focus on identifying the key concept that a kite must have at least one pair of equal opposite angles. Incorrect statements about the total sum or side lengths should be noted as misconceptions."
+}

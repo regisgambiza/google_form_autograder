@@ -1,0 +1,30 @@
+{
+  "required_concepts": [
+    "continuous variable",
+    "time measurement in sprints"
+  ],
+  "optional_concepts": [
+    "electronic timing systems",
+    "continuous vs. discrete variables"
+  ],
+  "acceptable_paraphrases": [
+    "continuous measurement",
+    "ongoing time tracking",
+    "uninterrupted timing"
+  ],
+  "critical_errors": [
+    "discrete variable",
+    "step counting",
+    "lack of time measurement mention"
+  ],
+  "strict_keywords": [
+    "continuous",
+    "time taken"
+  ],
+  "misconceptions": [
+    "time is discrete due to stopwatch precision",
+    "confusing with categorical variables",
+    "ignoring continuous nature of time"
+  ],
+  "grading_notes": "Prioritize correct identification of continuous measurement. Accept alternative phrasing but reject discrete variable claims. Ensure 'time taken' is explicitly addressed."
+}

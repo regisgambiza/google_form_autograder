@@ -1,0 +1,29 @@
+{
+  "required_concepts": [
+    "vertices",
+    "triangles have three sides"
+  ],
+  "optional_concepts": [
+    "sides of a triangle",
+    "corners of a triangle"
+  ],
+  "acceptable_paraphrases": [
+    "A triangle has 3 corners",
+    "There are 3 points in a triangle",
+    "A triangle is formed by 3 edges"
+  ],
+  "critical_errors": [
+    "more than three vertices",
+    "less than three vertices"
+  ],
+  "strict_keywords": [
+    "vertices",
+    "vertex"
+  ],
+  "misconceptions": [
+    "believing a triangle can have more or fewer than three vertices",
+    "confusing vertices with sides of the triangle",
+    "thinking all shapes have the same number of vertices"
+  ],
+  "grading_notes": "Ensure the answer explicitly mentions '3' and uses the term 'vertices'. Avoid accepting answers that describe sides or edges without relating them to vertices."
+}

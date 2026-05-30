@@ -1,0 +1,31 @@
+{
+  "required_concepts": [
+    "continuous data",
+    "examples of continuous variables"
+  ],
+  "optional_concepts": [
+    "measurement scales",
+    "real-world applications"
+  ],
+  "acceptable_paraphrases": [
+    "amount spent on purchases",
+    "expenditure on shopping",
+    "spending on retail items"
+  ],
+  "critical_errors": [
+    "identifying as discrete data",
+    "missing key terms like 'continuous' or 'money/shopping'"
+  ],
+  "strict_keywords": [
+    "continuous",
+    "money",
+    "shopping",
+    "variable"
+  ],
+  "misconceptions": [
+    "believing money spent is discrete due to currency units",
+    "confusing with categorical data types",
+    "assuming only whole numbers are valid"
+  ],
+  "grading_notes": "Ensure the answer explicitly identifies the example as continuous data. Acceptable paraphrasing is allowed but must maintain the core concept of continuous measurement."
+}

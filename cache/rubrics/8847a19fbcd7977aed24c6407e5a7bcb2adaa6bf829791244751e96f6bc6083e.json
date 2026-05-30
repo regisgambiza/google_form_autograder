@@ -1,0 +1,29 @@
+{
+  "required_concepts": [
+    "Pentagonal prism",
+    "Seven faces",
+    "Fifteen edges",
+    "Ten vertices"
+  ],
+  "optional_concepts": [],
+  "acceptable_paraphrases": [
+    "A pentagonal prism",
+    "Pentagonal prisim",
+    "Pentagon prism"
+  ],
+  "critical_errors": [
+    "Incorrect number of faces, edges or vertices"
+  ],
+  "strict_keywords": [
+    "Pentagonal prism",
+    "7 faces",
+    "15 edges",
+    "10 vertices"
+  ],
+  "misconceptions": [
+    "Confusing the number of faces, edges, or vertices with other polyhedra",
+    "Incorrectly stating the shape as a hexagonal base pyramid or similar incorrect names",
+    "Stating that it has only 2 pentagonal bases without mentioning the side faces"
+  ],
+  "grading_notes": "Ensure all required concepts are present. Acceptable paraphrases and minor variations in wording are fine, but critical errors like wrong numbers will fail the answer."
+}

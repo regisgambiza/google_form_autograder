@@ -1,0 +1,34 @@
+{
+  "required_concepts": [
+    "radius",
+    "diameter"
+  ],
+  "optional_concepts": [
+    "pi",
+    "π",
+    "mathematical constant pi",
+    "circle's diameter formula"
+  ],
+  "acceptable_paraphrases": [
+    "2 * 15.7 cm | 2*15.7cm | 2 times 15.7 cm",
+    "twice the radius is the diameter",
+    "diameter equals twice the radius"
+  ],
+  "critical_errors": [
+    "using incorrect units",
+    "incorrect multiplication by pi",
+    "mistakenly using circumference instead of diameter"
+  ],
+  "strict_keywords": [
+    "31.4",
+    "cm",
+    "centimeters",
+    "2a"
+  ],
+  "misconceptions": [
+    "confusing radius with diameter",
+    "believing the answer is a full circle's measurement",
+    "ignoring units entirely or using wrong ones like meters or inches"
+  ],
+  "grading_notes": "Award points for correct numerical value, appropriate use of 'cm', and clear expression. Deduct for unit errors or incorrect conceptual understanding."
+}

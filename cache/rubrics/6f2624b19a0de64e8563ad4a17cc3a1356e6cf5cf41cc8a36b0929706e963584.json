@@ -1,0 +1,29 @@
+{
+  "required_concepts": [
+    "Always true",
+    "54"
+  ],
+  "optional_concepts": [
+    "Mathematical proof",
+    "Numerical verification"
+  ],
+  "acceptable_paraphrases": [
+    "Always true",
+    "True in all cases",
+    "54 as the correct value",
+    "The statement holds for 54"
+  ],
+  "critical_errors": [
+    "Incorrect truth value (e.g., 'Sometimes true')",
+    "Wrong numerical value (e.g., 55)"
+  ],
+  "strict_keywords": [
+    "Always true",
+    "54"
+  ],
+  "misconceptions": [
+    "Believing the statement is conditionally true",
+    "Confusing 54 with another number"
+  ],
+  "grading_notes": "Ensure both the truth value and numerical answer are correct. Accept paraphrased versions of required concepts but penalize for incorrect keywords or values."
+}

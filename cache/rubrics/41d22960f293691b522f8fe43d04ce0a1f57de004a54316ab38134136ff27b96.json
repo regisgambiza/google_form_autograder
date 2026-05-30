@@ -1,0 +1,28 @@
+{
+  "required_concepts": [
+    "a is a measurement of length",
+    "the value is 10"
+  ],
+  "optional_concepts": [],
+  "acceptable_paraphrases": [
+    "a equals ten",
+    "a is equivalent to 10",
+    "the length represented by a is 10 units"
+  ],
+  "critical_errors": [
+    "a does not equal 10",
+    "a has no value"
+  ],
+  "strict_keywords": [
+    "a",
+    "equals",
+    "is",
+    "10",
+    "length"
+  ],
+  "misconceptions": [
+    "a represents a different numerical value",
+    "a is not related to length or measurement"
+  ],
+  "grading_notes": "Ensure the response includes both the correct numerical value and context of measurement (e.g., cm). Multiple units of 'cm' are acceptable."
+}

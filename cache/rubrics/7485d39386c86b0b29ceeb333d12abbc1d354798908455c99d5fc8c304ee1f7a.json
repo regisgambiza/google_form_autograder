@@ -1,0 +1,31 @@
+{
+  "required_concepts": [
+    "number of edges",
+    "E is the number of edges",
+    "12 edges"
+  ],
+  "optional_concepts": [
+    "8-6+4=6",
+    "e=2"
+  ],
+  "acceptable_paraphrases": [
+    "The polyhedron has twelve edges",
+    "Twelve are the total edges in this shape",
+    "A total of 12 lines make up the boundary of the solid"
+  ],
+  "critical_errors": [
+    "incorrect number of edges",
+    "missing E or e notation"
+  ],
+  "strict_keywords": [
+    "edges",
+    "E = 12",
+    "e = 2"
+  ],
+  "misconceptions": [
+    "believing a cube has more than 12 edges",
+    "confusing vertices with edges",
+    "assuming the shape is a pyramid instead of a polyhedron"
+  ],
+  "grading_notes": "Ensure that the student correctly identifies and states the number of edges, using appropriate notation. Acceptable paraphrases should convey the same meaning."
+}

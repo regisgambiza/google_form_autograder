@@ -1,0 +1,33 @@
+{
+  "required_concepts": [
+    "discrete data",
+    "countable values",
+    "whole numbers"
+  ],
+  "optional_concepts": [
+    "continuous data",
+    "measurement precision",
+    "real-world context"
+  ],
+  "acceptable_paraphrases": [
+    "countable values",
+    "whole number measurements",
+    "distinct increments"
+  ],
+  "critical_errors": [
+    "labeling as continuous",
+    "mentioning fractional ages",
+    "ignoring whole-number context"
+  ],
+  "strict_keywords": [
+    "discrete",
+    "countable",
+    "whole numbers"
+  ],
+  "misconceptions": [
+    "believing age can be measured in fractions",
+    "confusing discrete with continuous",
+    "assuming decimal precision is required"
+  ],
+  "grading_notes": "Emphasize that 'in years' explicitly refers to whole numbers. Fractional ages (e.g., 4.5) would make it continuous, but the question specifies annual measurement."
+}

@@ -1,0 +1,25 @@
+{
+  "required_concepts": [
+    "divisibility rule for 3",
+    "addition of digits"
+  ],
+  "optional_concepts": [],
+  "acceptable_paraphrases": [
+    "The numbers 102 and 222 are divisible by 3",
+    "Numbers 102, 222 can be divided by 3 without remainder",
+    "Only the numbers 102, 222 meet the criteria for divisibility by 3"
+  ],
+  "critical_keywords": [
+    "divisible",
+    "3",
+    "without remainder"
+  ],
+  "strict_keywords": [],
+  "misconceptions": [
+    "All given numbers are divisible by 3",
+    "Only one or more than two numbers out of the three provided are divisible by 3",
+    "The answer should include a number not in the list (e.g., 103, 222 is incorrect)"
+  ],
+  "grading_notes": "Correct answers must explicitly state that only 102 and 222 are divisible by 3. Any other combination or phrasing indicating divisibility of all numbers or a number not in the list will be considered incorrect.",
+  "critical_errors": []
+}
