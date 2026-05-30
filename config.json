@@ -7,14 +7,14 @@
     "jury_models": {
         "semantic_judge": "llama3.1:8b",
         "concept_judge": "llama3.1:8b",
-        "factual_judge": "llama3.1:8b",
+        "factual_judge": "gemma3:12b",
         "strict_judge": "llama3.1:8b",
         "misconception_judge": "llama3.1:8b",
         "language_filter": "llama3.1:8b"
     },
     "rubric_model": "llama3.1:8b",
     "embedding_model": "mxbai-embed-large",
-    "reasoning_model": "llama3.1:8b",
+    "reasoning_model": "deepseek-r1:8b",
     "leniency": "lenient",
     "leniency_note": "options: extreme, lenient, balanced, strict",
     "evaluator": "ai_evaluator_semantic",
@@ -47,7 +47,7 @@
         "embedding": 0.05
     },
     "ollama_options": {
-        "judge_num_ctx": 2048,
+        "judge_num_ctx": 4096,
         "rubric_num_ctx": 1024,
         "fallback_num_ctx": 4096
     },
