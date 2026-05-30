@@ -43,18 +43,20 @@ def _abstain(reason: str = "judge unavailable") -> Dict[str, object]:
 def parse_judge_response(raw: str) -> Dict[str, object]:
     """
     Single-pass JSON extraction. Clean architecture.
-    
+
     Returns defaults if parsing fails, allowing the pipeline to continue gracefully.
     """
     # Handle empty response
     if not raw or not raw.strip():
         return _abstain("empty_response")
-    
+
+    # Strip markdown code blocks (```json, ```python, etc.)
+    clean = re.sub(r"```[a-z]*\n(.*?)\n```", r"\1", raw, flags=re.IGNORECASE | re.DOTALL)
     # Strip think blocks (Qwen3) and tool_call tags
-    clean = re.sub(r"<think>.*?</think>", "", raw, flags=re.IGNORECASE | re.DOTALL)
+    clean = re.sub(r"<think>.*?</think>", "", clean, flags=re.IGNORECASE | re.DOTALL)
     clean = re.sub(r"<\|.*?\|>", "", clean, flags=re.DOTALL)  # strip tool_call tags
     clean = clean.strip()
-    
+
     # Try direct parse first (works if format= is respected)
     try:
         obj = json.loads(clean)
@@ -62,7 +64,7 @@ def parse_judge_response(raw: str) -> Dict[str, object]:
             return obj
     except json.JSONDecodeError:
         pass
-    
+
     # Fallback: find first { ... } block
     match = re.search(r"\{.*\}", clean, re.DOTALL)
     if match:
@@ -72,7 +74,7 @@ def parse_judge_response(raw: str) -> Dict[str, object]:
                 return obj
         except json.JSONDecodeError:
             pass
-    
+
     # Give up - return defaults for graceful degradation
     log("DEBUG", f"Failed to parse judge response, using defaults")
     log("DEBUG", f"  Raw content: {repr(raw)[:200]}")
