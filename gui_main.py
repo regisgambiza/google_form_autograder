@@ -11,7 +11,7 @@ from PyQt5.QtWidgets import (
 
 from PyQt5.QtCore import Qt, QDate, QTimer
 from PyQt5.QtGui import QColor, QBrush, QFont, QPalette
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, time
 import ctypes
 import atexit
 
@@ -23,6 +23,7 @@ from grader_thread import GraderThread
 from class_loader_thread import ClassLoaderThread
 import ollama
 from evaluator_config import DEFAULT_CONFIG
+from scheduler import scheduler as auto_scheduler
 
 BANGKOK_TZ = timezone(timedelta(hours=7))
 
@@ -48,7 +49,12 @@ class FormManager(QMainWindow):
         self.interval_seconds = 300
         self.folders = []
         self.last_check_time = None
-        
+
+        # Scheduler Settings
+        self.use_time_schedule = False
+        self.schedule_time_val = None
+        self.selected_days = [True] * 7  # All days by default
+
         # Thread safety flags
         self.is_searching = False
         self.is_grading = False
@@ -787,26 +793,108 @@ class FormManager(QMainWindow):
     def update_in_queue_label(self):
         self.in_queue_label.setText(f"⏳ In Queue: {self.form_list.count()}")
 
+    def _get_next_run_time(self):
+        """Calculate the next run time based on schedule settings"""
+        now = datetime.now(timezone.utc)
+        current_day = now.weekday()  # 0=Monday, 6=Sunday
+        
+        # Get the target time
+        if self.schedule_time_val:
+            target_hour = self.schedule_time_val.hour()
+            target_minute = self.schedule_time_val.minute()
+        else:
+            target_hour, target_minute = 9, 0  # Default to 9:00 AM
+        
+        # Find next day that matches the schedule
+        for days_ahead in range(8):  # Check next 8 days
+            test_day = (current_day + days_ahead) % 7
+            if self.selected_days[test_day]:  # If this day is selected
+                next_run = now.replace(hour=target_hour, minute=target_minute, second=0, microsecond=0)
+                # Add days_ahead to the date
+                next_run = next_run + timedelta(days=days_ahead)
+                if next_run > now:  # Only return if in the future
+                    return next_run
+        
+        # Fallback to interval-based if no valid time found
+        return now + timedelta(seconds=10)
+
+    def _should_run_now(self):
+        """Check if we should run based on current time and day"""
+        now = datetime.now(timezone.utc)
+        current_day = now.weekday()  # 0=Monday, 6=Sunday
+        current_time = time(now.hour, now.minute)
+        
+        # Check if today is selected
+        if not self.selected_days[current_day]:
+            return False
+        
+        # Check if we're within the scheduled time window (within 5 minutes of target time)
+        if self.schedule_time_val:
+            target_hour = self.schedule_time_val.hour()
+            target_minute = self.schedule_time_val.minute()
+            target_time = time(target_hour, target_minute)
+            
+            # Allow a 5-minute window around the target time
+            time_diff = abs((current_time.hour * 60 + current_time.minute) - 
+                          (target_time.hour * 60 + target_time.minute))
+            return time_diff <= 5
+        
+        # If no specific time set, allow running
+        return True
+
     def start_auto_mode(self):
         """Start auto mode - only call this once from dialog"""
         if self.auto_mode:
             self.append_debug("<font color='orange'>[AUTO] ⚠️ Auto mode already running</font>")
             return
-            
+
         self.auto_mode = True
         self.stop_button.show()
         self.run_button.setEnabled(False)
         self.append_debug("<b><font color='green'>AUTO RUN STARTED</font></b>")
         self.last_check_time = None
+
+        # Start the APScheduler-based scheduler
+        if self.use_time_schedule:
+            # Time-based scheduling
+            self._start_time_scheduler()
+        else:
+            # Interval-based scheduling using QTimer
+            self.append_debug("<font color='blue'>[AUTO] Using interval-based scheduling</font>")
+            self.schedule_next_cycle()
+
+    def _start_time_scheduler(self):
+        """Start time-based scheduling with APScheduler"""
+        self.append_debug(f"<font color='blue'>[AUTO] Starting time-based scheduler</font>")
+        self.append_debug(f"<font color='blue'>[AUTO] Time: {self.schedule_time_val.toString('HH:mm')}, Days: {[i for i, d in enumerate(self.selected_days) if d]}</font>")
         
-        # DON'T schedule auto_cycle here - let the dialog handle the first search
-        # The dialog will call run_grader() after the initial search completes
+        # Calculate initial delay until next scheduled time
+        next_run = self._get_next_run_time()
+        delay_seconds = max(10, (next_run - datetime.now(timezone.utc)).total_seconds())
+        
+        self.append_debug(f"<font color='blue'>[AUTO] Next scheduled run in {delay_seconds:.0f} seconds</font>")
+        
+        # Start the scheduler with the time-based job
+        auto_scheduler.start(
+            interval_minutes=self.interval_seconds // 60,
+            folders=self.folders,
+            recency_minutes=self.recency_minutes
+        )
 
     def auto_cycle(self):
         """Perform one auto-cycle: search for new forms, add them, and grade"""
         if not self.auto_mode or self.is_closing:
             return
-            
+
+        # Check if we should run based on time/day schedule
+        if self.use_time_schedule:
+            if not self._should_run_now():
+                next_run = self._get_next_run_time()
+                delay = (next_run - datetime.now(timezone.utc)).total_seconds()
+                self.append_debug(f"<font color='gray'>[AUTO] Skipping cycle - next scheduled run in {delay/60:.1f} minutes</font>")
+                self.schedule_next_cycle()
+                return
+
         # Prevent overlapping searches
         if self.is_searching:
             self.append_debug("<font color='orange'>[AUTO] ⚠️ Search already in progress, skipping cycle</font>")
@@ -888,19 +976,48 @@ class FormManager(QMainWindow):
             return
             
         minutes = self.interval_seconds // 60
-        next_check = datetime.now() + timedelta(seconds=self.interval_seconds)
-        next_str = next_check.strftime("%H:%M:%S")
-        self.append_debug(f"<font color='gray'>[AUTO] ⏰ Next check in {minutes} minute(s) at {next_str}</font>")
         
-        # Cancel any existing timer
-        if self.auto_timer:
-            self.auto_timer.stop()
-            self.auto_timer.deleteLater()
+        if self.use_time_schedule:
+            # Time-based scheduling
+            next_run = self._get_next_run_time()
+            delay_seconds = max(10, (next_run - datetime.now(timezone.utc)).total_seconds())
+            next_str = next_run.strftime("%a %H:%M:%S")
+            self.append_debug(f"<font color='gray'>[AUTO] ⏰ Next scheduled run in {delay_seconds:.0f}s at {next_str}</font>")
             
-        self.auto_timer = QTimer()
-        self.auto_timer.setSingleShot(True)
-        self.auto_timer.timeout.connect(self.auto_cycle)
-        self.auto_timer.start(self.interval_seconds * 1000)
+            # Schedule using QTimer for the delay
+            if self.auto_timer:
+                self.auto_timer.stop()
+                self.auto_timer.deleteLater()
+            
+            self.auto_timer = QTimer()
+            self.auto_timer.setSingleShot(True)
+            self.auto_timer.timeout.connect(self._on_scheduler_timeout)
+            self.auto_timer.start(int(delay_seconds * 1000))
+        else:
+            # Interval-based scheduling using QTimer
+            next_check = datetime.now() + timedelta(seconds=self.interval_seconds)
+            next_str = next_check.strftime("%H:%M:%S")
+            self.append_debug(f"<font color='gray'>[AUTO] ⏰ Next check in {minutes} minute(s) at {next_str}</font>")
+
+            # Cancel any existing timer
+            if self.auto_timer:
+                self.auto_timer.stop()
+                self.auto_timer.deleteLater()
+
+            self.auto_timer = QTimer()
+            self.auto_timer.setSingleShot(True)
+            self.auto_timer.timeout.connect(self.auto_cycle)
+            self.auto_timer.start(self.interval_seconds * 1000)
+
+    def _on_scheduler_timeout(self):
+        """Called when scheduler delay completes - triggers the cycle"""
+        if self.use_time_schedule:
+            # For time-based scheduling, run the cycle directly
+            self.append_debug("<font color='blue'>[AUTO] Scheduler timeout reached - starting cycle</font>")
+            self.auto_cycle()
+        else:
+            # For interval-based, use the standard cycle
+            self.auto_cycle()
 
     def stop_auto_mode(self):
         """Stop auto mode and clean up"""
@@ -908,23 +1025,26 @@ class FormManager(QMainWindow):
         self.stop_button.hide()
         self.run_button.setEnabled(True)
         self.append_debug("<b><font color='red'>AUTO RUN STOPPED</font></b>")
-        
+
         # Cancel timer
         if self.auto_timer:
             self.auto_timer.stop()
             self.auto_timer.deleteLater()
             self.auto_timer = None
-        
+
+        # Stop the APScheduler
+        auto_scheduler.stop()
+
         # Stop search thread if running
         if self.auto_search_thread and self.auto_search_thread.isRunning():
             self.auto_search_thread.terminate()
             self.auto_search_thread.wait(5000)
-        
+
         # Stop grader thread if running
         if self.grader_thread and self.grader_thread.isRunning():
             self.grader_thread.terminate()
             self.grader_thread.wait(5000)
-            
+
         self.is_searching = False
         self.is_grading = False
 

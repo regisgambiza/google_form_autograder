@@ -2,9 +2,9 @@
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLineEdit,
     QListWidget, QLabel, QDateEdit, QMessageBox,
-    QProgressDialog, QComboBox, QListWidgetItem
+    QProgressDialog, QComboBox, QListWidgetItem, QGroupBox, QCheckBox, QTimeEdit
 )
-from PyQt5.QtCore import Qt, QDate, QThread, pyqtSignal
+from PyQt5.QtCore import Qt, QDate, QTime, QThread, pyqtSignal
 from form_searcher import (
     load_predefined_folders,
     save_predefined_folders,
@@ -122,6 +122,37 @@ class AutoAddDialog(QDialog):
             interval_layout.addWidget(self.interval_unit)
             layout.addLayout(interval_layout)
 
+            # Scheduling options
+            schedule_layout = QVBoxLayout()
+            schedule_label = QLabel("Schedule Options:")
+            schedule_layout.addWidget(schedule_label)
+
+            # Time of day scheduling
+            time_layout = QHBoxLayout()
+            self.schedule_time_check = QCheckBox("Run at specific time(s):")
+            self.schedule_time_check.setChecked(False)
+            time_layout.addWidget(self.schedule_time_check)
+
+            time_layout.addWidget(QLabel("Time:"))
+            self.schedule_time = QTimeEdit()
+            self.schedule_time.setTime(QTime(9, 0))  # Default 9:00 AM
+            time_layout.addWidget(self.schedule_time)
+            schedule_layout.addLayout(time_layout)
+
+            # Days of week scheduling
+            days_layout = QHBoxLayout()
+            days_layout.addWidget(QLabel("Days:"))
+            self.days_checkboxes = []
+            day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+            for day in day_names:
+                cb = QCheckBox(day)
+                cb.setChecked(True)  # Default to all days
+                self.days_checkboxes.append(cb)
+                days_layout.addWidget(cb)
+            schedule_layout.addLayout(days_layout)
+
+            layout.addLayout(schedule_layout)
+
         self.search_btn = QPushButton(
             "Start Auto Run" if self.mode == 'auto' else "Search and Add Forms"
         )
@@ -191,6 +222,11 @@ class AutoAddDialog(QDialog):
             self.recency_minutes = recency_minutes
             self.interval_seconds = interval_seconds
             self.all_folders = all_folders
+
+            # Get scheduling options
+            self.use_time_schedule = self.schedule_time_check.isChecked()
+            self.schedule_time_val = self.schedule_time.time()
+            self.selected_days = [cb.isChecked() for cb in self.days_checkboxes]
         else:
             py_from_date = self.from_date.date().toPyDate()
             py_to_date = self.to_date.date().toPyDate()
@@ -250,10 +286,15 @@ class AutoAddDialog(QDialog):
             parent.recency_minutes = self.recency_minutes
             parent.interval_seconds = self.interval_seconds
             parent.folders = self.all_folders
-            
-            # Start auto mode (this sets up the mode but doesn't schedule cycles yet)
+
+            # Store scheduling options in parent
+            parent.use_time_schedule = getattr(self, 'use_time_schedule', False)
+            parent.schedule_time_val = getattr(self, 'schedule_time_val', None)
+            parent.selected_days = getattr(self, 'selected_days', [True]*7)
+
+            # Start auto mode
             parent.start_auto_mode()
-            
+
             # If forms were added, start grading immediately
             if added:
                 parent.run_grader()
