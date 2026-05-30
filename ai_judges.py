@@ -50,8 +50,8 @@ def parse_judge_response(raw: str) -> Dict[str, object]:
     if not raw or not raw.strip():
         return _abstain("empty_response")
 
-    # Strip markdown code blocks (```json, ```python, etc.)
-    clean = re.sub(r"```[a-z]*\n(.*?)\n```", r"\1", raw, flags=re.IGNORECASE | re.DOTALL)
+    # Strip markdown code blocks (```json, ```python, etc.) - handle both trailing backticks on same line or separate line
+    clean = re.sub(r"```[a-z]*\n(.*?)(?:\n```|```$)", r"\1", raw, flags=re.IGNORECASE | re.DOTALL)
     # Strip think blocks (Qwen3) and tool_call tags
     clean = re.sub(r"<think>.*?</think>", "", clean, flags=re.IGNORECASE | re.DOTALL)
     clean = re.sub(r"<\|.*?\|>", "", clean, flags=re.DOTALL)  # strip tool_call tags
@@ -61,7 +61,11 @@ def parse_judge_response(raw: str) -> Dict[str, object]:
     try:
         obj = json.loads(clean)
         if isinstance(obj, dict):
-            return obj
+            # Check if this is a valid format (has decision field)
+            if "decision" in obj:
+                return obj
+            # If it's valid JSON but not the expected format, try to map fields
+            return _map_response_to_required_fields(obj)
     except json.JSONDecodeError:
         pass
 
@@ -71,7 +75,11 @@ def parse_judge_response(raw: str) -> Dict[str, object]:
         try:
             obj = json.loads(match.group())
             if isinstance(obj, dict):
-                return obj
+                # Check if this is a valid format (has decision field)
+                if "decision" in obj:
+                    return obj
+                # If it's valid JSON but not the expected format, try to map fields
+                return _map_response_to_required_fields(obj)
         except json.JSONDecodeError:
             pass
 
@@ -79,6 +87,56 @@ def parse_judge_response(raw: str) -> Dict[str, object]:
     log("DEBUG", f"Failed to parse judge response, using defaults")
     log("DEBUG", f"  Raw content: {repr(raw)[:200]}")
     return _abstain("parse_failed")
+
+
+def _map_response_to_required_fields(obj: Dict[str, object]) -> Dict[str, object]:
+    """
+    Map various JSON response formats to the required fields.
+    Returns a dict with at least the 'decision' field set, others may remain defaults.
+    """
+    result = _abstain("partial_mapping")
+    
+    # Try to extract decision
+    decision = None
+    for key in ["decision", "is_correct", "coverage_score", "score"]:
+        if key in obj:
+            val = obj[key]
+            if isinstance(val, (bool, int, float)):
+                if key == "coverage_score":
+                    # coverage_score is a score, not decision
+                    result["confidence"] = float(val)
+                elif key == "score":
+                    # score might be a numeric score - convert to confidence
+                    result["confidence"] = min(1.0, float(val) / 100.0)
+                else:
+                    decision = "YES" if val in [True, 1, "true", "YES"] else "NO"
+            elif isinstance(val, str):
+                decision = val.upper() if val.upper() in ["YES", "NO", "ABSTAIN"] else None
+    
+    if decision:
+        result["decision"] = decision
+    
+    # Try to extract confidence
+    if "confidence" not in result or result["confidence"] == 0.0:
+        for key in ["confidence", "score", "coverage_score"]:
+            if key in obj and isinstance(obj[key], (int, float)):
+                val = float(obj[key])
+                if key == "score":
+                    val = min(1.0, val / 100.0)
+                result["confidence"] = max(0.0, min(1.0, val))
+    
+    # Try to extract other fields
+    for key, req_key in [
+        ("semantic_similarity", "semantic_similarity"),
+        ("concept_coverage", "concept_coverage"),
+        ("factual_accuracy", "factual_accuracy"),
+        ("language_error_ratio", "language_noise_ratio"),
+        ("language_error_percentage", "language_noise_ratio"),
+    ]:
+        if key in obj and isinstance(obj[key], (int, float)):
+            result[req_key] = max(0.0, min(1.0, float(obj[key]) / 100.0 if "percentage" in key else obj[key]))
+    
+    return result
 
 
 def _normalize_decision(d: Dict[str, object]) -> Dict[str, object]:
@@ -201,17 +259,20 @@ async def call_judge_async(
                 data = await resp.json()
 
             content = data.get("message", {}).get("content", "")
-            
+
             # Handle empty response
             if not content or content == "":
                 log("WARNING", f"Judge {role} attempt {attempt+1}/{retries}: Empty response from model")
                 continue
 
-            # Parse JSON - structured output returns dict, unstructured returns string
+            # Parse JSON using parse_judge_response (handles markdown code blocks)
             if isinstance(content, dict):
                 obj = content
             else:
-                obj = json.loads(content)
+                obj = parse_judge_response(content)
+                if not _valid(obj):
+                    log("WARNING", f"Judge {role} attempt {attempt+1}/{retries}: Invalid parsed response")
+                    continue
             
             obj = _normalize_decision(obj)
             obj = _fill_judge_defaults(obj)
@@ -306,7 +367,6 @@ def _run_judges_sync(
                 response = ollama.chat(
                     model=role_model,
                     options=_get_ollama_options(role),
-                    format=_get_judge_format(),
                     messages=[
                         {"role": "system", "content": JUDGE_PROMPTS[role]},
                         {"role": "user", "content": _make_judge_prompt(question, expected, answer, rubric)},
