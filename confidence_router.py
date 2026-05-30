@@ -43,7 +43,7 @@ def invoke_reasoning_fallback(answer: str, question: str, rubric: Dict[str, obje
         "No preamble. No explanation. Only the JSON object."
     )
     try:
-        raw = ollama.chat(model=model, messages=[{"role": "user", "content": prompt}])["message"]["content"]
+        raw = ollama.chat(model=model, messages=[{"role": "user", "content": prompt}], timeout=120)["message"]["content"]
         data = _extract_json(raw)
         decision = str(data.get("decision", "NO")).strip().upper()
         if decision not in {"YES", "NO"}:
