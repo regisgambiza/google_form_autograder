@@ -9,8 +9,8 @@
         "concept_judge": "gemma3:12b",
         "factual_judge": "gemma3:12b",
         "strict_judge": "gemma3:12b",
-        "misconception_judge": "deepseek-r1:8b",
-        "language_filter": "deepseek-r1:8b"
+        "misconception_judge": "gemma3:12b",
+        "language_filter": "gemma3:12b"
     },
     "rubric_model": "gemma3:12b",
     "embedding_model": "mxbai-embed-large",
