@@ -873,12 +873,13 @@ class FormManager(QMainWindow):
         delay_seconds = max(10, (next_run - datetime.now(timezone.utc)).total_seconds())
         
         self.append_debug(f"<font color='blue'>[AUTO] Next scheduled run in {delay_seconds:.0f} seconds</font>")
-        
+
         # Start the scheduler with the time-based job
         auto_scheduler.start(
             interval_minutes=self.interval_seconds // 60,
             folders=self.folders,
-            recency_minutes=self.recency_minutes
+            recency_minutes=self.recency_minutes,
+            grade_recent_only=(self.grading_mode == "Recent Only")
         )
 
     def auto_cycle(self):

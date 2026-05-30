@@ -6,19 +6,21 @@ from logger import log
 
 class AutoGraderScheduler:
     """Scheduler for automatic form grading cycles"""
-    
+
     def __init__(self):
         self.scheduler = None
         self.job = None
         self.running = False
+        self.last_run_time = None
         
-    def start(self, interval_minutes, folders, recency_minutes):
+    def start(self, interval_minutes, folders, recency_minutes, grade_recent_only=True):
         """Start the auto-grading scheduler
-        
+
         Args:
             interval_minutes: How often to check for new submissions
             folders: List of folder identifiers to search
-            recency_minutes: How far back to look for new submissions
+            recency_minutes: How far back to look for new submissions (initial scan only)
+            grade_recent_only: If True, only grade new submissions; if False, grade all submissions
         """
         try:
             from apscheduler.schedulers.background import BackgroundScheduler
@@ -72,28 +74,38 @@ class AutoGraderScheduler:
     def _run_cycle(self, folders, recency_minutes):
         """Execute one auto-cycle"""
         log("INFO", f"[AUTO CYCLE] Searching folders: {folders}")
-        
+
         try:
             from form_searcher import find_forms_with_submissions_in_range
-            
+
             now_utc = datetime.now(timezone.utc)
-            from_dt = now_utc - timedelta(minutes=recency_minutes)
-            
+
+            # Use last_run_time if available, otherwise use recency_minutes
+            if self.last_run_time:
+                from_dt = self.last_run_time
+                log("INFO", f"[AUTO CYCLE] Incremental scan from last run: {from_dt}")
+            else:
+                from_dt = now_utc - timedelta(minutes=recency_minutes)
+                log("INFO", f"[AUTO CYCLE] Initial scan: last {recency_minutes} minutes")
+
             log("INFO", f"[AUTO CYCLE] Search range: {from_dt} → {now_utc}")
-            
+
             forms = find_forms_with_submissions_in_range(
                 folders,
                 from_dt,
                 now_utc,
                 progress_callback=lambda msg: log("INFO", f"[AUTO CYCLE] {msg}")
             )
-            
+
             log("INFO", f"[AUTO CYCLE] Found {len(forms)} form(s) with new submissions")
-            
+
+            # Update last_run_time for next cycle
+            self.last_run_time = now_utc
+
             if forms:
                 # Add forms to forms_to_grade.json
                 self._add_forms_to_queue(forms)
-                
+
         except Exception as e:
             log("ERROR", f"[AUTO CYCLE] Error during cycle: {e}")
             
