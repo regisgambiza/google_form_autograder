@@ -337,6 +337,20 @@ class FormManager(QMainWindow):
         grading_mode_combo = QComboBox(dialog)
         grading_mode_combo.addItems(["Whole Form", "Recent Only"])
 
+        # Ollama options
+        judge_num_ctx_spin = QSpinBox(dialog)
+        judge_num_ctx_spin.setRange(512, 8192)
+        judge_num_ctx_spin.setValue(cfg.get("ollama_options", {}).get("judge_num_ctx", 2048))
+        judge_num_predict_spin = QSpinBox(dialog)
+        judge_num_predict_spin.setRange(64, 4096)
+        judge_num_predict_spin.setValue(cfg.get("ollama_options", {}).get("judge_num_predict", 256))
+        rubric_num_ctx_spin = QSpinBox(dialog)
+        rubric_num_ctx_spin.setRange(512, 4096)
+        rubric_num_ctx_spin.setValue(cfg.get("ollama_options", {}).get("rubric_num_ctx", 512))
+        rubric_num_predict_spin = QSpinBox(dialog)
+        rubric_num_predict_spin.setRange(64, 4096)
+        rubric_num_predict_spin.setValue(cfg.get("ollama_options", {}).get("rubric_num_predict", 512))
+
         ev = cfg.get("evaluator", "ai_evaluator")
         evaluator_combo.setCurrentIndex(0 if ev == "ai_evaluator" else (2 if ev == "ai_evaluator_semantic" else 1))
         leniency_combo.setCurrentText(cfg.get("leniency", "lenient"))
@@ -370,6 +384,22 @@ class FormManager(QMainWindow):
             label = role.replace('_', ' ').title()
             form.addRow(f"{label}:", combo)
         form.addRow("", report_checkbox)
+        
+        # Ollama options section
+        ollama_section = QWidget(dialog)
+        ollama_layout = QHBoxLayout(ollama_section)
+        ollama_layout.setContentsMargins(0, 0, 0, 0)
+        ollama_layout.addWidget(QLabel("Ollama Options:"))
+        ollama_layout.addWidget(QLabel("Judge Ctx:"))
+        ollama_layout.addWidget(judge_num_ctx_spin)
+        ollama_layout.addWidget(QLabel("Judge Pred:"))
+        ollama_layout.addWidget(judge_num_predict_spin)
+        ollama_layout.addWidget(QLabel("Rubric Ctx:"))
+        ollama_layout.addWidget(rubric_num_ctx_spin)
+        ollama_layout.addWidget(QLabel("Rubric Pred:"))
+        ollama_layout.addWidget(rubric_num_predict_spin)
+        form.addRow("", ollama_section)
+        
         batch_row = QWidget(dialog)
         bl = QHBoxLayout(batch_row)
         bl.setContentsMargins(0, 0, 0, 0)
@@ -439,6 +469,14 @@ class FormManager(QMainWindow):
                 config_data["batch_size"] = int(batch_size_spin.value())
 
             config_data["grading_mode"] = grading_mode_combo.currentText()
+
+            # Save Ollama options
+            ollama_options = config_data.get("ollama_options", {})
+            ollama_options["judge_num_ctx"] = judge_num_ctx_spin.value()
+            ollama_options["judge_num_predict"] = judge_num_predict_spin.value()
+            ollama_options["rubric_num_ctx"] = rubric_num_ctx_spin.value()
+            ollama_options["rubric_num_predict"] = rubric_num_predict_spin.value()
+            config_data["ollama_options"] = ollama_options
 
             # Save the updated grading mode to self
             self.grading_mode = config_data["grading_mode"]
