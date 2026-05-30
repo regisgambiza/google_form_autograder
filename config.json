@@ -1,18 +1,18 @@
 {
     "models": {
         "judge": [
-            "llama3.1:8b"
+            "gemma3:12b"
         ]
     },
     "jury_models": {
-        "semantic_judge": "llama3.1:8b",
-        "concept_judge": "llama3.1:8b",
+        "semantic_judge": "gemma3:12b",
+        "concept_judge": "gemma3:12b",
         "factual_judge": "gemma3:12b",
-        "strict_judge": "llama3.1:8b",
-        "misconception_judge": "llama3.1:8b",
-        "language_filter": "llama3.1:8b"
+        "strict_judge": "gemma3:12b",
+        "misconception_judge": "deepseek-r1:8b",
+        "language_filter": "deepseek-r1:8b"
     },
-    "rubric_model": "llama3.1:8b",
+    "rubric_model": "gemma3:12b",
     "embedding_model": "mxbai-embed-large",
     "reasoning_model": "deepseek-r1:8b",
     "leniency": "lenient",
