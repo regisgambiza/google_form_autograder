@@ -190,7 +190,6 @@ async def call_judge_async(
         ],
         "stream": False,
         "options": _get_ollama_options(role),
-        "format": _get_judge_format(),  # Structured output for reliable JSON
         "timeout": 180
     }
     
