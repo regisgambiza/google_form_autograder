@@ -46,8 +46,26 @@ def extract_form_id(form_url: str) -> str:
         raise ValueError(f"Invalid form URL: {form_url}") from exc
 
 
+def write_heartbeat():
+    """Write current timestamp to heartbeat file to indicate process is alive."""
+    try:
+        import json
+        from datetime import datetime, timezone
+        data = {
+            "last_update": datetime.now(timezone.utc).isoformat(),
+            "pid": os.getpid()
+        }
+        with open("heartbeat.json", "w") as f:
+            json.dump(data, f, indent=2)
+    except Exception:
+        pass  # Silent failure - heartbeat is not critical
+
+
 def main():
     log("INFO", "=== Google Form Autograder Started ===")
+
+    # Write initial heartbeat
+    write_heartbeat()
 
     # Check if we should grade only recent submissions
     grade_recent_only = os.environ.get("GRADE_RECENT_ONLY", "false").lower() == "true"
@@ -93,6 +111,9 @@ def main():
             form_start = time.perf_counter()
             form_id = extract_form_id(form_url)
             log("INFO", f"[{idx}/{total_forms}] Processing → {form_id}")
+
+            # Write heartbeat before processing form
+            write_heartbeat()
 
             # Fetch form structure
             form_structure = get_form_structure(service, form_id)
@@ -159,6 +180,10 @@ def main():
                 processed_responses += len(q_data["responses"])
                 print(f"FormProgress: {processed_responses}/{total_responses}")
 
+                # Write heartbeat periodically (every 10 responses or at least every 30 seconds)
+                if processed_responses % 10 == 0:
+                    write_heartbeat()
+
                 if correct and q["type"] in text_types:
                     dups = update_correct_answers(service, form_id, q["itemId"], correct, q["index"])
                     if dups:
@@ -169,7 +194,10 @@ def main():
             log("INFO", f"Timing Form {form_id}: {form_elapsed:.2f}s total")
             if duplicates_found:
                 print(f"\n=== Duplicate answers in {form_id}: {duplicates_found} ===\n")
-            
+
+            # Write final heartbeat after form completion
+            write_heartbeat()
+
             # Save grading timestamp for this form (for "recent only" mode next time)
             save_grading_time(form_id, datetime.now(timezone.utc))
 
@@ -181,6 +209,10 @@ def main():
             print(f"ERROR processing {form_url}: {error_detail}")
 
     log("INFO", "=== All forms processed. Autograder finished successfully ===")
+    
+    # Write final heartbeat before exit
+    write_heartbeat()
+    
     sys.exit(0)
 
 
