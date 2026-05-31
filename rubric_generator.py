@@ -2,6 +2,8 @@ import json
 import os
 import re
 import time
+import threading
+import queue
 from typing import Dict, Optional
 
 import ollama
@@ -167,55 +169,68 @@ def generate_rubric(question: str, expected: str, model: Optional[str] = None) -
     start = time.perf_counter()
     log("INFO", f"START rubric_generate (model={model})")
 
-    # Use structured output format for reliable JSON
-    rubric_format = {
-        "type": "object",
-        "properties": {
-            "required_concepts": {"type": "array", "items": {"type": "string"}},
-            "optional_concepts": {"type": "array", "items": {"type": "string"}},
-            "acceptable_paraphrases": {"type": "array", "items": {"type": "string"}},
-            "critical_errors": {"type": "array", "items": {"type": "string"}},
-            "strict_keywords": {"type": "array", "items": {"type": "string"}},
-            "misconceptions": {"type": "array", "items": {"type": "string"}},
-            "grading_notes": {"type": "string"}
-        },
-        "required": REQUIRED_KEYS,
-        "additionalProperties": False
-    }
-
-    try:
-        r = ollama.chat(
-            model=model,
-            options={"num_ctx": num_ctx},
-            format=rubric_format,  # Structured output
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": f"Question: {question}\nExpected: {expected}"},
-            ],
-        )
-        # With format parameter, r["message"]["content"] is already a dict
-        raw_content = r.get("message", {}).get("content", "")
-        
-        if isinstance(raw_content, dict):
-            data = raw_content
-        else:
-            data = _extract_json_object(raw_content)
-            
-        if not isinstance(data, dict):
-            raise ValueError("Extracted rubric is not a JSON object")
-        # Unpack nested rubrics if the model wrapped it (e.g. {"rubric": {...}})
-        if len(data) == 1 and list(data.keys())[0].lower() in {"rubric", "gradingrubric", "grading_rubric"}:
-            inner = list(data.values())[0]
-            if isinstance(inner, dict):
-                data = inner
-        data = _fill_rubric_defaults(data, expected)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        return data
-    except Exception as ex:
-        log("WARNING", f"Rubric generation failed; using fallback: {ex}")
-        return fallback
-    finally:
+    # Use thread with timeout to prevent hanging on Ollama call
+    result_queue = queue.Queue()
+    exception_queue = queue.Queue()
+    
+    def call_ollama():
+        try:
+            r = ollama.chat(
+                model=model,
+                options={"num_ctx": num_ctx},
+                format=rubric_format,  # Structured output
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": f"Question: {question}\nExpected: {expected}"},
+                ],
+            )
+            result_queue.put(("success", r))
+        except Exception as e:
+            exception_queue.put(e)
+            result_queue.put(("exception", None))
+    
+    # 60 second timeout for rubric generation
+    thread = threading.Thread(target=call_ollama, daemon=True)
+    thread.start()
+    thread.join(60)
+    
+    if thread.is_alive():
+        log("WARNING", f"Rubric generation timed out after 60s for model={model}, using fallback")
         duration_ms = (time.perf_counter() - start) * 1000
         log("INFO", f"END rubric_generate duration_ms={duration_ms:.0f} (model={model})")
+        return fallback
+    
+    if not exception_queue.empty():
+        ex = exception_queue.get()
+        log("WARNING", f"Rubric generation failed; using fallback: {ex}")
+        duration_ms = (time.perf_counter() - start) * 1000
+        log("INFO", f"END rubric_generate duration_ms={duration_ms:.0f} (model={model})")
+        return fallback
+    
+    success, r = result_queue.get()
+    if success != "success":
+        log("WARNING", "Rubric generation failed; using fallback")
+        duration_ms = (time.perf_counter() - start) * 1000
+        log("INFO", f"END rubric_generate duration_ms={duration_ms:.0f} (model={model})")
+        return fallback
+
+    # With format parameter, r["message"]["content"] is already a dict
+    raw_content = r.get("message", {}).get("content", "")
+
+    if isinstance(raw_content, dict):
+        data = raw_content
+    else:
+        data = _extract_json_object(raw_content)
+
+    if not isinstance(data, dict):
+        raise ValueError("Extracted rubric is not a JSON object")
+    # Unpack nested rubrics if the model wrapped it (e.g. {"rubric": {...}})
+    if len(data) == 1 and list(data.keys())[0].lower() in {"rubric", "gradingrubric", "grading_rubric"}:
+        inner = list(data.values())[0]
+        if isinstance(inner, dict):
+            data = inner
+    data = _fill_rubric_defaults(data, expected)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    return data
 

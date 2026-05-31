@@ -258,7 +258,7 @@ async def call_judge_async(
     """Call a judge using Ollama with structured output."""
     start = time.perf_counter()
     log("INFO", f"START judge_{role} (model={model})")
-    
+
     payload = {
         "model": model,
         "messages": [
@@ -269,7 +269,9 @@ async def call_judge_async(
         "options": _get_ollama_options(role),
         "timeout": 180
     }
-    
+
+    TIMEOUT_SECONDS = 60  # Shorter timeout for judge calls
+
     for attempt in range(retries):
         try:
             async with session.post("http://localhost:11434/api/chat", json=payload, timeout=180) as resp:
@@ -348,7 +350,12 @@ async def run_all_judges_with_early_exit(
         
         results: List[Dict[str, object]] = []
         for done in asyncio.as_completed(tasks):
-            r = await done
+            try:
+                # Add 60 second timeout per judge
+                r = await asyncio.wait_for(done, timeout=60)
+            except asyncio.TimeoutError:
+                log("WARNING", "Judge call timed out, using ABSTAIN")
+                r = _abstain("timeout")
             results.append(r)
             
             # Early exit check
@@ -376,13 +383,22 @@ def _run_judges_sync(
     retries: int
 ) -> List[Dict[str, object]]:
     """Synchronous judge execution (fallback when aiohttp unavailable)."""
-    out: List[Dict[str, object]] = []
+    import threading
+    import queue
     
+    out: List[Dict[str, object]] = []
+    TIMEOUT_SECONDS = 60  # Timeout for each judge call
+
     for role in JUDGE_PROMPTS:
         role_model = jury_models.get(role)
         start = time.perf_counter()
         log("INFO", f"START judge_{role} (model={role_model})")
-        for i in range(retries):
+        
+        # Use a queue to get result from thread
+        result_queue = queue.Queue()
+        exception_queue = queue.Queue()
+        
+        def call_ollama():
             try:
                 response = ollama.chat(
                     model=role_model,
@@ -392,24 +408,51 @@ def _run_judges_sync(
                         {"role": "user", "content": _make_judge_prompt(question, expected, answer, rubric)},
                     ],
                 )
-                
-                raw = response.get("message", {}).get("content", "")
-                obj = parse_judge_response(raw) if isinstance(raw, str) else raw
+                result_queue.put(("success", response))
+            except Exception as e:
+                exception_queue.put(e)
+                result_queue.put(("exception", None))
+        
+        # Run in thread with timeout
+        thread = threading.Thread(target=call_ollama, daemon=True)
+        thread.start()
+        thread.join(TIMEOUT_SECONDS)
+        
+        if thread.is_alive():
+            log("WARNING", f"Judge {role} timed out after {TIMEOUT_SECONDS}s, falling back to ABSTAIN")
+            duration_ms = (time.perf_counter() - start) * 1000
+            _log_judge_result(role, role_model, duration_ms, "ABSTAIN", 0.0)
+            out.append(_abstain("timeout"))
+            continue
+            
+        if not exception_queue.empty():
+            ex = exception_queue.get()
+            log("WARNING", f"Judge {role} sync attempt failed: {ex}")
+            duration_ms = (time.perf_counter() - start) * 1000
+            _log_judge_result(role, role_model, duration_ms, "ABSTAIN", 0.0)
+            out.append(_abstain("exception"))
+            continue
+            
+        success, response = result_queue.get()
+        if success == "success":
+            raw = response.get("message", {}).get("content", "")
+            obj = parse_judge_response(raw) if isinstance(raw, str) else raw
 
-                obj = _normalize_decision(obj)
-                obj = _fill_judge_defaults(obj)
-                if _valid(obj):
-                    duration_ms = (time.perf_counter() - start) * 1000
-                    _log_judge_result(role, role_model, duration_ms, obj.get("decision", "ABSTAIN"), obj.get("confidence", 0.0))
-                    out.append(obj)
-                    break
-            except Exception as ex:
-                log("WARNING", f"Judge {role} sync attempt {i+1}/{retries} failed: {ex}")
+            obj = _normalize_decision(obj)
+            obj = _fill_judge_defaults(obj)
+            if _valid(obj):
+                duration_ms = (time.perf_counter() - start) * 1000
+                _log_judge_result(role, role_model, duration_ms, obj.get("decision", "ABSTAIN"), obj.get("confidence", 0.0))
+                out.append(obj)
+            else:
+                duration_ms = (time.perf_counter() - start) * 1000
+                _log_judge_result(role, role_model, duration_ms, "ABSTAIN", 0.0)
+                out.append(_abstain("invalid_response"))
         else:
             duration_ms = (time.perf_counter() - start) * 1000
             _log_judge_result(role, role_model, duration_ms, "ABSTAIN", 0.0)
-            out.append(_abstain("retries_exhausted"))
-    
+            out.append(_abstain("unknown_error"))
+            
     return out
 
 

@@ -2,6 +2,8 @@
 import math
 import os
 import time
+import threading
+import queue
 from datetime import datetime, timezone
 from typing import List
 
@@ -39,9 +41,37 @@ def get_embedding(text: str, model: str) -> List[float]:
     if os.path.exists(path):
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)["embedding"]
+    
     start = time.perf_counter()
     log("INFO", f"START embedding_generate (model={model})")
-    emb = ollama.embeddings(model=model, prompt=text, options={"num_ctx": num_ctx})["embedding"]
+
+    result_queue = queue.Queue()
+    exception_queue = queue.Queue()
+    
+    def call_ollama():
+        try:
+            emb = ollama.embeddings(model=model, prompt=text, options={"num_ctx": num_ctx})["embedding"]
+            result_queue.put(("success", emb))
+        except Exception as e:
+            exception_queue.put(e)
+            result_queue.put(("exception", None))
+    
+    thread = threading.Thread(target=call_ollama, daemon=True)
+    thread.start()
+    thread.join(60)  # 60 second timeout
+    
+    if thread.is_alive():
+        log("WARNING", f"Embedding generation timed out after 60s for model={model}")
+        raise TimeoutError("Embedding generation timed out")
+    
+    if not exception_queue.empty():
+        ex = exception_queue.get()
+        raise ex
+    
+    success, emb = result_queue.get()
+    if success != "success":
+        raise Exception("Ollama embedding call failed")
+        
     duration_ms = (time.perf_counter() - start) * 1000
     log("INFO", f"END embedding_generate duration_ms={duration_ms:.0f} (model={model})")
     with open(path, "w", encoding="utf-8") as f:
