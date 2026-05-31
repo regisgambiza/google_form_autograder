@@ -36,7 +36,8 @@ def timeout_safe_sympify(expr: str, timeout_seconds: int = 3) -> Optional:
         return None
     
     if exception[0] is not None:
-        log("DEBUG", f"sympify error for '{expr}': {exception[0]}")
+        # Don't log every parse error - they're expected with messy student answers
+        # log("DEBUG", f"sympify error for '{expr}': {exception[0]}")
         return None
     
     return result[0]
