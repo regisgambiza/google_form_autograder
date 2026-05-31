@@ -10,6 +10,9 @@ from sympy import simplify, sympify
 from normalization import normalize
 from logger import log
 
+# Reduce log flood: deterministic checks run at very high frequency.
+_DET_LOG_VERBOSITY = "errors_only"  # options: verbose, errors_only
+
 
 class TimeoutError(Exception):
     """Custom timeout exception."""
@@ -138,7 +141,8 @@ def run_deterministic_checks(answer: str, expected: Union[str, List[str]], numer
         total_timeout: Maximum total time in seconds for all checks
     """
     start = time.perf_counter()
-    log("INFO", f"START deterministic_checks (answer_len={len(answer)}, expected_count={1 if isinstance(expected, str) else len(expected)})")
+    if _DET_LOG_VERBOSITY == "verbose":
+        log("INFO", f"START deterministic_checks (answer_len={len(answer)}, expected_count={1 if isinstance(expected, str) else len(expected)})")
     exp_list = expected if isinstance(expected, list) else [expected]
     na = normalize(answer)
     ne_list = [normalize(e) for e in exp_list]
@@ -151,7 +155,8 @@ def run_deterministic_checks(answer: str, expected: Union[str, List[str]], numer
 
     if na in ne_list:
         duration_ms = (time.perf_counter() - start) * 1000
-        log("INFO", f"END deterministic_checks duration_ms={duration_ms:.0f} method=exact_normalized accepted=True")
+        if _DET_LOG_VERBOSITY == "verbose":
+            log("INFO", f"END deterministic_checks duration_ms={duration_ms:.0f} method=exact_normalized accepted=True")
         return DeterministicResult(True, 1.0, "exact_normalized")
 
     # Check timeout after normalized check (30% of total time)
@@ -164,7 +169,8 @@ def run_deterministic_checks(answer: str, expected: Union[str, List[str]], numer
         matches = sum(1 for e in expected if normalize(e) in na)
         if matches == len(expected) and matches > 0:
             duration_ms = (time.perf_counter() - start) * 1000
-            log("INFO", f"END deterministic_checks duration_ms={duration_ms:.0f} method=multiple_answer accepted=True")
+            if _DET_LOG_VERBOSITY == "verbose":
+                log("INFO", f"END deterministic_checks duration_ms={duration_ms:.0f} method=multiple_answer accepted=True")
             return DeterministicResult(True, 0.97, "multiple_answer")
 
     for exp in exp_list:
@@ -179,16 +185,19 @@ def run_deterministic_checks(answer: str, expected: Union[str, List[str]], numer
             ev = float(ef)
             if av == ev:
                 duration_ms = (time.perf_counter() - start) * 1000
-                log("INFO", f"END deterministic_checks duration_ms={duration_ms:.0f} method=numeric_equivalence accepted=True")
+                if _DET_LOG_VERBOSITY == "verbose":
+                    log("INFO", f"END deterministic_checks duration_ms={duration_ms:.0f} method=numeric_equivalence accepted=True")
                 return DeterministicResult(True, 0.99, "numeric_equivalence")
             if ev != 0 and abs(av - ev) / abs(ev) <= numeric_tolerance:
                 duration_ms = (time.perf_counter() - start) * 1000
-                log("INFO", f"END deterministic_checks duration_ms={duration_ms:.0f} method=numeric_tolerance accepted=True")
+                if _DET_LOG_VERBOSITY == "verbose":
+                    log("INFO", f"END deterministic_checks duration_ms={duration_ms:.0f} method=numeric_tolerance accepted=True")
                 return DeterministicResult(True, 0.98, "numeric_tolerance")
 
         if algebra_equal(answer, exp):
             duration_ms = (time.perf_counter() - start) * 1000
-            log("INFO", f"END deterministic_checks duration_ms={duration_ms:.0f} method=algebraic_equivalence accepted=True")
+            if _DET_LOG_VERBOSITY == "verbose":
+                log("INFO", f"END deterministic_checks duration_ms={duration_ms:.0f} method=algebraic_equivalence accepted=True")
             return DeterministicResult(True, 0.98, "algebraic_equivalence")
 
         if "=" in answer and "=" in exp:
@@ -204,16 +213,19 @@ def run_deterministic_checks(answer: str, expected: Union[str, List[str]], numer
                 diff = timeout_safe_simplify((a_l - a_r) - (e_l - e_r), timeout_seconds=5)
                 if diff is not None and diff == 0:
                     duration_ms = (time.perf_counter() - start) * 1000
-                    log("INFO", f"END deterministic_checks duration_ms={duration_ms:.0f} method=equation_equivalence accepted=True")
+                    if _DET_LOG_VERBOSITY == "verbose":
+                        log("INFO", f"END deterministic_checks duration_ms={duration_ms:.0f} method=equation_equivalence accepted=True")
                     return DeterministicResult(True, 0.97, "equation_equivalence")
             except Exception:
                 pass
 
         if re.search(r"\(\s*[-\d\.]+\s*,\s*[-\d\.]+\s*\)", exp) and re.search(r"<\s*x\s*<", answer.lower()):
             duration_ms = (time.perf_counter() - start) * 1000
-            log("INFO", f"END deterministic_checks duration_ms={duration_ms:.0f} method=interval_equivalence accepted=True")
+            if _DET_LOG_VERBOSITY == "verbose":
+                log("INFO", f"END deterministic_checks duration_ms={duration_ms:.0f} method=interval_equivalence accepted=True")
             return DeterministicResult(True, 0.96, "interval_equivalence")
     
     duration_ms = (time.perf_counter() - start) * 1000
-    log("INFO", f"END deterministic_checks duration_ms={duration_ms:.0f} method=none accepted=False")
+    if _DET_LOG_VERBOSITY == "verbose":
+        log("INFO", f"END deterministic_checks duration_ms={duration_ms:.0f} method=none accepted=False")
     return DeterministicResult(False, 0.0, "none")

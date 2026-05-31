@@ -1179,6 +1179,12 @@ class FormManager(QMainWindow):
             self.ai_output.append(message)
         if "[Worker: Aggregator]" in message:
             self.agg_output.append(message)
+        # Global dispatcher logs (fallback routing when worker tags are absent).
+        if "[DISPATCH METRICS]" in message or "[DISPATCH]" in message:
+            self.producer_output.append(message)
+            self.det_output.append(message)
+            self.ai_output.append(message)
+            self.agg_output.append(message)
 
 
     def _update_worker_metrics_label(self, message):

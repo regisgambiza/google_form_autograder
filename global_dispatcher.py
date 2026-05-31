@@ -59,6 +59,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
     max_latency = float(cfg.get("max_latency_per_answer_seconds", 30.0))
     read_rate_per_min = float(cfg.get("forms_expensive_reads_per_minute", 160))
     stall_timeout_s = float(cfg.get("dispatcher_stall_timeout_seconds", 90))
+    deterministic_timeout_s = float(cfg.get("deterministic_check_timeout_seconds", 6))
     bucket = TokenBucket(rate_per_sec=read_rate_per_min / 60.0, capacity=max(5, int(read_rate_per_min / 4)))
 
     queue_size = max(200, int(cfg.get("worker_queue_size", 4000)))
@@ -83,6 +84,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
     metrics_lock = threading.Lock()
     counters = {"fetch": 0, "det": 0, "ai": 0, "apply": 0}
     progress = {"expected_tasks": 0, "completed": 0, "last_progress_ts": time.time(), "pending_buffer": 0}
+    queue_progress = {"last_any_work_ts": time.time(), "last_snapshot": (0, 0, 0, 0)}
     task_builder_metrics = {"built": 0, "enqueued": 0, "last_emit": time.time()}
     task_builder_log_path = str(cfg.get("task_builder_log_path", "task_builder_metrics.jsonl"))
     task_builder_log_enabled = bool(cfg.get("task_builder_log_enabled", True))
@@ -145,6 +147,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
         return {"idx": i, "url": url, "form_id": form_id, "title": title, "structure": structure, "form_data": form, "responses": responses}
 
     def fetch_stage():
+        log("INFO", "[Worker: Producer] START fetch_stage")
         try:
             with ThreadPoolExecutor(max_workers=fetch_workers) as ex:
                 futs = [ex.submit(fetch_form, i + 1, u) for i, u in enumerate(form_urls)]
@@ -159,12 +162,14 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                     except Exception as exx:
                         log("ERROR", f"[DISPATCH] fetch failed: {exx}")
             fetch_out.put(None, timeout=2)
+            log("INFO", "[Worker: Producer] DONE fetch_stage")
         except Exception as ex:
             log("ERROR", f"[DISPATCH] fetch_stage crashed: {ex}")
             failed.set()
             stop.set()
 
     def task_builder():
+        log("INFO", "[Worker: Producer] START task_builder")
         try:
             pending_tasks = deque()
             fetch_done = False
@@ -270,6 +275,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
 
             for _ in range(det_workers):
                 det_q.put(None, timeout=2)
+            log("INFO", "[Worker: Producer] DONE task_builder")
             emit_task_builder_metric(event="complete", force=True)
         except Exception as ex:
             log("ERROR", f"[DISPATCH] task_builder crashed: {ex}")
@@ -278,36 +284,52 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
             stop.set()
 
     def det_worker():
-        while not stop.is_set():
-            try:
-                t = det_q.get(timeout=1)
-            except queue.Empty:
-                continue
-            if t is None:
-                ai_q.put(None)
-                return
-            try:
-                det = run_deterministic_checks(t.answer, t.expected, float(cfg.get("numeric_tolerance", 0.01)))
-                if det.accepted and det.confidence >= 0.95:
-                    r = EvaluationResult(
-                        answer=t.answer, decision="YES", final_score=det.confidence, semantic_score=det.confidence,
-                        concept_score=det.confidence, factual_score=det.confidence, misconception_detected=False,
-                        misconception_description="", missing_concepts=[], accepted_concepts=[], model_agreement=1.0,
-                        confidence=det.confidence, fast_path_used=True, latency_ms=0.0, stage_reached="deterministic"
-                    )
-                    result_q.put((t, r), timeout=2)
-                    with metrics_lock:
-                        counters["det"] += 1
-                else:
-                    ai_q.put(t, timeout=2)
-            except Exception as ex:
-                log("WARNING", f"[DISPATCH] deterministic worker failed: {ex}")
+        log("INFO", "[Worker: Deterministic] START det_worker")
+        with ThreadPoolExecutor(max_workers=1) as ex:
+            while not stop.is_set():
                 try:
-                    ai_q.put(t, timeout=2)
-                except Exception:
-                    pass
+                    t = det_q.get(timeout=1)
+                except queue.Empty:
+                    continue
+                if t is None:
+                    ai_q.put(None)
+                    log("INFO", "[Worker: Deterministic] DONE det_worker")
+                    return
+                try:
+                    fut = ex.submit(
+                        run_deterministic_checks,
+                        t.answer,
+                        t.expected,
+                        float(cfg.get("numeric_tolerance", 0.01)),
+                    )
+                    det = fut.result(timeout=deterministic_timeout_s)
+                    if det.accepted and det.confidence >= 0.95:
+                        r = EvaluationResult(
+                            answer=t.answer, decision="YES", final_score=det.confidence, semantic_score=det.confidence,
+                            concept_score=det.confidence, factual_score=det.confidence, misconception_detected=False,
+                            misconception_description="", missing_concepts=[], accepted_concepts=[], model_agreement=1.0,
+                            confidence=det.confidence, fast_path_used=True, latency_ms=0.0, stage_reached="deterministic"
+                        )
+                        result_q.put((t, r), timeout=2)
+                        with metrics_lock:
+                            counters["det"] += 1
+                    else:
+                        ai_q.put(t, timeout=2)
+                except FuturesTimeoutError:
+                    log("WARNING", f"[DISPATCH] deterministic timeout after {deterministic_timeout_s:.1f}s; routed to AI")
+                    try:
+                        ai_q.put(t, timeout=2)
+                    except Exception:
+                        pass
+                except Exception as exx:
+                    log("WARNING", f"[DISPATCH] deterministic worker failed: {exx}")
+                    try:
+                        ai_q.put(t, timeout=2)
+                    except Exception:
+                        pass
 
     def ai_worker():
+        log("INFO", "[Worker: AI] START ai_worker")
         with ThreadPoolExecutor(max_workers=1) as ex:
             while not stop.is_set():
                 try:
@@ -315,6 +337,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                 except queue.Empty:
                     continue
                 if t is None:
+                    log("INFO", "[Worker: AI] DONE ai_worker")
                     return
                 fut = ex.submit(evaluate_answer, t.answer, t.expected, str(t.question.get("title", "")))
                 try:
@@ -342,17 +365,20 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                     pass
 
     def result_aggregator():
+        log("INFO", "[Worker: Aggregator] START result_aggregator")
         while not stop.is_set():
             with metrics_lock:
                 expected = progress["expected_tasks"]
                 completed = progress["completed"]
             if completed >= expected and expected > 0 and det_q.empty() and ai_q.empty() and result_q.empty():
+                log("INFO", "[Worker: Aggregator] DONE result_aggregator")
                 return
             try:
                 item = result_q.get(timeout=1)
             except queue.Empty:
                 continue
             if item is None:
+                log("INFO", "[Worker: Aggregator] DONE result_aggregator")
                 return
             t, r = item
             fi = t.form_idx
@@ -380,11 +406,24 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                 f"q_fetch={fetch_out.qsize()} q_det={det_q.qsize()} q_ai={ai_q.qsize()} q_result={result_q.qsize()} "
                 f"pending={pb} wm={det_q_low_wm}/{det_q_high_wm} done={comp}/{exp}",
             )
+            log("INFO", f"[Worker: Producer] heartbeat q_fetch={fetch_out.qsize()} pending={pb}")
+            log("INFO", f"[Worker: Deterministic] heartbeat q_det={det_q.qsize()} det_s={d/dt:.2f}")
+            log("INFO", f"[Worker: AI] heartbeat q_ai={ai_q.qsize()} ai_s={a/dt:.2f}")
+            log("INFO", f"[Worker: Aggregator] heartbeat q_result={result_q.qsize()} done={comp}/{exp}")
+            snapshot = (fetch_out.qsize(), det_q.qsize(), ai_q.qsize(), result_q.qsize())
+            with metrics_lock:
+                if snapshot != queue_progress["last_snapshot"] or (f + d + a + ap) > 0:
+                    queue_progress["last_any_work_ts"] = time.time()
+                    queue_progress["last_snapshot"] = snapshot
             if exp > 0 and (time.time() - lp) > stall_timeout_s:
                 log("ERROR", f"[DISPATCH] stall detected: no progress for {stall_timeout_s}s")
                 failed.set()
                 stop.set()
                 return
+            with metrics_lock:
+                idle_for = time.time() - queue_progress["last_any_work_ts"]
+            if exp > 0 and idle_for > max(20.0, stall_timeout_s / 2):
+                log("WARNING", f"[DISPATCH] queue movement stalled for {idle_for:.1f}s (done={comp}/{exp})")
 
     tf = threading.Thread(target=fetch_stage, daemon=False)
     tb = threading.Thread(target=task_builder, daemon=False)
