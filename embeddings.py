@@ -50,7 +50,8 @@ def get_embedding(text: str, model: str) -> List[float]:
 
     def call_ollama():
         try:
-            emb = ollama.embeddings(model=model, prompt=text, options={"num_ctx": num_ctx})["embedding"]
+            # num_gpu=-1 offloads all layers to GPU for optimal performance
+            emb = ollama.embeddings(model=model, prompt=text, options={"num_ctx": num_ctx, "num_gpu": -1})["embedding"]
             result_queue.put(("success", emb))
         except Exception as e:
             exception_queue.put(e)

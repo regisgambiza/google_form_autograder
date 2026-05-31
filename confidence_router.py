@@ -53,7 +53,11 @@ def invoke_reasoning_fallback(answer: str, question: str, rubric: Dict[str, obje
     
     def call_ollama():
         try:
-            raw = ollama.chat(model=model, messages=[{"role": "user", "content": prompt}], timeout=timeout_seconds)["message"]["content"]
+            # num_gpu=-1 offloads all layers to GPU for optimal performance
+            # num_ctx set to fallback_num_ctx from config or default 4096
+            cfg = load_config()
+            num_ctx = int(cfg.get("ollama_options", {}).get("fallback_num_ctx", 4096))
+            raw = ollama.chat(model=model, messages=[{"role": "user", "content": prompt}], options={"num_ctx": num_ctx, "num_gpu": -1}, timeout=timeout_seconds)["message"]["content"]
             result_queue.put(("success", raw))
         except Exception as e:
             exception_queue.put(e)

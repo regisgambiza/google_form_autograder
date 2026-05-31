@@ -238,12 +238,14 @@ def _get_ollama_options(role: str) -> Dict[str, object]:
     ollama_opts = cfg.get("ollama_options", {})
     num_ctx = int(ollama_opts.get("judge_num_ctx", 2048))
     num_predict = int(ollama_opts.get("judge_num_predict", 256))
-    
+
+    # num_gpu=-1 offloads all layers to GPU for optimal performance
     return {
         "num_ctx": num_ctx,
         "num_predict": num_predict,
         "temperature": 0.1,
-        "top_p": 0.9
+        "top_p": 0.9,
+        "num_gpu": -1
     }
 
 

@@ -190,9 +190,10 @@ def generate_rubric(question: str, expected: str, model: Optional[str] = None) -
     
     def call_ollama():
         try:
+            # num_gpu=-1 offloads all layers to GPU for optimal performance
             r = ollama.chat(
                 model=model,
-                options={"num_ctx": num_ctx},
+                options={"num_ctx": num_ctx, "num_gpu": -1},
                 format=rubric_format,  # Structured output
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
