@@ -2,6 +2,7 @@
 import math
 import os
 import time
+from datetime import datetime, timezone
 from typing import List
 
 import ollama
@@ -9,10 +10,27 @@ import ollama
 from evaluator_config import load_config, sha256_text
 from logger import log
 
+
+def _write_heartbeat_if_needed():
+    """Write heartbeat to file if it exists."""
+    try:
+        if os.path.exists("heartbeat.json"):
+            data = {
+                "last_update": datetime.now(timezone.utc).isoformat(),
+                "pid": os.getpid()
+            }
+            with open("heartbeat.json", "w") as f:
+                json.dump(data, f, indent=2)
+    except Exception:
+        pass
+
+
 PREFERRED_MODELS = ["mxbai-embed-large", "nomic-embed-text", "all-minilm"]
 
 
 def get_embedding(text: str, model: str) -> List[float]:
+    # Write heartbeat before expensive operations
+    _write_heartbeat_if_needed()
     cfg = load_config()
     num_ctx = int(cfg.get('ollama_options', {}).get('judge_num_ctx', 2048))
     os.makedirs("cache/embeddings", exist_ok=True)

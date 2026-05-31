@@ -1,8 +1,10 @@
 """AI Judges - Clean architecture with structured output."""
 import asyncio
 import json
+import os
 import re
 import time
+from datetime import datetime, timezone
 from typing import Dict, List
 
 try:
@@ -13,6 +15,21 @@ import ollama
 
 from evaluator_config import load_config
 from logger import log
+
+
+def _write_heartbeat_if_needed():
+    """Write heartbeat to file if it exists."""
+    try:
+        if os.path.exists("heartbeat.json"):
+            data = {
+                "last_update": datetime.now(timezone.utc).isoformat(),
+                "pid": os.getpid()
+            }
+            with open("heartbeat.json", "w") as f:
+                json.dump(data, f, indent=2)
+    except Exception:
+        pass
+
 
 JUDGE_PROMPTS = {
     "semantic_judge": "You are a semantic meaning evaluator. Your ONLY job is to determine whether the student's answer conveys the same MEANING as the expected answer, regardless of wording, grammar, or spelling. Ignore surface form completely. Focus only on whether the core idea is the same.\n\nCRITICAL: Your response MUST be ONLY valid JSON. No explanations, no markdown, no text before or after.",
@@ -306,6 +323,9 @@ async def run_all_judges_with_early_exit(
     retries: int = 3
 ) -> List[Dict[str, object]]:
     """Run all judges with early exit if unanimous + high confidence."""
+    # Write heartbeat before expensive operations
+    _write_heartbeat_if_needed()
+
     cfg = load_config()
     jury_models = cfg.get("jury_models", {})
     ee = cfg.get("early_exit", {})

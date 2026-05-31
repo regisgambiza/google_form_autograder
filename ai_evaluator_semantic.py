@@ -1,7 +1,24 @@
-﻿from typing import Dict, List, Optional
+﻿import json
+import os
+from typing import Dict, List, Optional
 
 from evaluation_pipeline import evaluate_answers as semantic_evaluate_answers
 from logger import log
+
+
+def _write_heartbeat_if_needed():
+    """Write heartbeat to file if it exists."""
+    try:
+        if os.path.exists("heartbeat.json"):
+            from datetime import datetime, timezone
+            data = {
+                "last_update": datetime.now(timezone.utc).isoformat(),
+                "pid": os.getpid()
+            }
+            with open("heartbeat.json", "w") as f:
+                json.dump(data, f, indent=2)
+    except Exception:
+        pass
 
 
 def _progress_bar(yes_count: int, total: int, width: int = 20) -> str:

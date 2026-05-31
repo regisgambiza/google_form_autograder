@@ -7,7 +7,23 @@ import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 import subprocess
+from datetime import datetime, timezone
 from sympy import sympify, simplify
+
+
+def _write_heartbeat_if_needed():
+    """Write heartbeat to file if it exists."""
+    try:
+        if os.path.exists("heartbeat.json"):
+            data = {
+                "last_update": datetime.now(timezone.utc).isoformat(),
+                "pid": os.getpid()
+            }
+            with open("heartbeat.json", "w") as f:
+                json.dump(data, f, indent=2)
+    except Exception:
+        pass
+
 
 # Load config
 with open("config.json") as f:
@@ -237,6 +253,9 @@ Return your answer in **EXACTLY** this format:
 def evaluate_answers_batch(question, answers, expected=None):
     """Evaluate a batch of answers for a single question using AI models to compare against expected answers, ignoring units."""
     log("DEBUG", f"Evaluating Q{question.get('index', '?')} (leniency={LENIENCY})")
+
+    # Write heartbeat before expensive operations
+    _write_heartbeat_if_needed()
 
     if not answers:
         log("INFO", "No answers to evaluate. Returning empty list.")

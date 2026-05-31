@@ -3,6 +3,7 @@ import json
 import os
 import time
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Union
 
 from ai_judges import run_judges
@@ -15,6 +16,21 @@ from misconception_detector import detect_misconception
 from normalization import normalize, semantic_deduplicate
 from rubric_generator import generate_rubric
 from semantic_scoring import score_concepts
+
+
+def _write_heartbeat_if_needed():
+    """Write heartbeat to file if it exists (main.py writes it)."""
+    try:
+        if os.path.exists("heartbeat.json"):
+            data = {
+                "last_update": datetime.now(timezone.utc).isoformat(),
+                "pid": os.getpid()
+            }
+            with open("heartbeat.json", "w") as f:
+                json.dump(data, f, indent=2)
+    except Exception:
+        pass  # Silent failure - heartbeat is not critical
+
 
 # === Global caches for optimization ===
 RESULT_CACHE: Dict[str, "EvaluationResult"] = {}
@@ -107,6 +123,9 @@ def evaluate_answer(answer: str, expected: Union[str, List[str]], question: str)
         r = RESULT_CACHE[ck]
         log("DEBUG", f"cache_hit=True stage={r.stage_reached}")
         return r
+
+    # Write heartbeat before expensive operations
+    _write_heartbeat_if_needed()
 
     det = run_deterministic_checks(answer, expected, float(cfg.get("numeric_tolerance", 0.01)))
     if det.accepted and det.confidence >= 0.95:
