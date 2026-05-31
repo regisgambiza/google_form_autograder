@@ -89,7 +89,10 @@ def _strip_units(s: str) -> str:
 def _to_fraction(value: str) -> Optional[Fraction]:
     s = value.strip().lower().replace("½", "1/2").replace("×", "x")
     if s.endswith("%"):
-        return Fraction(s[:-1]) / 100
+        try:
+            return Fraction(s[:-1]) / 100
+        except Exception:
+            return None
     sci = re.match(r"^([\d\.]+)(?:\s*[x*]\s*10\^?([\-\d]+)|e([\-\d]+))$", s)
     if sci:
         exp = sci.group(2) or sci.group(3)

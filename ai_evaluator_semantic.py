@@ -3,8 +3,10 @@ import os
 from typing import Dict, List, Optional
 
 from evaluation_pipeline import evaluate_answers as semantic_evaluate_answers
+from evaluator_config import load_config
 from logger import log
 from ollama_diagnostics import log_ollama_gpu_diagnostics_once
+from worker_pipeline import evaluate_answers_worker_pipeline
 
 
 def _write_heartbeat_if_needed():
@@ -66,6 +68,10 @@ def evaluate_answers(question: Dict[str, object], answers: List[str], expected: 
     log_ollama_gpu_diagnostics_once()
     expected_values = expected or []
     qtext = str(question.get("title", "Untitled Question"))
-    results = semantic_evaluate_answers(answers, expected_values, qtext)
+    cfg = load_config()
+    if bool(cfg.get("enable_pipeline_workers", False)):
+        results = evaluate_answers_worker_pipeline(answers, expected_values, qtext)
+    else:
+        results = semantic_evaluate_answers(answers, expected_values, qtext)
     _print_pretty_block(question, results)
     return [r.answer for r in results if r.decision == "YES"]

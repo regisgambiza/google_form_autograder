@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLineEdit, QListWidget, QListWidgetItem, QMessageBox,
     QProgressBar, QTextEdit, QLabel, QComboBox, QCheckBox,
-    QProgressDialog, QSplitter, QSpinBox, QDialog, QFormLayout
+    QProgressDialog, QSplitter, QSpinBox, QDialog, QFormLayout, QTabWidget
 )
 
 from PyQt5.QtCore import Qt, QDate, QTimer
@@ -156,9 +156,13 @@ class FormManager(QMainWindow):
         self.current_label = QLabel("🟡 Processing: -")
         self.finished_label = QLabel("✅ Finished: 0")
         self.in_queue_label = QLabel("⏳ In Queue: 0")
+        self.run_state_label = QLabel("Run State: Idle")
+        self.worker_metrics_label = QLabel("Worker Metrics: -")
 
         status_row.addWidget(self.current_label)
         status_row.addStretch()
+        status_row.addWidget(self.worker_metrics_label)
+        status_row.addWidget(self.run_state_label)
         status_row.addWidget(self.finished_label)
         status_row.addWidget(self.in_queue_label)
         top_layout.addLayout(status_row)
@@ -196,12 +200,18 @@ class FormManager(QMainWindow):
         timing_filter_row.addStretch()
         right_layout.addLayout(timing_filter_row)
 
-        self.debug_output = QTextEdit()
-        self.debug_output.setReadOnly(True)
-        self.debug_output.setFont(QFont("Consolas", 10))
-        self.debug_output.setStyleSheet("background-color:#1e1e1e; color:#dcdcdc;")
-
-        right_layout.addWidget(self.debug_output)
+        self.log_tabs = QTabWidget()
+        self.debug_output = self._make_log_textedit()
+        self.producer_output = self._make_log_textedit()
+        self.det_output = self._make_log_textedit()
+        self.ai_output = self._make_log_textedit()
+        self.agg_output = self._make_log_textedit()
+        self.log_tabs.addTab(self.debug_output, "All")
+        self.log_tabs.addTab(self.producer_output, "Producer")
+        self.log_tabs.addTab(self.det_output, "Det Workers")
+        self.log_tabs.addTab(self.ai_output, "AI Workers")
+        self.log_tabs.addTab(self.agg_output, "Aggregator")
+        right_layout.addWidget(self.log_tabs)
 
         right_widget = QWidget()
         right_widget.setLayout(right_layout)
@@ -1091,11 +1101,20 @@ class FormManager(QMainWindow):
             return
 
         self.is_grading = True
+        self.run_state_label.setText("Run State: Running")
         self.run_button.setEnabled(False)
         self.debug_output.clear()
         self.debug_lines = []
         self.overall_progress_bar.setValue(0)
         self.finished_forms = []
+        wp_enabled = False
+        try:
+            with open("config.json", "r", encoding="utf-8") as f:
+                _cfg = json.load(f)
+                wp_enabled = bool(_cfg.get("enable_pipeline_workers", False))
+        except Exception:
+            wp_enabled = False
+        self.append_debug(f"<font color='cyan'>[GRADER] Worker pipeline: {'ON' if wp_enabled else 'OFF'}</font>")
 
         grading_mode = self.grading_mode
         grade_recent_only = force_recent_only or (grading_mode == "Recent Only")
@@ -1141,8 +1160,39 @@ class FormManager(QMainWindow):
     def is_timing_line(self, message):
         return "Timing " in message
 
+    def _make_log_textedit(self):
+        w = QTextEdit()
+        w.setReadOnly(True)
+        w.setFont(QFont("Consolas", 10))
+        w.setStyleSheet("background-color:#1e1e1e; color:#dcdcdc;")
+        return w
+
+    def _route_worker_log(self, message):
+        if "[Worker: Producer]" in message:
+            self.producer_output.append(message)
+        if "[Worker: Deterministic]" in message:
+            self.det_output.append(message)
+        if "[Worker: AI]" in message:
+            self.ai_output.append(message)
+        if "[Worker: Aggregator]" in message:
+            self.agg_output.append(message)
+
+
+    def _update_worker_metrics_label(self, message):
+        # Example: [Worker Metrics] done=12/40 det_done=10 ai_done=2 q_det=3 q_ai=2 q_result=0
+        if "[Worker Metrics]" not in message:
+            return
+        try:
+            payload = message.split("[Worker Metrics]", 1)[1].strip()
+            self.worker_metrics_label.setText(f"Worker Metrics: {payload}")
+        except Exception:
+            pass
+
     def append_debug(self, message):
         self.debug_lines.append(message)
+        self._update_worker_metrics_label(message)
+        # Always route worker-tagged logs to dedicated tabs.
+        self._route_worker_log(message)
         if not self.timing_only_checkbox.isChecked() or self.is_timing_line(message):
             self.debug_output.append(message)
 
@@ -1154,8 +1204,13 @@ class FormManager(QMainWindow):
             lines = [m for m in self.debug_lines if self.is_timing_line(m)]
         else:
             lines = self.debug_lines
+        self.producer_output.clear()
+        self.det_output.clear()
+        self.ai_output.clear()
+        self.agg_output.clear()
         for line in lines:
             self.debug_output.append(line)
+            self._route_worker_log(line)
 
 
     def on_grading_finished(self, success, msg):
@@ -1164,9 +1219,11 @@ class FormManager(QMainWindow):
         now_str = datetime.now().strftime("%H:%M:%S")
         
         if not success:
+            self.run_state_label.setText("Run State: Failed")
             self.append_debug(f"<font color='red'>[AUTO {now_str}] ❌ Grading failed: {msg}</font>")
         else:
             self.append_debug(f"<font color='green'>[AUTO {now_str}] ✅ Grading completed successfully!</font>")
+            self.append_debug("<b><font color='green'>ALL FORMS FINISHED. Grading run complete.</font></b>")
 
         if self.auto_mode:
             # Clear finished forms

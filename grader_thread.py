@@ -28,7 +28,7 @@ class GraderThread(QThread):
             process = subprocess.Popen(
                 [sys.executable, "main.py"],
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
                 universal_newlines=True,
@@ -79,9 +79,8 @@ class GraderThread(QThread):
             if process.returncode == 0:
                 self.finished.emit(True, "")
             else:
-                # Properly read stderr only when there is an error
-                error_output = process.stderr.read() if process.stderr else ""
-                self.finished.emit(False, error_output.strip() or "Unknown error (return code != 0)")
+                # stderr is merged into stdout, so no separate stderr drain is needed.
+                self.finished.emit(False, "Grader process exited with non-zero return code.")
 
         except Exception as e:
             self.finished.emit(False, f"Thread crashed: {str(e)}")

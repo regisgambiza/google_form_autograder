@@ -1,35 +1,39 @@
-# main.py - FINAL FIXED VERSION (no 'text' error, safe, clean, working)
+# main.py - Hybrid prep/apply pipeline (prefetch + sequential apply)
 import json
-import sys
-import time
 import os
+import queue
+import sys
+import threading
+import time
 from datetime import datetime, timezone
-from form_utils import get_form_structure
-from response_utils import get_responses, save_grading_time
+from typing import Dict, List
+
 from auth import get_service
-from logger import log
 from feedback import generate_form_feedback
+from form_utils import get_form_structure
+from logger import log
+from response_utils import get_responses, save_grading_time
 from updater import update_correct_answers
+from global_prefetch import prefetch_all_forms
+from global_dispatcher import run_global_dispatcher
 
 
 def write_heartbeat(hang_stage: str = "unknown"):
-    """Write current timestamp to heartbeat file with stage info for hang monitoring."""
     try:
         data = {
             "last_update": datetime.now(timezone.utc).isoformat(),
             "pid": os.getpid(),
             "stage": hang_stage,
-            "timestamp_epoch": time.time()
+            "timestamp_epoch": time.time(),
         }
-        with open("heartbeat.json", "w") as f:
+        with open("heartbeat.json", "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
     except Exception:
-        pass  # Silent failure - heartbeat is not critical
+        pass
 
 
-# === Load config and import evaluator ===
 try:
-    with open("config.json") as f:
+    with open("config.json", "r", encoding="utf-8") as f:
         config = json.load(f)
 except FileNotFoundError:
     log("ERROR", "config.json not found!")
@@ -42,7 +46,7 @@ evaluator_module = config.get("evaluator", "ai_evaluator_2")
 generate_report = config.get("generate_report", True)
 
 try:
-    __import__(evaluator_module)  # Test import first
+    __import__(evaluator_module)
     exec(f"from {evaluator_module} import evaluate_answers")
 except Exception as e:
     log("WARNING", f"Failed to load {evaluator_module}: {e}. Falling back to ai_evaluator_2")
@@ -50,7 +54,6 @@ except Exception as e:
 
 
 def extract_form_id(form_url: str) -> str:
-    """Extract form ID from any Google Forms URL."""
     try:
         if "/d/" in form_url:
             return form_url.split("/d/")[1].split("/")[0].split("?")[0]
@@ -61,22 +64,9 @@ def extract_form_id(form_url: str) -> str:
         raise ValueError(f"Invalid form URL: {form_url}") from exc
 
 
-def main():
-    log("INFO", "=== Google Form Autograder Started ===")
-
-    # Write initial heartbeat with stage
-    write_heartbeat(hang_stage="initialization")
-
-    # Check if we should grade only recent submissions
-    grade_recent_only = os.environ.get("GRADE_RECENT_ONLY", "false").lower() == "true"
-    if grade_recent_only:
-        log("INFO", "🔄 RUNNING IN RECENT SUBMISSIONS ONLY MODE - Only new submissions will be graded")
-    else:
-        log("INFO", "📝 RUNNING IN WHOLE FORM MODE - All submissions will be graded")
-
-    # Load forms list
+def _load_form_urls() -> List[str]:
     try:
-        with open("forms_to_grade.json", "r") as f:
+        with open("forms_to_grade.json", "r", encoding="utf-8") as f:
             data = json.load(f)
     except FileNotFoundError:
         log("ERROR", "forms_to_grade.json not found!")
@@ -85,15 +75,77 @@ def main():
         log("ERROR", f"Invalid JSON in forms_to_grade.json: {e}")
         sys.exit(1)
 
-    form_urls = []
+    urls: List[str] = []
     for item in data.get("forms", []):
         url = item.get("url") if isinstance(item, dict) else item
-        if url and isinstance(url, str):
-            form_urls.append(url.strip())
+        if isinstance(url, str) and url.strip():
+            urls.append(url.strip())
+    return list(dict.fromkeys(urls))
 
-    form_urls = list(dict.fromkeys(form_urls))  # Remove duplicates, preserve order
+
+def _prepare_form(service, idx: int, total_forms: int, form_url: str, grade_recent_only: bool) -> Dict:
+    text_types = {"SHORT_ANSWER", "LONG_ANSWER"}
+    form_id = extract_form_id(form_url)
+    log("INFO", f"[HYBRID PREP] START {idx}/{total_forms} form_id={form_id}")
+
+    form_structure = get_form_structure(service, form_id)
+    if not form_structure:
+        return {"idx": idx, "form_url": form_url, "form_id": form_id, "skip": True, "reason": "No gradable questions"}
+
+    try:
+        form_data = service.forms().get(formId=form_id).execute()
+        form_title = form_data.get("info", {}).get("title", f"Untitled_{form_id}")
+    except Exception as e:
+        log("WARNING", f"Could not get form title: {e}")
+        form_data = {"items": []}
+        form_title = f"Form_{form_id}"
+
+    all_questions = []
+    for q in form_structure:
+        responses = get_responses(service, form_id, q["questionId"], grade_recent_only=grade_recent_only)
+
+        correct_answers_fetched = []
+        try:
+            for item in form_data.get("items", []):
+                if item.get("itemId") == q["itemId"] and "questionItem" in item:
+                    grading = item["questionItem"]["question"].get("grading", {})
+                    answers = grading.get("correctAnswers", {}).get("answers", [])
+                    correct_answers_fetched = [a["value"] for a in answers if "value" in a]
+                    break
+        except Exception:
+            pass
+
+        if q["type"] in text_types:
+            evaluated = evaluate_answers(q, responses, expected=correct_answers_fetched or None)
+        else:
+            evaluated = correct_answers_fetched
+
+        all_questions.append({"question": q, "responses": responses, "correct_answers": evaluated})
+
+    all_questions.sort(key=lambda x: x["question"]["index"])
+    log("INFO", f"[HYBRID PREP] DONE {idx}/{total_forms} form_id={form_id}")
+    return {
+        "idx": idx,
+        "form_url": form_url,
+        "form_id": form_id,
+        "form_title": form_title,
+        "all_questions": all_questions,
+        "skip": False,
+    }
+
+
+def main():
+    log("INFO", "=== Google Form Autograder Started ===")
+    write_heartbeat("initialization")
+
+    grade_recent_only = os.environ.get("GRADE_RECENT_ONLY", "false").lower() == "true"
+    if grade_recent_only:
+        log("INFO", "RUNNING IN RECENT SUBMISSIONS ONLY MODE - Only new submissions will be graded")
+    else:
+        log("INFO", "RUNNING IN WHOLE FORM MODE - All submissions will be graded")
+
+    form_urls = _load_form_urls()
     total_forms = len(form_urls)
-
     if total_forms == 0:
         log("ERROR", "No valid form URLs found in forms_to_grade.json")
         sys.exit(1)
@@ -103,119 +155,179 @@ def main():
 
     service = get_service()
 
-    for idx, form_url in enumerate(form_urls, 1):
+    if str(config.get("dispatch_mode", "")).lower() == "global":
+        run_global_dispatcher(form_urls=form_urls, grade_recent_only=grade_recent_only, generate_report=generate_report)
+        log("INFO", "=== All forms processed via global dispatcher ===")
+        write_heartbeat("complete")
+        sys.exit(0)
+
+    # Global prefetch mode: fetch all forms/questions first with high concurrency.
+    if bool(config.get("global_prefetch_mode", True)):
+        prefetch_workers = max(1, int(config.get("global_prefetch_workers", 6)))
+        prefetched = prefetch_all_forms(form_urls, grade_recent_only, workers=prefetch_workers)
+        processed_count = 0
+        for item in prefetched:
+            idx = item.idx
+            form_url = item.form_url
+            form_id = item.form_id
+            print(f"Progress: {idx}/{total_forms}")
+            try:
+                form_start = time.perf_counter()
+                if item.skip:
+                    log("WARNING", f"Skipping form {form_id or form_url}: {item.reason or 'unknown'}")
+                    continue
+                log("INFO", f"[FORM] START {idx}/{total_forms} | form_id={form_id}")
+                log("INFO", f"[FORM] Now grading: '{item.form_title}' ({form_id})")
+                write_heartbeat("form_apply")
+
+                all_questions = []
+                for pq in item.questions:
+                    evaluated = evaluate_answers(pq.question, pq.responses, expected=pq.expected or None)
+                    all_questions.append({"question": pq.question, "responses": pq.responses, "correct_answers": evaluated})
+                all_questions.sort(key=lambda x: x["question"]["index"])
+
+                total_responses = sum(len(q["responses"]) for q in all_questions)
+                total_questions = len(all_questions)
+                processed_responses = 0
+                if generate_report:
+                    report_path = generate_form_feedback(form_id, item.form_title, all_questions)
+                    log("INFO", f"Report generated -> {report_path or 'FAILED'}")
+
+                duplicates_found = []
+                text_types = {"SHORT_ANSWER", "LONG_ANSWER"}
+                for q_data in all_questions:
+                    q = q_data["question"]
+                    correct = q_data["correct_answers"]
+                    processed_responses += len(q_data["responses"])
+                    print(f"FormProgress: {processed_responses}/{total_responses}")
+                    if processed_responses % 10 == 0:
+                        write_heartbeat("answer_evaluation")
+                    if correct and q["type"] in text_types:
+                        dups = update_correct_answers(service, form_id, q["itemId"], correct, q["index"])
+                        if dups:
+                            duplicates_found.extend(dups)
+
+                elapsed = time.perf_counter() - form_start
+                log("INFO", f"[FORM] FINISHED '{item.form_title}' ({form_id})")
+                log("INFO", f"[FORM] Stats | questions={total_questions} responses={total_responses} elapsed_s={elapsed:.2f}")
+                if duplicates_found:
+                    print(f"\n=== Duplicate answers in {form_id}: {duplicates_found} ===\n")
+                save_grading_time(form_id, datetime.now(timezone.utc))
+                write_heartbeat("form_complete")
+                processed_count += 1
+            except Exception as e:
+                err = str(e)
+                log("ERROR", f"Failed to process form: {form_url}")
+                log("ERROR", f"Form ID: {form_id or 'unknown'} | Error: {err}")
+                print(f"ERROR processing {form_url}: {err}")
+
+        log("INFO", f"=== All forms processed. Completed {processed_count}/{total_forms} ===")
+        write_heartbeat("complete")
+        sys.exit(0)
+
+    # Hybrid controls: prepare forms in background, apply in-order one form at a time.
+    prefetch_size = max(2, int(config.get("hybrid_prefetch_size", 6)))
+    prep_workers = max(1, int(config.get("hybrid_prepare_workers", 2)))
+    prep_q: "queue.Queue[Dict]" = queue.Queue(maxsize=prefetch_size)
+    stop_event = threading.Event()
+
+    next_to_prepare = 1
+    next_to_apply = 1
+    prepared_by_idx: Dict[int, Dict] = {}
+    prep_lock = threading.Lock()
+
+    def prep_worker():
+        nonlocal next_to_prepare
+        prep_service = get_service()
+        while not stop_event.is_set():
+            with prep_lock:
+                if next_to_prepare > total_forms:
+                    return
+                i = next_to_prepare
+                next_to_prepare += 1
+            url = form_urls[i - 1]
+            try:
+                item = _prepare_form(prep_service, i, total_forms, url, grade_recent_only)
+            except Exception as ex:
+                item = {"idx": i, "form_url": url, "form_id": None, "skip": True, "reason": str(ex)}
+            prep_q.put(item)
+
+    prep_threads = [threading.Thread(target=prep_worker, daemon=False, name=f"prep-{i}") for i in range(prep_workers)]
+    for t in prep_threads:
+        t.start()
+
+    processed_count = 0
+    while next_to_apply <= total_forms:
+        while next_to_apply not in prepared_by_idx:
+            item = prep_q.get()
+            prepared_by_idx[item["idx"]] = item
+
+        item = prepared_by_idx.pop(next_to_apply)
+        idx = item["idx"]
+        form_url = item.get("form_url")
+        form_id = item.get("form_id")
         print(f"Progress: {idx}/{total_forms}")
-        form_id = None
 
         try:
             form_start = time.perf_counter()
-            form_id = extract_form_id(form_url)
-            log("INFO", f"[{idx}/{total_forms}] Processing → {form_id}")
-
-            # Write heartbeat before processing form
-            write_heartbeat()
-
-            # Fetch form structure
-            form_structure = get_form_structure(service, form_id)
-            if not form_structure:
-                log("WARNING", f"No gradable questions in form {form_id}. Skipping.")
+            if item.get("skip"):
+                log("WARNING", f"Skipping form {form_id or form_url}: {item.get('reason', 'unknown')}")
+                next_to_apply += 1
                 continue
 
-            # Write heartbeat for form processing stage
-            write_heartbeat(hang_stage="form_fetch")
-            
-            # Get full form data (title + correct answers)
-            try:
-                form_data = service.forms().get(formId=form_id).execute()
-                form_title = form_data.get("info", {}).get("title", f"Untitled_{form_id}")
-            except Exception as e:
-                log("WARNING", f"Could not get form title: {e}")
-                form_title = f"Form_{form_id}"
+            form_title = item["form_title"]
+            all_questions = item["all_questions"]
 
-            # Process each question
-            text_types = {"SHORT_ANSWER", "LONG_ANSWER"}
-            all_questions = []
+            log("INFO", f"[FORM] START {idx}/{total_forms} | form_id={form_id}")
+            log("INFO", f"[FORM] Now grading: '{form_title}' ({form_id})")
+            write_heartbeat("form_apply")
 
-            for q in form_structure:
-                responses = get_responses(service, form_id, q["questionId"], grade_recent_only=grade_recent_only)
-
-                # Try to get teacher-defined correct answers
-                correct_answers_fetched = []
-                try:
-                    for item in form_data.get("items", []):
-                        if item.get("itemId") == q["itemId"] and "questionItem" in item:
-                            grading = item["questionItem"]["question"].get("grading", {})
-                            answers = grading.get("correctAnswers", {}).get("answers", [])
-                            correct_answers_fetched = [a["value"] for a in answers if "value" in a]
-                            break
-                except Exception:
-                    pass  # No correct answers defined — that's fine
-
-                # AI evaluation for text questions
-                if q["type"] in text_types:
-                    evaluated = evaluate_answers(q, responses, expected=correct_answers_fetched or None)
-                else:
-                    evaluated = correct_answers_fetched
-
-                all_questions.append({
-                    "question": q,
-                    "responses": responses,
-                    "correct_answers": evaluated
-                })
-
-            all_questions.sort(key=lambda x: x["question"]["index"])
-
-            # Progress tracking
             total_responses = sum(len(q["responses"]) for q in all_questions)
+            total_questions = len(all_questions)
             processed_responses = 0
 
-            # Generate feedback report
             if generate_report:
                 report_path = generate_form_feedback(form_id, form_title, all_questions)
-                log("INFO", f"Report generated → {report_path or 'FAILED'}")
+                log("INFO", f"Report generated -> {report_path or 'FAILED'}")
 
-            # Update correct answers in form
             duplicates_found = []
+            text_types = {"SHORT_ANSWER", "LONG_ANSWER"}
             for q_data in all_questions:
                 q = q_data["question"]
                 correct = q_data["correct_answers"]
-
                 processed_responses += len(q_data["responses"])
                 print(f"FormProgress: {processed_responses}/{total_responses}")
-
-                # Write heartbeat periodically (every 10 responses or at least every 30 seconds)
                 if processed_responses % 10 == 0:
-                    write_heartbeat(hang_stage="answer_evaluation")
-
+                    write_heartbeat("answer_evaluation")
                 if correct and q["type"] in text_types:
                     dups = update_correct_answers(service, form_id, q["itemId"], correct, q["index"])
                     if dups:
                         duplicates_found.extend(dups)
 
-            log("INFO", f"Finished processing form {form_id}")
-            form_elapsed = time.perf_counter() - form_start
-            log("INFO", f"Timing Form {form_id}: {form_elapsed:.2f}s total")
+            elapsed = time.perf_counter() - form_start
+            log("INFO", f"[FORM] FINISHED '{form_title}' ({form_id})")
+            log("INFO", f"[FORM] Stats | questions={total_questions} responses={total_responses} elapsed_s={elapsed:.2f}")
             if duplicates_found:
                 print(f"\n=== Duplicate answers in {form_id}: {duplicates_found} ===\n")
 
-            # Write final heartbeat after form completion
-            write_heartbeat(hang_stage="form_complete")
-
-            # Save grading timestamp for this form (for "recent only" mode next time)
             save_grading_time(form_id, datetime.now(timezone.utc))
+            write_heartbeat("form_complete")
+            processed_count += 1
 
         except Exception as e:
-            # THIS IS NOW 100% SAFE — NO 'text' VARIABLE ANYWHERE
-            error_detail = str(e)
+            err = str(e)
             log("ERROR", f"Failed to process form: {form_url}")
-            log("ERROR", f"Form ID: {form_id or 'unknown'} | Error: {error_detail}")
-            print(f"ERROR processing {form_url}: {error_detail}")
+            log("ERROR", f"Form ID: {form_id or 'unknown'} | Error: {err}")
+            print(f"ERROR processing {form_url}: {err}")
 
-    log("INFO", "=== All forms processed. Autograder finished successfully ===")
+        next_to_apply += 1
 
-    # Write final heartbeat before exit
-    write_heartbeat(hang_stage="complete")
+    stop_event.set()
+    for t in prep_threads:
+        t.join(timeout=5)
 
+    log("INFO", f"=== All forms processed. Completed {processed_count}/{total_forms} ===")
+    write_heartbeat("complete")
     sys.exit(0)
 
 

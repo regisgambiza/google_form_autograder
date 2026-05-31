@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Dict
 
 from embeddings import semantic_similarity
+from evaluator_config import load_config
 
 
 def _write_heartbeat_if_needed():
@@ -30,7 +31,8 @@ def score_concepts(answer: str, rubric: Dict[str, object]) -> Dict[str, object]:
     optional = [str(x) for x in rubric.get("optional_concepts", [])]
     paraphrases = [str(x) for x in rubric.get("acceptable_paraphrases", [])]
 
-    max_workers = int(os.getenv("SEMANTIC_SIM_WORKERS", "8"))
+    cfg = load_config()
+    max_workers = int(cfg.get("semantic_similarity_workers", int(os.getenv("SEMANTIC_SIM_WORKERS", "8"))))
     sim_inputs = []
     sim_inputs.extend([("req", c) for c in required])
     sim_inputs.extend([("opt", c) for c in optional])
@@ -41,12 +43,26 @@ def score_concepts(answer: str, rubric: Dict[str, object]) -> Dict[str, object]:
     para_vals = []
 
     if sim_inputs:
-        with ThreadPoolExecutor(max_workers=max_workers) as ex:
-            fut_to_item = {ex.submit(semantic_similarity, answer, text): (kind, text) for kind, text in sim_inputs}
-            for fut in as_completed(fut_to_item):
-                kind, text = fut_to_item[fut]
+        try:
+            with ThreadPoolExecutor(max_workers=max_workers) as ex:
+                fut_to_item = {ex.submit(semantic_similarity, answer, text): (kind, text) for kind, text in sim_inputs}
+                for fut in as_completed(fut_to_item):
+                    kind, text = fut_to_item[fut]
+                    try:
+                        score = float(fut.result())
+                    except Exception:
+                        score = 0.0
+                    if kind == "req":
+                        req_scores.append((text, score))
+                    elif kind == "opt":
+                        opt_scores.append((text, score))
+                    else:
+                        para_vals.append(score)
+        except RuntimeError:
+            # Fallback for shutdown-race scenarios where futures cannot be scheduled.
+            for kind, text in sim_inputs:
                 try:
-                    score = float(fut.result())
+                    score = float(semantic_similarity(answer, text))
                 except Exception:
                     score = 0.0
                 if kind == "req":
