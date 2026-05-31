@@ -16,11 +16,34 @@ import threading
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-# Configuration
+
+def load_heartbeat_config():
+    """Load heartbeat configuration from config.json."""
+    default_config = {
+        "heartbeat_timeout": 90,
+        "heartbeat_interval": 10,
+        "heartbeat_max_restarts": 5
+    }
+    try:
+        if os.path.exists("config.json"):
+            with open("config.json", "r") as f:
+                config = json.load(f)
+                return {
+                    "heartbeat_timeout": config.get("heartbeat_timeout", default_config["heartbeat_timeout"]),
+                    "heartbeat_interval": config.get("heartbeat_interval", default_config["heartbeat_interval"]),
+                    "heartbeat_max_restarts": config.get("heartbeat_max_restarts", default_config["heartbeat_max_restarts"])
+                }
+    except Exception as e:
+        print(f"[{datetime.now()}] Warning: Could not load heartbeat config: {e}")
+        return default_config
+    return default_config
+
+
+# Configuration (loaded from config.json at runtime)
 HEARTBEAT_FILE = "heartbeat.json"
-HEARTBEAT_TIMEOUT_SECONDS = 90  # Restart if no heartbeat for 90 seconds
-CHECK_INTERVAL_SECONDS = 10     # Check heartbeat every 10 seconds
-MAX_RESTARTS = 5                # Maximum restarts before giving up
+HEARTBEAT_TIMEOUT_SECONDS = None
+CHECK_INTERVAL_SECONDS = None
+MAX_RESTARTS = None
 RESTARTCooldown_SECONDS = 60    # Wait 60 seconds before restarting
 
 
@@ -127,6 +150,13 @@ class HeartbeatMonitor:
 
     def run(self):
         """Main monitoring loop."""
+        # Load config from config.json
+        config = load_heartbeat_config()
+        global HEARTBEAT_TIMEOUT_SECONDS, CHECK_INTERVAL_SECONDS, MAX_RESTARTS
+        HEARTBEAT_TIMEOUT_SECONDS = config["heartbeat_timeout"]
+        CHECK_INTERVAL_SECONDS = config["heartbeat_interval"]
+        MAX_RESTARTS = config["heartbeat_max_restarts"]
+
         print(f"[{datetime.now()}] Heartbeat Monitor Started")
         print(f"[{datetime.now()}] Timeout: {HEARTBEAT_TIMEOUT_SECONDS}s, Check interval: {CHECK_INTERVAL_SECONDS}s")
 
@@ -169,10 +199,5 @@ class HeartbeatMonitor:
 
 
 if __name__ == "__main__":
-    import threading
-    from datetime import timezone
-
-    # Also patch main.py to write heartbeats
-    # The monitor will write its own heartbeat periodically to show it's alive
     monitor = HeartbeatMonitor()
     monitor.run()

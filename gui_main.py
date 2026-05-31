@@ -343,6 +343,17 @@ class FormManager(QMainWindow):
         grading_mode_combo = QComboBox(dialog)
         grading_mode_combo.addItems(["Whole Form", "Recent Only"])
 
+        # Heartbeat monitor settings
+        heartbeat_timeout_spin = QSpinBox(dialog)
+        heartbeat_timeout_spin.setRange(30, 300)
+        heartbeat_timeout_spin.setValue(cfg.get("heartbeat_timeout", 90))
+        heartbeat_interval_spin = QSpinBox(dialog)
+        heartbeat_interval_spin.setRange(5, 60)
+        heartbeat_interval_spin.setValue(cfg.get("heartbeat_interval", 10))
+        heartbeat_max_restarts_spin = QSpinBox(dialog)
+        heartbeat_max_restarts_spin.setRange(1, 10)
+        heartbeat_max_restarts_spin.setValue(cfg.get("heartbeat_max_restarts", 5))
+
         # Ollama options
         judge_num_ctx_spin = QSpinBox(dialog)
         judge_num_ctx_spin.setRange(512, 8192)
@@ -405,7 +416,7 @@ class FormManager(QMainWindow):
         ollama_layout.addWidget(QLabel("Rubric Pred:"))
         ollama_layout.addWidget(rubric_num_predict_spin)
         form.addRow("", ollama_section)
-        
+
         batch_row = QWidget(dialog)
         bl = QHBoxLayout(batch_row)
         bl.setContentsMargins(0, 0, 0, 0)
@@ -413,6 +424,18 @@ class FormManager(QMainWindow):
         bl.addWidget(batch_auto_checkbox)
         form.addRow("Batch Size:", batch_row)
         form.addRow("Grade Mode:", grading_mode_combo)
+
+        # Heartbeat settings section
+        heartbeat_section = QWidget(dialog)
+        heartbeat_layout = QHBoxLayout(heartbeat_section)
+        heartbeat_layout.setContentsMargins(0, 0, 0, 0)
+        heartbeat_layout.addWidget(QLabel("Heartbeat Timeout:"))
+        heartbeat_layout.addWidget(heartbeat_timeout_spin)
+        heartbeat_layout.addWidget(QLabel("Check Interval:"))
+        heartbeat_layout.addWidget(heartbeat_interval_spin)
+        heartbeat_layout.addWidget(QLabel("Max Restarts:"))
+        heartbeat_layout.addWidget(heartbeat_max_restarts_spin)
+        form.addRow("", heartbeat_section)
 
         buttons = QWidget(dialog)
         b = QHBoxLayout(buttons)
@@ -475,6 +498,11 @@ class FormManager(QMainWindow):
                 config_data["batch_size"] = int(batch_size_spin.value())
 
             config_data["grading_mode"] = grading_mode_combo.currentText()
+
+            # Save Heartbeat monitor settings
+            config_data["heartbeat_timeout"] = heartbeat_timeout_spin.value()
+            config_data["heartbeat_interval"] = heartbeat_interval_spin.value()
+            config_data["heartbeat_max_restarts"] = heartbeat_max_restarts_spin.value()
 
             # Save Ollama options
             ollama_options = config_data.get("ollama_options", {})
