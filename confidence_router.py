@@ -10,6 +10,7 @@ import ollama
 
 from evaluator_config import load_config
 from logger import log
+from ollama_options import build_ollama_options
 
 
 def _extract_json(raw: str) -> dict:
@@ -55,9 +56,13 @@ def invoke_reasoning_fallback(answer: str, question: str, rubric: Dict[str, obje
         try:
             # num_gpu=-1 offloads all layers to GPU for optimal performance
             # num_ctx set to fallback_num_ctx from config or default 4096
-            cfg = load_config()
-            num_ctx = int(cfg.get("ollama_options", {}).get("fallback_num_ctx", 4096))
-            raw = ollama.chat(model=model, messages=[{"role": "user", "content": prompt}], options={"num_ctx": num_ctx, "num_gpu": -1}, timeout=timeout_seconds)["message"]["content"]
+            options = build_ollama_options(
+                ctx_key="fallback_num_ctx",
+                default_ctx=4096,
+                predict_key="fallback_num_predict",
+                default_predict=512,
+            )
+            raw = ollama.chat(model=model, messages=[{"role": "user", "content": prompt}], options=options, timeout=timeout_seconds)["message"]["content"]
             result_queue.put(("success", raw))
         except Exception as e:
             exception_queue.put(e)

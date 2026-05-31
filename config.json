@@ -1,67 +1,78 @@
 {
-    "models": {
-        "judge": [
-            "llama3.1:8b"
-        ]
-    },
-    "jury_models": {
-        "semantic_judge": "llama3.1:8b",
-        "concept_judge": "llama3.1:8b",
-        "factual_judge": "llama3.1:8b",
-        "strict_judge": "llama3.1:8b",
-        "misconception_judge": "llama3.1:8b",
-        "language_filter": "llama3.1:8b"
-    },
-    "rubric_model": "llama3.1:8b",
-    "embedding_model": "mxbai-embed-large",
-    "reasoning_model": "deepseek-r1:8b",
-    "leniency": "lenient",
-    "leniency_note": "options: extreme, lenient, balanced, strict",
-    "evaluator": "ai_evaluator_semantic",
-    "generate_report": false,
-    "max_parallel_workers": "auto",
-    "batch_size": "auto",
-    "numeric_tolerance": 0.01,
-    "max_latency_per_answer_seconds": 30,
-    "enable_reflection": false,
-    "misconception_penalty": 0.4,
-    "retry_attempts": 3,
-    "confidence_thresholds": {
-        "auto_accept": 0.92,
-        "auto_reject": 0.35
-    },
-    "embedding_thresholds": {
-        "auto_accept": 0.92,
-        "auto_reject": 0.35,
-        "send_to_jury": [
-            0.35,
-            0.92
-        ]
-    },
-    "consensus_weights": {
-        "semantic_similarity": 0.35,
-        "concept_coverage": 0.25,
-        "factual_accuracy": 0.2,
-        "strict_judge": 0.1,
-        "language_noise": 0.05,
-        "embedding": 0.05
-    },
-    "ollama_options": {
-        "judge_num_ctx": 8192,
-        "judge_num_predict": 2048,
-        "rubric_num_ctx": 512,
-        "rubric_num_predict": 512,
-        "fallback_num_ctx": 4096,
-        "fallback_num_predict": 512
-    },
-    "early_exit": {
-        "enabled": true,
-        "min_judges": 3,
-        "agreement_confidence": 0.9
-    },
-    "persist_result_cache": false,
-    "grading_mode": "Whole Form",
-    "heartbeat_timeout": 30,
-    "heartbeat_interval": 10,
-    "heartbeat_max_restarts": 5
+  "models": {
+    "judge": [
+      "llama3.1:8b"
+    ]
+  },
+  "jury_models": {
+    "semantic_judge": "llama3.1:8b",
+    "concept_judge": "llama3.1:8b",
+    "factual_judge": "llama3.1:8b",
+    "strict_judge": "llama3.1:8b",
+    "misconception_judge": "llama3.1:8b",
+    "language_filter": "llama3.1:8b"
+  },
+  "rubric_model": "llama3.1:8b",
+  "embedding_model": "mxbai-embed-large",
+  "reasoning_model": "deepseek-r1:8b",
+  "leniency": "lenient",
+  "leniency_note": "options: extreme, lenient, balanced, strict",
+  "evaluator": "ai_evaluator_semantic",
+  "generate_report": false,
+  "max_parallel_workers": 6,
+  "adaptive_min_workers": 2,
+  "adaptive_max_workers": 12,
+  "adaptive_target_latency_ms": 15000,
+  "adaptive_timeout_rate_threshold": 0.2,
+  "adaptive_chunk_size": 12,
+  "max_concurrent_jury_answers": 1,
+  "batch_size": 16,
+  "numeric_tolerance": 0.01,
+  "max_latency_per_answer_seconds": 30,
+  "enable_reflection": false,
+  "misconception_penalty": 0.4,
+  "retry_attempts": 3,
+  "confidence_thresholds": {
+    "auto_accept": 0.92,
+    "auto_reject": 0.35
+  },
+  "embedding_thresholds": {
+    "auto_accept": 0.92,
+    "auto_reject": 0.35,
+    "send_to_jury": [
+      0.35,
+      0.92
+    ]
+  },
+  "consensus_weights": {
+    "semantic_similarity": 0.35,
+    "concept_coverage": 0.25,
+    "factual_accuracy": 0.2,
+    "strict_judge": 0.1,
+    "language_noise": 0.05,
+    "embedding": 0.05
+  },
+  "ollama_options": {
+    "judge_num_ctx": 2048,
+    "judge_num_predict": 512,
+    "embedding_num_ctx": 1024,
+    "rubric_num_ctx": 512,
+    "rubric_num_predict": 512,
+    "fallback_num_ctx": 2048,
+    "fallback_num_predict": 256,
+    "num_gpu": -1,
+    "num_batch": 512,
+    "num_thread": 12,
+    "keep_alive": "30m"
+  },
+  "early_exit": {
+    "enabled": true,
+    "min_judges": 3,
+    "agreement_confidence": 0.9
+  },
+  "persist_result_cache": false,
+  "grading_mode": "Whole Form",
+  "heartbeat_timeout": 30,
+  "heartbeat_interval": 10,
+  "heartbeat_max_restarts": 5
 }

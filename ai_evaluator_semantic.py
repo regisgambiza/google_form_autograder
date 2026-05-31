@@ -4,19 +4,19 @@ from typing import Dict, List, Optional
 
 from evaluation_pipeline import evaluate_answers as semantic_evaluate_answers
 from logger import log
+from ollama_diagnostics import log_ollama_gpu_diagnostics_once
 
 
 def _write_heartbeat_if_needed():
-    """Write heartbeat to file if it exists."""
+    """Write heartbeat to file for hang monitoring."""
     try:
-        if os.path.exists("heartbeat.json"):
-            from datetime import datetime, timezone
-            data = {
-                "last_update": datetime.now(timezone.utc).isoformat(),
-                "pid": os.getpid()
-            }
-            with open("heartbeat.json", "w") as f:
-                json.dump(data, f, indent=2)
+        from datetime import datetime, timezone
+        data = {
+            "last_update": datetime.now(timezone.utc).isoformat(),
+            "pid": os.getpid()
+        }
+        with open("heartbeat.json", "w") as f:
+            json.dump(data, f, indent=2)
     except Exception:
         pass
 
@@ -63,6 +63,7 @@ def _print_pretty_block(question: Dict[str, object], results: List[object]) -> N
 def evaluate_answers(question: Dict[str, object], answers: List[str], expected: Optional[List[str]] = None) -> List[str]:
     """Legacy-compatible evaluator entrypoint returning accepted answers."""
     log("INFO", "[SEMANTIC PIPELINE ACTIVE] ai_evaluator_semantic")
+    log_ollama_gpu_diagnostics_once()
     expected_values = expected or []
     qtext = str(question.get("title", "Untitled Question"))
     results = semantic_evaluate_answers(answers, expected_values, qtext)

@@ -10,6 +10,7 @@ import ollama
 
 from evaluator_config import load_config, sha256_text
 from logger import log
+from ollama_options import build_ollama_options
 
 # JSON schema for structured rubric output
 rubric_format = {
@@ -171,7 +172,12 @@ def _fill_rubric_defaults(data: Dict[str, object], expected: str) -> Dict[str, o
 def generate_rubric(question: str, expected: str, model: Optional[str] = None) -> Dict[str, object]:
     cfg = load_config()
     model = model or cfg.get('rubric_model')
-    num_ctx = int(cfg.get('ollama_options', {}).get('rubric_num_ctx', 1024))
+    rubric_options = build_ollama_options(
+        ctx_key="rubric_num_ctx",
+        default_ctx=1024,
+        predict_key="rubric_num_predict",
+        default_predict=512,
+    )
     os.makedirs("cache/rubrics", exist_ok=True)
     key = sha256_text(question + "||" + expected)
     path = os.path.join("cache/rubrics", f"{key}.json")
@@ -193,7 +199,7 @@ def generate_rubric(question: str, expected: str, model: Optional[str] = None) -
             # num_gpu=-1 offloads all layers to GPU for optimal performance
             r = ollama.chat(
                 model=model,
-                options={"num_ctx": num_ctx, "num_gpu": -1},
+                options=rubric_options,
                 format=rubric_format,  # Structured output
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
@@ -258,4 +264,3 @@ def generate_rubric(question: str, expected: str, model: Optional[str] = None) -
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
     return data
-

@@ -11,18 +11,21 @@ import ollama
 
 from evaluator_config import load_config, sha256_text
 from logger import log
+from ollama_diagnostics import log_post_inference_gpu_probe_once
+from ollama_options import build_ollama_options
 
 
 def _write_heartbeat_if_needed():
-    """Write heartbeat to file if it exists."""
+    """Write heartbeat to file for hang monitoring."""
     try:
-        if os.path.exists("heartbeat.json"):
-            data = {
-                "last_update": datetime.now(timezone.utc).isoformat(),
-                "pid": os.getpid()
-            }
-            with open("heartbeat.json", "w") as f:
-                json.dump(data, f, indent=2)
+        data = {
+            "last_update": datetime.now(timezone.utc).isoformat(),
+            "pid": os.getpid(),
+            "stage": "embedding_generation",
+            "timestamp_epoch": time.time(),
+        }
+        with open("heartbeat.json", "w") as f:
+            json.dump(data, f, indent=2)
     except Exception:
         pass
 
@@ -34,7 +37,7 @@ def get_embedding(text: str, model: str) -> List[float]:
     # Write heartbeat before expensive operations
     _write_heartbeat_if_needed()
     cfg = load_config()
-    num_ctx = int(cfg.get('ollama_options', {}).get('judge_num_ctx', 2048))
+    embedding_options = build_ollama_options(ctx_key="embedding_num_ctx", default_ctx=1024)
     os.makedirs("cache/embeddings", exist_ok=True)
     key = sha256_text(model + text)
     path = os.path.join("cache/embeddings", f"{key}.json")
@@ -51,7 +54,7 @@ def get_embedding(text: str, model: str) -> List[float]:
     def call_ollama():
         try:
             # num_gpu=-1 offloads all layers to GPU for optimal performance
-            emb = ollama.embeddings(model=model, prompt=text, options={"num_ctx": num_ctx, "num_gpu": -1})["embedding"]
+            emb = ollama.embeddings(model=model, prompt=text, options=embedding_options)["embedding"]
             result_queue.put(("success", emb))
         except Exception as e:
             exception_queue.put(e)
@@ -83,6 +86,7 @@ def get_embedding(text: str, model: str) -> List[float]:
         raise Exception("Ollama embedding call failed")
 
     duration_ms = (time.perf_counter() - start) * 1000
+    log_post_inference_gpu_probe_once("embedding")
     log("INFO", f"END embedding_generate duration_ms={duration_ms:.0f} (model={model})")
     with open(path, "w", encoding="utf-8") as f:
         json.dump({"embedding": emb}, f)

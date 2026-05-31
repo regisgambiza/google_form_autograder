@@ -40,7 +40,6 @@ def test_heartbeat_writing():
     assert "last_update" in heartbeat, "Should have last_update"
     
     print("  ✓ Heartbeat writing test passed")
-    return True
 
 
 def test_stale_detection():
@@ -67,7 +66,6 @@ def test_stale_detection():
     assert is_heartbeat_stale(timeout_seconds=60), "Old heartbeat should be stale"
     
     print("  ✓ Stale detection test passed")
-    return True
 
 
 def test_heartbeat_stage():
@@ -79,7 +77,6 @@ def test_heartbeat_stage():
     assert stage == "test_stage_2", f"Expected stage 'test_stage_2', got '{stage}'"
     
     print("  ✓ Heartbeat stage test passed")
-    return True
 
 
 def simple_function():
@@ -129,7 +126,6 @@ def test_timeout_protection():
     assert result == {"result": "timeout"}, f"Expected timeout fallback, got {result}"
     
     print("  ✓ Timeout protection test passed")
-    return True
 
 
 def test_watchdog():
@@ -171,7 +167,6 @@ def test_watchdog():
     watchdog.stop()
     
     print(f"  ✓ Hang watchdog test passed (detected {watchdog.get_hang_count()} hang(s))")
-    return True
 
 
 def test_timeout_protected_decorator():
@@ -186,7 +181,6 @@ def test_timeout_protected_decorator():
     assert result == {"result": "decorator_success"}, f"Expected success, got {result}"
     
     print("  ✓ Timeout protected decorator test passed")
-    return True
 
 
 def main():

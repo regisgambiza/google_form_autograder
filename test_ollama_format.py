@@ -2,6 +2,7 @@
 import asyncio
 import json
 import aiohttp
+import pytest
 
 JUDGE_PROMPTS = {
     "factual_judge": "You are a factual accuracy checker for science and mathematics. Determine whether the student's answer is scientifically or mathematically correct, ignoring grammar and spelling. Flag anything factually wrong even if it sounds similar to the correct answer.\n\nCRITICAL: Your response MUST be ONLY valid JSON. No explanations, no markdown, no text before or after.",
@@ -38,6 +39,7 @@ def _get_judge_format(role):
     }
 
 
+@pytest.mark.asyncio
 async def test_ollama_format():
     """Test Ollama with format parameter directly."""
     question = "What is the derivative of x^2?"

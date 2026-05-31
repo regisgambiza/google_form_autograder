@@ -15,18 +15,21 @@ import ollama
 
 from evaluator_config import load_config
 from logger import log
+from ollama_diagnostics import log_post_inference_gpu_probe_once
+from ollama_options import build_ollama_options
 
 
 def _write_heartbeat_if_needed():
-    """Write heartbeat to file if it exists."""
+    """Write heartbeat to file for hang monitoring."""
     try:
-        if os.path.exists("heartbeat.json"):
-            data = {
-                "last_update": datetime.now(timezone.utc).isoformat(),
-                "pid": os.getpid()
-            }
-            with open("heartbeat.json", "w") as f:
-                json.dump(data, f, indent=2)
+        data = {
+            "last_update": datetime.now(timezone.utc).isoformat(),
+            "pid": os.getpid(),
+            "stage": "jury_consensus",
+            "timestamp_epoch": time.time(),
+        }
+        with open("heartbeat.json", "w") as f:
+            json.dump(data, f, indent=2)
     except Exception:
         pass
 
@@ -234,19 +237,15 @@ def _get_judge_format() -> Dict[str, object]:
 
 def _get_ollama_options(role: str) -> Dict[str, object]:
     """Get Ollama options for a judge role."""
-    cfg = load_config()
-    ollama_opts = cfg.get("ollama_options", {})
-    num_ctx = int(ollama_opts.get("judge_num_ctx", 2048))
-    num_predict = int(ollama_opts.get("judge_num_predict", 256))
-
-    # num_gpu=-1 offloads all layers to GPU for optimal performance
-    return {
-        "num_ctx": num_ctx,
-        "num_predict": num_predict,
-        "temperature": 0.1,
-        "top_p": 0.9,
-        "num_gpu": -1
-    }
+    out = build_ollama_options(
+        ctx_key="judge_num_ctx",
+        default_ctx=2048,
+        predict_key="judge_num_predict",
+        default_predict=256,
+    )
+    out["temperature"] = 0.1
+    out["top_p"] = 0.9
+    return out
 
 
 async def call_judge_async(
@@ -302,6 +301,7 @@ async def call_judge_async(
             obj = _fill_judge_defaults(obj)
             if _valid(obj):
                 duration_ms = (time.perf_counter() - start) * 1000
+                log_post_inference_gpu_probe_once("judge_async")
                 _log_judge_result(role, model, duration_ms, obj.get("decision", "ABSTAIN"), obj.get("confidence", 0.0))
                 return obj
 
@@ -448,6 +448,7 @@ def _run_judges_sync(
             obj = _fill_judge_defaults(obj)
             if _valid(obj):
                 duration_ms = (time.perf_counter() - start) * 1000
+                log_post_inference_gpu_probe_once("judge_sync")
                 _log_judge_result(role, role_model, duration_ms, obj.get("decision", "ABSTAIN"), obj.get("confidence", 0.0))
                 out.append(obj)
             else:
@@ -491,16 +492,14 @@ def run_judges(
         loop = asyncio.get_event_loop()
         # If we're in the main thread and the loop is running, use it
         if loop.is_running():
-            log("DEBUG", "Using existing running event loop")
-            # For a running loop, we need to use run_in_executor or similar
-            # Create a new thread to run the async code
+            log("DEBUG", "Detected running event loop; executing judges in dedicated async thread")
             import threading
             result_container = [None]
             exception_container = [None]
             
             def run_async():
                 try:
-                    result_container[0] = loop.run_until_complete(
+                    result_container[0] = asyncio.run(
                         run_all_judges_with_early_exit(answer, question, expected, rubric, retries)
                     )
                 except Exception as e:
