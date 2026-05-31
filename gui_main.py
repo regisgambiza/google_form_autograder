@@ -157,11 +157,13 @@ class FormManager(QMainWindow):
         self.finished_label = QLabel("✅ Finished: 0")
         self.in_queue_label = QLabel("⏳ In Queue: 0")
         self.run_state_label = QLabel("Run State: Idle")
+        self.pipeline_state_label = QLabel("Pipeline State: Idle")
         self.worker_metrics_label = QLabel("Worker Metrics: -")
 
         status_row.addWidget(self.current_label)
         status_row.addStretch()
         status_row.addWidget(self.worker_metrics_label)
+        status_row.addWidget(self.pipeline_state_label)
         status_row.addWidget(self.run_state_label)
         status_row.addWidget(self.finished_label)
         status_row.addWidget(self.in_queue_label)
@@ -211,6 +213,7 @@ class FormManager(QMainWindow):
         self.log_tabs.addTab(self.det_output, "Det Workers")
         self.log_tabs.addTab(self.ai_output, "AI Workers")
         self.log_tabs.addTab(self.agg_output, "Aggregator")
+        self._reset_worker_tab_titles()
         right_layout.addWidget(self.log_tabs)
 
         right_widget = QWidget()
@@ -1180,13 +1183,95 @@ class FormManager(QMainWindow):
 
     def _update_worker_metrics_label(self, message):
         # Example: [Worker Metrics] done=12/40 det_done=10 ai_done=2 q_det=3 q_ai=2 q_result=0
-        if "[Worker Metrics]" not in message:
-            return
         try:
-            payload = message.split("[Worker Metrics]", 1)[1].strip()
-            self.worker_metrics_label.setText(f"Worker Metrics: {payload}")
+            if "[Worker Metrics]" in message:
+                payload = message.split("[Worker Metrics]", 1)[1].strip()
+                self.worker_metrics_label.setText(f"Worker Metrics: {payload}")
+                self._update_worker_tab_queue_counts(payload)
+                return
+            # Global dispatcher metrics also carry queue data and producer pending buffer.
+            if "[DISPATCH METRICS]" in message:
+                payload = message.split("[DISPATCH METRICS]", 1)[1].strip()
+                self.worker_metrics_label.setText(f"Dispatch Metrics: {payload}")
+                self._update_worker_tab_queue_counts(payload)
+                return
         except Exception:
             pass
+
+    def _reset_worker_tab_titles(self):
+        self.log_tabs.setTabText(0, "All")
+        self.log_tabs.setTabText(1, "Producer (q: -)")
+        self.log_tabs.setTabText(2, "Det Workers (q: -)")
+        self.log_tabs.setTabText(3, "AI Workers (q: -)")
+        self.log_tabs.setTabText(4, "Aggregator (q: -)")
+
+    def _extract_metric_int(self, payload, key):
+        token = f"{key}="
+        if token not in payload:
+            return None
+        try:
+            tail = payload.split(token, 1)[1]
+            raw = tail.split()[0].strip()
+            return int(raw)
+        except Exception:
+            return None
+
+    def _update_worker_tab_queue_counts(self, payload):
+        q_fetch = self._extract_metric_int(payload, "q_fetch")
+        q_pending = self._extract_metric_int(payload, "pending")
+        q_det = self._extract_metric_int(payload, "q_det")
+        q_ai = self._extract_metric_int(payload, "q_ai")
+        q_result = self._extract_metric_int(payload, "q_result")
+        done = None
+        total = None
+        if "done=" in payload:
+            try:
+                done_part = payload.split("done=", 1)[1].split()[0].strip()
+                if "/" in done_part:
+                    d_s, t_s = done_part.split("/", 1)
+                    done = int(d_s)
+                    total = int(t_s)
+            except Exception:
+                done = None
+                total = None
+
+        # Backward-compat: older worker metrics do not publish q_fetch/pending.
+        if q_fetch is None:
+            q_fetch = q_det
+        p = "-" if q_fetch is None else str(q_fetch)
+        pb = "-" if q_pending is None else str(q_pending)
+        d = "-" if q_det is None else str(q_det)
+        a = "-" if q_ai is None else str(q_ai)
+        r = "-" if q_result is None else str(q_result)
+
+        self.log_tabs.setTabText(1, f"Producer (q: {p}, buf: {pb})")
+        self.log_tabs.setTabText(2, f"Det Workers (q: {d})")
+        self.log_tabs.setTabText(3, f"AI Workers (q: {a})")
+        self.log_tabs.setTabText(4, f"Aggregator (q: {r})")
+        self._update_pipeline_state(q_fetch, q_pending, q_det, q_ai, q_result, done, total)
+
+    def _update_pipeline_state(self, q_fetch, q_pending, q_det, q_ai, q_result, done, total):
+        state = "Unknown"
+        if total is not None and done is not None and total > 0 and done >= total:
+            state = "Completed"
+        elif (q_fetch or 0) > 0 or (q_pending or 0) > 0:
+            # Producer has backlog ready to feed.
+            if (q_det or 0) <= 1 and (q_ai or 0) <= 1:
+                state = "Feeding"
+            else:
+                state = "Balanced"
+        elif (q_ai or 0) > 0 and (q_det or 0) == 0 and (q_fetch or 0) == 0 and ((q_pending or 0) == 0):
+            state = "AI-drain"
+        elif (q_result or 0) > 0 and (q_det or 0) == 0 and (q_ai or 0) == 0:
+            state = "Apply-drain"
+        elif (q_fetch or 0) == 0 and (q_det or 0) == 0 and (q_ai or 0) == 0 and (q_result or 0) == 0:
+            if total is not None and done is not None and total > 0 and done < total:
+                state = "Stalled"
+            else:
+                state = "Idle"
+        else:
+            state = "Balanced"
+        self.pipeline_state_label.setText(f"Pipeline State: {state}")
 
     def append_debug(self, message):
         self.debug_lines.append(message)

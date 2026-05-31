@@ -1,7 +1,9 @@
 import queue
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+import json
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError, as_completed
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
@@ -59,10 +61,20 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
     stall_timeout_s = float(cfg.get("dispatcher_stall_timeout_seconds", 90))
     bucket = TokenBucket(rate_per_sec=read_rate_per_min / 60.0, capacity=max(5, int(read_rate_per_min / 4)))
 
-    fetch_out: "queue.Queue[Optional[dict]]" = queue.Queue(maxsize=200)
-    det_q: "queue.Queue[Optional[Task]]" = queue.Queue(maxsize=4000)
-    ai_q: "queue.Queue[Optional[Task]]" = queue.Queue(maxsize=2000)
-    result_q: "queue.Queue[Optional[tuple[Task, EvaluationResult]]]" = queue.Queue(maxsize=3000)
+    queue_size = max(200, int(cfg.get("worker_queue_size", 4000)))
+    det_q_high_wm = min(
+        queue_size - 1,
+        int(cfg.get("producer_det_queue_high_watermark", max(100, int(queue_size * 0.85)))),
+    )
+    det_q_low_wm = max(
+        1,
+        min(det_q_high_wm - 1, int(cfg.get("producer_det_queue_low_watermark", max(50, int(queue_size * 0.45))))),
+    )
+
+    fetch_out: "queue.Queue[Optional[dict]]" = queue.Queue(maxsize=max(100, min(1000, queue_size // 2)))
+    det_q: "queue.Queue[Optional[Task]]" = queue.Queue(maxsize=queue_size)
+    ai_q: "queue.Queue[Optional[Task]]" = queue.Queue(maxsize=max(200, int(queue_size * 0.5)))
+    result_q: "queue.Queue[Optional[tuple[Task, EvaluationResult]]]" = queue.Queue(maxsize=max(200, int(queue_size * 0.75)))
     stop = threading.Event()
     failed = threading.Event()
 
@@ -70,7 +82,49 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
     forms_total = len(form_urls)
     metrics_lock = threading.Lock()
     counters = {"fetch": 0, "det": 0, "ai": 0, "apply": 0}
-    progress = {"expected_tasks": 0, "completed": 0, "last_progress_ts": time.time()}
+    progress = {"expected_tasks": 0, "completed": 0, "last_progress_ts": time.time(), "pending_buffer": 0}
+    task_builder_metrics = {"built": 0, "enqueued": 0, "last_emit": time.time()}
+    task_builder_log_path = str(cfg.get("task_builder_log_path", "task_builder_metrics.jsonl"))
+    task_builder_log_enabled = bool(cfg.get("task_builder_log_enabled", True))
+
+    def emit_task_builder_metric(event: str, force: bool = False):
+        if not task_builder_log_enabled:
+            return
+        now = time.time()
+        with metrics_lock:
+            built = int(task_builder_metrics["built"])
+            enq = int(task_builder_metrics["enqueued"])
+            last_emit = float(task_builder_metrics["last_emit"])
+            pending = int(progress.get("pending_buffer", 0))
+            expected = int(progress.get("expected_tasks", 0))
+        dt = max(0.001, now - last_emit)
+        if (not force) and dt < 1.0:
+            return
+        row = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "event": event,
+            "built_total": built,
+            "enqueued_total": enq,
+            "build_rate_per_s": built / dt,
+            "enqueue_rate_per_s": enq / dt,
+            "pending_buffer": pending,
+            "expected_tasks": expected,
+            "q_fetch": fetch_out.qsize(),
+            "q_det": det_q.qsize(),
+            "q_ai": ai_q.qsize(),
+            "q_result": result_q.qsize(),
+            "wm_low": det_q_low_wm,
+            "wm_high": det_q_high_wm,
+        }
+        try:
+            with open(task_builder_log_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(row, ensure_ascii=True) + "\n")
+        except Exception as ex:
+            log("WARNING", f"[DISPATCH] could not write task_builder metrics log: {ex}")
+        with metrics_lock:
+            task_builder_metrics["built"] = 0
+            task_builder_metrics["enqueued"] = 0
+            task_builder_metrics["last_emit"] = now
 
     def fetch_form(i: int, url: str):
         service = get_service()
@@ -94,7 +148,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
         try:
             with ThreadPoolExecutor(max_workers=fetch_workers) as ex:
                 futs = [ex.submit(fetch_form, i + 1, u) for i, u in enumerate(form_urls)]
-                for f in futs:
+                for f in as_completed(futs):
                     if stop.is_set():
                         return
                     try:
@@ -112,10 +166,45 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
 
     def task_builder():
         try:
+            pending_tasks = deque()
+            fetch_done = False
+
+            def refill_det_queue(force: bool = False):
+                while pending_tasks and not stop.is_set():
+                    task = pending_tasks.popleft()
+                    # Prefer immediate burst enqueue; stop only when queue is truly full.
+                    try:
+                        if not force:
+                            det_q.put_nowait(task)
+                        else:
+                            det_q.put(task, timeout=2)
+                        with metrics_lock:
+                            task_builder_metrics["enqueued"] += 1
+                    except queue.Full:
+                        pending_tasks.appendleft(task)
+                        break
+
             while not stop.is_set():
-                item = fetch_out.get(timeout=1)
-                if item is None:
+                # Keep the deterministic queue full enough so downstream workers don't idle.
+                if pending_tasks and det_q.qsize() <= det_q_low_wm:
+                    refill_det_queue(force=True)
+
+                if fetch_done:
+                    if pending_tasks:
+                        refill_det_queue(force=True)
+                        if pending_tasks:
+                            time.sleep(0.02)
+                            continue
                     break
+                try:
+                    item = fetch_out.get(timeout=0.5)
+                except queue.Empty:
+                    if pending_tasks:
+                        refill_det_queue(force=True)
+                    continue
+                if item is None:
+                    fetch_done = True
+                    continue
                 i = item["idx"]
                 form_id = item["form_id"]
                 title = item["title"]
@@ -123,38 +212,68 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                 form_data = item["form_data"] or {"items": []}
                 all_responses = item["responses"] or []
                 forms_results[i] = {"meta": item, "question_answers": {}, "counts": {}}
+
+                # Build per-question answer buckets once to avoid O(questions * responses) scans.
+                answers_by_qid: Dict[str, List[str]] = {}
+                for r in all_responses:
+                    ad = r.get("answers", {})
+                    for resp_qid, qa in ad.items():
+                        bucket = answers_by_qid.setdefault(resp_qid, [])
+                        for a in qa.get("textAnswers", {}).get("answers", []):
+                            if a.get("value") is not None:
+                                bucket.append(str(a["value"]).strip())
+                        for a in qa.get("choiceAnswers", {}).get("answers", []):
+                            if a.get("value") is not None:
+                                bucket.append(str(a["value"]).strip())
+
+                expected_by_item_id: Dict[str, List[str]] = {}
+                try:
+                    for it in form_data.get("items", []):
+                        item_id = it.get("itemId")
+                        if not item_id or "questionItem" not in it:
+                            continue
+                        grading = it["questionItem"]["question"].get("grading", {})
+                        ans = grading.get("correctAnswers", {}).get("answers", [])
+                        expected_by_item_id[item_id] = [a["value"] for a in ans if "value" in a]
+                except Exception:
+                    expected_by_item_id = {}
+
                 for q in structure:
                     qid = q.get("questionId")
-                    expected = []
-                    try:
-                        for it in form_data.get("items", []):
-                            if it.get("itemId") == q.get("itemId") and "questionItem" in it:
-                                grading = it["questionItem"]["question"].get("grading", {})
-                                ans = grading.get("correctAnswers", {}).get("answers", [])
-                                expected = [a["value"] for a in ans if "value" in a]
-                                break
-                    except Exception:
-                        pass
-                    answers = []
-                    for r in all_responses:
-                        ad = r.get("answers", {})
-                        if qid in ad:
-                            qa = ad[qid]
-                            for a in qa.get("textAnswers", {}).get("answers", []):
-                                if a.get("value") is not None:
-                                    answers.append(str(a["value"]).strip())
-                            for a in qa.get("choiceAnswers", {}).get("answers", []):
-                                if a.get("value") is not None:
-                                    answers.append(str(a["value"]).strip())
+                    expected = expected_by_item_id.get(q.get("itemId"), [])
+                    answers = answers_by_qid.get(qid, [])
                     forms_results[i]["counts"][qid] = len(answers)
                     for ai, ans in enumerate(answers):
-                        det_q.put(Task(i, form_id, title, q, ai, ans, expected), timeout=2)
+                        pending_tasks.append(Task(i, form_id, title, q, ai, ans, expected))
                         with metrics_lock:
                             progress["expected_tasks"] += 1
+                            progress["pending_buffer"] = len(pending_tasks)
+                            task_builder_metrics["built"] += 1
+
+                    # Burst-fill up to high watermark while we build tasks.
+                    refill_det_queue(force=False)
+                    # If producer buffer gets very large, force-drain until queue blocks.
+                    if len(pending_tasks) >= det_q_high_wm:
+                        refill_det_queue(force=True)
+                    with metrics_lock:
+                        progress["pending_buffer"] = len(pending_tasks)
+                    emit_task_builder_metric(event="form_chunk")
+
+            # Drain any remaining buffered tasks before shutdown sentinels.
+            while pending_tasks and not stop.is_set():
+                refill_det_queue(force=True)
+                with metrics_lock:
+                    progress["pending_buffer"] = len(pending_tasks)
+                if pending_tasks:
+                    time.sleep(0.05)
+                emit_task_builder_metric(event="drain")
+
             for _ in range(det_workers):
                 det_q.put(None, timeout=2)
+            emit_task_builder_metric(event="complete", force=True)
         except Exception as ex:
             log("ERROR", f"[DISPATCH] task_builder crashed: {ex}")
+            emit_task_builder_metric(event="error", force=True)
             failed.set()
             stop.set()
 
@@ -254,11 +373,12 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
             with metrics_lock:
                 f = counters["fetch"]; d = counters["det"]; a = counters["ai"]; ap = counters["apply"]
                 counters["fetch"] = counters["det"] = counters["ai"] = counters["apply"] = 0
-                exp = progress["expected_tasks"]; comp = progress["completed"]; lp = progress["last_progress_ts"]
+                exp = progress["expected_tasks"]; comp = progress["completed"]; lp = progress["last_progress_ts"]; pb = progress["pending_buffer"]
             log(
                 "INFO",
                 f"[DISPATCH METRICS] fetch/s={f/dt:.2f} det/s={d/dt:.2f} ai/s={a/dt:.2f} apply/s={ap/dt:.2f} "
-                f"q_fetch={fetch_out.qsize()} q_det={det_q.qsize()} q_ai={ai_q.qsize()} q_result={result_q.qsize()} done={comp}/{exp}",
+                f"q_fetch={fetch_out.qsize()} q_det={det_q.qsize()} q_ai={ai_q.qsize()} q_result={result_q.qsize()} "
+                f"pending={pb} wm={det_q_low_wm}/{det_q_high_wm} done={comp}/{exp}",
             )
             if exp > 0 and (time.time() - lp) > stall_timeout_s:
                 log("ERROR", f"[DISPATCH] stall detected: no progress for {stall_timeout_s}s")

@@ -24,7 +24,7 @@
   "ai_worker_count": 3,
   "worker_queue_size": 2000,
   "global_prefetch_mode": true,
-  "dispatch_mode": "",
+  "dispatch_mode": "global",
   "global_prefetch_workers": 6,
   "forms_expensive_reads_per_minute": 160,
   "semantic_similarity_workers": 5,
