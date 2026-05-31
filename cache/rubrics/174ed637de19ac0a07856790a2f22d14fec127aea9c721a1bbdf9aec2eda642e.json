@@ -1,0 +1,33 @@
+{
+  "required_concepts": [
+    "circumference",
+    "circle",
+    "ribbon",
+    "wrapping around edge"
+  ],
+  "optional_concepts": [
+    "π approximation",
+    "significant figures"
+  ],
+  "acceptable_paraphrases": [
+    "the length of ribbon needed is the distance around the cake",
+    "to calculate the ribbon needed, use the formula for circumference",
+    "the amount of ribbon Naseem needs to buy is the circumference of the cake"
+  ],
+  "critical_errors": [
+    "mentions using diameter instead of radius",
+    "uses incorrect or missing units"
+  ],
+  "strict_keywords": [
+    "circumference",
+    "circle",
+    "ribbon",
+    "wrap around edge"
+  ],
+  "misconceptions": [
+    "believing circumference is a straight line from one point on the circle to another",
+    "thinking ribbon can be stretched out flat and laid next to each other",
+    "confusing circumference with diameter or radius"
+  ],
+  "grading_notes": "Answers that are within the specified range (62.8-62.84 cm) will receive full credit, while those slightly outside this range may still receive partial credit if their working is correct."
+}

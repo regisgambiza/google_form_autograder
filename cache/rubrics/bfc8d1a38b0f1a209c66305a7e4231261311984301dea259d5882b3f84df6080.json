@@ -1,0 +1,34 @@
+{
+  "required_concepts": [
+    "Rectangle",
+    "rectangle",
+    "Rectangular",
+    "Square"
+  ],
+  "optional_concepts": [
+    "Rec",
+    "Rectangel"
+  ],
+  "acceptable_paraphrases": [
+    "rectangular shape",
+    "square shape",
+    "4-sided shape",
+    "box-like figure"
+  ],
+  "critical_errors": [
+    "triangle",
+    "circle",
+    "3 sides",
+    "curved edges"
+  ],
+  "strict_keywords": [
+    "rectangle",
+    "square",
+    "four-sided"
+  ],
+  "misconceptions": [
+    "assuming all rectangles are squares",
+    "thinking a rectangle has more or fewer than four sides"
+  ],
+  "grading_notes": "Accept answers in all lowercase if typed correctly."
+}

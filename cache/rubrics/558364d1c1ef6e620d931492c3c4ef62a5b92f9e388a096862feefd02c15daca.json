@@ -1,0 +1,29 @@
+{
+  "required_concepts": [
+    "square number",
+    "perfect square"
+  ],
+  "optional_concepts": [
+    "even power of a perfect square results in another perfect square"
+  ],
+  "acceptable_paraphrases": [
+    "cannot be squared",
+    "not a perfect square",
+    "does not result in a whole number"
+  ],
+  "critical_errors": [
+    "stating they are squares or can be squared",
+    "ignoring the fact that numbers end with specific digits"
+  ],
+  "strict_keywords": [
+    "square number",
+    "perfect square",
+    "whole number",
+    "cannot be squared"
+  ],
+  "misconceptions": [
+    "thinking all perfect powers result in a whole number",
+    "assuming any large number is a perfect square"
+  ],
+  "grading_notes": "Focus on the fact that numbers ending with 2 or 8 cannot be squares. Ignore trivial formatting differences, such as ^ and _"
+}

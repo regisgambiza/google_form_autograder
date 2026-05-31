@@ -1,0 +1,31 @@
+{
+  "required_concepts": [
+    "12 edges",
+    "7 vertices",
+    "7 faces"
+  ],
+  "optional_concepts": [
+    "polyhedron",
+    "regular polyhedron"
+  ],
+  "acceptable_paraphrases": [
+    "a solid with 12 edges",
+    "a shape with 12 sides that connect the edges",
+    "a 3D object with 12 edge connections"
+  ],
+  "critical_errors": [
+    "less than 7 vertices",
+    "more than 7 faces",
+    "polyhedron with less than 12 edges"
+  ],
+  "strict_keywords": [
+    "edges",
+    "vertices",
+    "faces"
+  ],
+  "misconceptions": [
+    "assuming a single type of shape (e.g., only pyramids)",
+    "confusing the number of edges with the number of sides"
+  ],
+  "grading_notes": "accept answers that list multiple possible polyhedra, but ensure each listed shape meets the criteria"
+}

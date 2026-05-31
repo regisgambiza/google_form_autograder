@@ -1,0 +1,29 @@
+{
+  "required_concepts": [
+    "Euler's formula",
+    "V - E + F = number",
+    "correct application of Euler's formula"
+  ],
+  "optional_concepts": [
+    "Polyhedra",
+    "geometric shapes with faces, edges, and vertices"
+  ],
+  "acceptable_paraphrases": [
+    "the sum of vertices minus the sum of edges plus the sum of faces",
+    "vertices minus the edge count plus the face count",
+    "correcting for excess or deficiency in Euler's formula"
+  ],
+  "critical_errors": [
+    "improper use of variables (e.g. V-E-F)",
+    "incorrect application of Euler's formula"
+  ],
+  "strict_keywords": [
+    "Euler",
+    "polyhedra"
+  ],
+  "misconceptions": [
+    "assuming every polyhedron is a cube",
+    "believing that the number of vertices, edges, and faces must always add up to 2"
+  ],
+  "grading_notes": "Subtraction of 2 from the formula V-E+F. Use of variables E,V,F."
+}

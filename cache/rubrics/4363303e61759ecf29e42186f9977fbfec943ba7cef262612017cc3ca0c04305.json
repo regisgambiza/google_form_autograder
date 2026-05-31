@@ -1,0 +1,33 @@
+{
+  "required_concepts": [
+    "kites can fly sometimes",
+    "not all days are suitable for kite flying"
+  ],
+  "optional_concepts": [],
+  "acceptable_paraphrases": [
+    "true at times",
+    "occasionally flies",
+    "some kites may not",
+    "it depends on the day",
+    "weather conditions matter"
+  ],
+  "critical_errors": [
+    "all kites fly all the time",
+    "kites never fly",
+    "the answer is always true",
+    "the answer is always false"
+  ],
+  "strict_keywords": [
+    "sometimes",
+    "true at times",
+    "occasionally",
+    "it depends on",
+    "weather conditions"
+  ],
+  "misconceptions": [
+    "kites can fly only during daytime",
+    "kites need a specific wind speed to fly",
+    "kites are always flying in the same location"
+  ],
+  "grading_notes": "Paraphrases that clearly convey the idea of conditional flight are acceptable. Be cautious of overly simplistic or absolute answers."
+}

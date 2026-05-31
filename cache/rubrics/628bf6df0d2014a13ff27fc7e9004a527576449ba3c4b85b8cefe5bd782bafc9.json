@@ -1,0 +1,43 @@
+{
+  "required_concepts": [
+    "circumference formula (C = πd)",
+    "diameter definition (d = C/π)",
+    "value of pi (π ≈ 3.14)",
+    "division operation",
+    "unit conversion (cm)"
+  ],
+  "optional_concepts": [
+    "understanding of pi as the ratio of circumference to diameter",
+    "application of the circumference formula in problem-solving"
+  ],
+  "acceptable_paraphrases": [
+    "The circle's diameter is calculated by dividing the circumference by pi.",
+    "To find the diameter, divide the circumference by pi.",
+    "The diameter is equal to the circumference divided by pi.",
+    "The diameter is the circumference/pi.",
+    "Divide 160 by pi to find the diameter."
+  ],
+  "critical_errors": [
+    "Using the area formula instead of the circumference formula.",
+    "Confusing diameter and radius (e.g., calculating radius instead of diameter).",
+    "Incorrectly calculating the circumference.",
+    "Using an incorrect value for pi (e.g., 3 instead of 3.14).",
+    "Failing to divide by π.",
+    "Incorrectly performing the division operation."
+  ],
+  "strict_keywords": [
+    "circumference",
+    "diameter",
+    "pi",
+    "divide",
+    "cm"
+  ],
+  "misconceptions": [
+    "Believing diameter and circumference are the same.",
+    "Not understanding the relationship between circumference and diameter.",
+    "Thinking the circumference is a fixed value and does not depend on the diameter.",
+    "Forgetting that diameter is twice the radius.",
+    "Not recognizing that the circumference is a measure of the distance around the circle."
+  ],
+  "grading_notes": "Accept answers between 50.6 and 51.1 inclusive, due to rounding.  Award partial credit if the student demonstrates understanding of the circumference formula (C=πd) but makes a calculation error. Penalize for incorrect units if they fail to specify 'cm'."
+}

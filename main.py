@@ -2,6 +2,7 @@
 import json
 import sys
 import time
+import os
 from datetime import datetime, timezone
 from form_utils import get_form_structure
 from response_utils import get_responses, save_grading_time
@@ -9,7 +10,21 @@ from auth import get_service
 from logger import log
 from feedback import generate_form_feedback
 from updater import update_correct_answers
-import os
+
+
+def write_heartbeat(hang_stage: str = "unknown"):
+    """Write current timestamp to heartbeat file with stage info for hang monitoring."""
+    try:
+        data = {
+            "last_update": datetime.now(timezone.utc).isoformat(),
+            "pid": os.getpid(),
+            "stage": hang_stage,
+            "timestamp_epoch": time.time()
+        }
+        with open("heartbeat.json", "w") as f:
+            json.dump(data, f, indent=2)
+    except Exception:
+        pass  # Silent failure - heartbeat is not critical
 
 
 # === Load config and import evaluator ===
@@ -46,26 +61,11 @@ def extract_form_id(form_url: str) -> str:
         raise ValueError(f"Invalid form URL: {form_url}") from exc
 
 
-def write_heartbeat():
-    """Write current timestamp to heartbeat file to indicate process is alive."""
-    try:
-        import json
-        from datetime import datetime, timezone
-        data = {
-            "last_update": datetime.now(timezone.utc).isoformat(),
-            "pid": os.getpid()
-        }
-        with open("heartbeat.json", "w") as f:
-            json.dump(data, f, indent=2)
-    except Exception:
-        pass  # Silent failure - heartbeat is not critical
-
-
 def main():
     log("INFO", "=== Google Form Autograder Started ===")
 
-    # Write initial heartbeat
-    write_heartbeat()
+    # Write initial heartbeat with stage
+    write_heartbeat(hang_stage="initialization")
 
     # Check if we should grade only recent submissions
     grade_recent_only = os.environ.get("GRADE_RECENT_ONLY", "false").lower() == "true"
@@ -121,6 +121,9 @@ def main():
                 log("WARNING", f"No gradable questions in form {form_id}. Skipping.")
                 continue
 
+            # Write heartbeat for form processing stage
+            write_heartbeat(hang_stage="form_fetch")
+            
             # Get full form data (title + correct answers)
             try:
                 form_data = service.forms().get(formId=form_id).execute()
@@ -182,7 +185,7 @@ def main():
 
                 # Write heartbeat periodically (every 10 responses or at least every 30 seconds)
                 if processed_responses % 10 == 0:
-                    write_heartbeat()
+                    write_heartbeat(hang_stage="answer_evaluation")
 
                 if correct and q["type"] in text_types:
                     dups = update_correct_answers(service, form_id, q["itemId"], correct, q["index"])
@@ -196,7 +199,7 @@ def main():
                 print(f"\n=== Duplicate answers in {form_id}: {duplicates_found} ===\n")
 
             # Write final heartbeat after form completion
-            write_heartbeat()
+            write_heartbeat(hang_stage="form_complete")
 
             # Save grading timestamp for this form (for "recent only" mode next time)
             save_grading_time(form_id, datetime.now(timezone.utc))
@@ -209,10 +212,10 @@ def main():
             print(f"ERROR processing {form_url}: {error_detail}")
 
     log("INFO", "=== All forms processed. Autograder finished successfully ===")
-    
+
     # Write final heartbeat before exit
-    write_heartbeat()
-    
+    write_heartbeat(hang_stage="complete")
+
     sys.exit(0)
 
 

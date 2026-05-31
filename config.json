@@ -60,5 +60,8 @@
         "agreement_confidence": 0.9
     },
     "persist_result_cache": false,
-    "grading_mode": "Whole Form"
+    "grading_mode": "Whole Form",
+    "heartbeat_timeout": 30,
+    "heartbeat_interval": 10,
+    "heartbeat_max_restarts": 5
 }

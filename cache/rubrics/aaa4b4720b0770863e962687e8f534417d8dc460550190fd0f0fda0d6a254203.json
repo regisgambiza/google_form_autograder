@@ -1,0 +1,29 @@
+{
+  "required_concepts": [
+    "Euler's formula",
+    "F + V - E = 2",
+    "polyhedron",
+    "minimum number of vertices for a three-dimensional shape"
+  ],
+  "optional_concepts": [
+    "tetrahedron example"
+  ],
+  "acceptable_paraphrases": [
+    "given Euler's formula, we know F+V-E=2 is incorrect",
+    "according to the Euler characteristic, F + V - E ≠ 2",
+    "her values do not satisfy Euler's formula for polyhedra"
+  ],
+  "critical_errors": [
+    "No | because",
+    "The total is one not two"
+  ],
+  "strict_keywords": [
+    "polyhedron",
+    "F+V-E=2"
+  ],
+  "misconceptions": [
+    "no, according to Euler's formula F+V-E≠2",
+    "No it is imppssible"
+  ],
+  "grading_notes": "Student demonstrates understanding of Euler's formula but struggles with proper use of vocabulary and grammar."
+}

@@ -1,0 +1,35 @@
+{
+  "required_concepts": [
+    "parallelogram",
+    "rectangle",
+    "rhombus",
+    "square"
+  ],
+  "optional_concepts": [
+    "congruent sides",
+    "congruent angles",
+    "diagonal properties"
+  ],
+  "acceptable_paraphrases": [
+    "a quadrilateral with opposite sides equal",
+    "a quadrilateral with opposite angles equal",
+    "a four-sided shape with two pairs of congruent sides",
+    "a quadrilateral with diagonals that bisect each other at right angles"
+  ],
+  "critical_errors": [
+    "trapezoid",
+    "non-convex shape",
+    "irregular polygon"
+  ],
+  "strict_keywords": [
+    "parallelogram",
+    "rectangle",
+    "rhombus",
+    "square"
+  ],
+  "misconceptions": [
+    "thinking a rhombus is always a square",
+    "assuming all parallelograms are rectangles"
+  ],
+  "grading_notes": "Count the number of correct types of quadrilaterals, ignoring order and duplicates."
+}

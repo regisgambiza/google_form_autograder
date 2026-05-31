@@ -1,0 +1,24 @@
+{
+  "required_concepts": [
+    "answer to the question, numerical value"
+  ],
+  "optional_concepts": [],
+  "acceptable_paraphrases": [
+    "the result of the calculation",
+    "solution to the problem"
+  ],
+  "critical_errors": [
+    "non-numerical answer",
+    "answer is not 8"
+  ],
+  "strict_keywords": [
+    "8",
+    "numerator",
+    "denominator"
+  ],
+  "misconceptions": [
+    "assuming a non-standard question",
+    "failing to calculate the correct result"
+  ],
+  "grading_notes": "accepts only exact number '8', no approximations"
+}

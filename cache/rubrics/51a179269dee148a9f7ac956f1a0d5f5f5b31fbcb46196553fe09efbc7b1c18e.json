@@ -1,0 +1,24 @@
+{
+  "required_concepts": [
+    "Euler's Formula",
+    "Convex Polyhedron"
+  ],
+  "optional_concepts": [],
+  "acceptable_paraphrases": [
+    "does not satisfy Euler's formula",
+    "violates Euler's formula",
+    "cannot exist as a convex polyhedron because it doesn't follow Euler's formula",
+    "Euler's formula must equal 2, but this shape does not meet that requirement"
+  ],
+  "critical_errors": [],
+  "strict_keywords": [
+    "Euler's Formula",
+    "Convex Polyhedron"
+  ],
+  "misconceptions": [
+    "violating euler's formula means it can't exist, but actually it just follows the formula incorrectly which is a different concept",
+    "thinking that a shape can't exist if it doesn't directly say so in euler's formula (it should be thinking about the equation being wrong)",
+    "mixing up the concept of violating euler's formula and having an incorrect result"
+  ],
+  "grading_notes": "0-1: only mentions euler's formula, but without any reasoning. 2-3: shows some understanding of euler's formula, but with major misconceptions."
+}

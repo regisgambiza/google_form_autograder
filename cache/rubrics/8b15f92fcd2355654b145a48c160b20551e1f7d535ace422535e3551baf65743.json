@@ -1,0 +1,34 @@
+{
+  "required_concepts": [
+    "12 edges",
+    "6 faces"
+  ],
+  "optional_concepts": [
+    "polyhedron",
+    "cuboid",
+    "cube",
+    "rectangular prism",
+    "hexagonal prism"
+  ],
+  "acceptable_paraphrases": [
+    "a three-dimensional shape with twelve sides",
+    "a polyhedron with six surfaces and twelve edges",
+    "an object with a dozen edges and half a dozen faces"
+  ],
+  "critical_errors": [
+    "polytope with more or fewer than 12 edges",
+    "solid with less than 6 faces"
+  ],
+  "strict_keywords": [
+    "edges",
+    "faces",
+    "cube",
+    "cuboid",
+    "rectangular prism"
+  ],
+  "misconceptions": [
+    "assuming a shape cannot have both 12 edges and 6 faces",
+    "believing only the cube or cuboid meet the criteria"
+  ],
+  "grading_notes": "A polyhedron with 12 edges can be considered as having six square and/or rectangular lateral faces (not counting the bases), and two base faces, each of which is a polygon (such as rectangle or hexagon) but not necessarily equal in number of sides to the number of edges."
+}

@@ -1,0 +1,37 @@
+{
+  "required_concepts": [
+    "6 vertices",
+    "V=6",
+    "2 equations: V+F-E=2, V+8-12=2"
+  ],
+  "optional_concepts": [
+    "F and E counts for a polyhedron with 6 faces and 12 edges"
+  ],
+  "acceptable_paraphrases": [
+    "six vertices",
+    "vertices equal six",
+    "two separate equations",
+    "polyhedron has 6 vertices",
+    "V equals 6",
+    "number of vertices is 6",
+    "F minus E plus V equals two",
+    "8 minus 12 plus V equals 2",
+    "corrected equation: V plus eight minus twelve equals two"
+  ],
+  "critical_errors": [
+    "inconsistent vertex count across equations",
+    "incorrect F and E counts",
+    "V=4, V=-3",
+    "equations not related to V=6"
+  ],
+  "strict_keywords": [
+    "12 vertices",
+    "six",
+    "twelve"
+  ],
+  "misconceptions": [
+    "F and E are given as fixed values instead of expressions in terms of V",
+    "Equation: V+8-12 = 2 implies V has a specific value which is used to solve for V+E-F in equation V+F-E=2"
+  ],
+  "grading_notes": "Any statement that incorrectly states the number of vertices will receive zero credit, whereas correct statements about V and its relationship with other parameters (F,E) will receive half credit."
+}

@@ -1,0 +1,33 @@
+{
+  "required_concepts": [
+    "regular polygon",
+    "lines of symmetry",
+    "rotational symmetry",
+    "order of rotational symmetry"
+  ],
+  "optional_concepts": [
+    "proof or explanation for the statement",
+    "example of a regular polygon with matching line and rotational symmetries"
+  ],
+  "acceptable_paraphrases": [
+    "symmetries",
+    "order of rotation",
+    "same number",
+    "always equal",
+    "match up"
+  ],
+  "critical_errors": [
+    "lines of symmetry > order of rotational symmetry",
+    "lines of symmetry < order of rotational symmetry"
+  ],
+  "strict_keywords": [
+    "must always be the same",
+    "never equals",
+    "matches perfectly"
+  ],
+  "misconceptions": [
+    "a regular polygon with an odd number of sides can have more than one line of symmetry",
+    "the order of rotational symmetry is determined by the number of lines of symmetry"
+  ],
+  "grading_notes": "The statement must be a clear and concise sentence, and it's better if the explanation or proof for this statement is provided."
+}

@@ -1,0 +1,30 @@
+{
+  "required_concepts": [
+    "regular pentagon",
+    "symmetry",
+    "number of sides (5)"
+  ],
+  "optional_concepts": [
+    "five-pointed star (pentagram)",
+    "irregular shapes"
+  ],
+  "acceptable_paraphrases": [
+    "has these properties",
+    "a regular shape with these properties",
+    "share the same symmetries"
+  ],
+  "critical_errors": [
+    "Mae is incorrect because she said a pentagon has 5 sides",
+    "Mae's answer was wrong because of irregular shapes",
+    "A five-pointed star (pentagram) shares the same symmetries as a regular pentagon"
+  ],
+  "strict_keywords": [
+    "Yes, Mae is correct",
+    "No, Mae is incorrect"
+  ],
+  "misconceptions": [
+    "a regular pentagon must have all sides equal to be a regular shape",
+    "other shapes with the same qualities aside from a pentagon"
+  ],
+  "grading_notes": "Assessment of understanding based on clarity and concision of explanation."
+}

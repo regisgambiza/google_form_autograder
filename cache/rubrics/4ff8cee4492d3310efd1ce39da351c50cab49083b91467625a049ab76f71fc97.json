@@ -1,0 +1,30 @@
+{
+  "required_concepts": [
+    "Euler's Formula",
+    "v-e+f=2",
+    "polyhedron"
+  ],
+  "optional_concepts": [
+    "6 vertices",
+    "12 edges",
+    "8 faces"
+  ],
+  "acceptable_paraphrases": [
+    "number of vertices, edges, and faces",
+    "vertices, edges, and faces in a polyhedron",
+    "relationship between vertices, edges, and faces"
+  ],
+  "critical_errors": [
+    "Euler's Formula not applied correctly",
+    "wrong values for v, e, or f"
+  ],
+  "strict_keywords": [
+    "formula",
+    "polyhedron"
+  ],
+  "misconceptions": [
+    "assuming the polyhedron is a cube",
+    "confusing vertices and edges"
+  ],
+  "grading_notes": "Award points for correct application of Euler's Formula, even if values are not exactly as listed. Penalize for incorrect or incomplete answers."
+}

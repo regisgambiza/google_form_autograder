@@ -1,0 +1,33 @@
+{
+  "required_concepts": [
+    "Truth values of a statement are either True or False",
+    "Always true means the statement is true for all possible inputs or conditions"
+  ],
+  "optional_concepts": [
+    "Implications of always true in different contexts",
+    "Importance of considering truth values in logical statements"
+  ],
+  "acceptable_paraphrases": [
+    "Always false would mean not true for any condition",
+    "A universal truth holds true under any circumstances",
+    "T is a symbol representing True",
+    "True indicates the statement is universally applicable"
+  ],
+  "critical_errors": [
+    "False or sometimes true indicates incorrect understanding of always true",
+    "Mentioning specific conditions when discussing always true",
+    "Using False instead of Always false to indicate not true for all cases"
+  ],
+  "strict_keywords": [
+    "Always",
+    "true",
+    "True",
+    "T"
+  ],
+  "misconceptions": [
+    "Believing a statement is always true if it's true in one scenario",
+    "Assuming sometimes true means the statement is always true",
+    "Using different symbols or notation to represent True"
+  ],
+  "grading_notes": "Statement 3 evaluates truth values of logical statements with 'Always true' as correct answer"
+}

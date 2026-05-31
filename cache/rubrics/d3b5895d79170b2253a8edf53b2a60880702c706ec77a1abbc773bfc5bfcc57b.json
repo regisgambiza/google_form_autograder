@@ -1,0 +1,33 @@
+{
+  "required_concepts": [
+    "approximately",
+    "rounding to nearest tenth",
+    "50 cm",
+    "69.1 cm"
+  ],
+  "optional_concepts": [
+    "pi",
+    "circle circumference formula",
+    "unit conversion"
+  ],
+  "acceptable_paraphrases": [
+    "about 7 cakes",
+    "around seven cakes",
+    "approximately 7.2 cakes"
+  ],
+  "critical_errors": [
+    "exactly 7 cakes",
+    "no unit conversion or incorrect units",
+    "incorrect rounding or approximation"
+  ],
+  "strict_keywords": [
+    "can decorate",
+    "bake about"
+  ],
+  "misconceptions": [
+    "believing the answer must be exactly 7.2 without considering rounding",
+    "forgetting to include unit conversion",
+    "assuming pi is part of the final answer instead of using circumference formula"
+  ],
+  "grading_notes": "Rounding and approximation should be clearly shown, especially when using decimal values."
+}

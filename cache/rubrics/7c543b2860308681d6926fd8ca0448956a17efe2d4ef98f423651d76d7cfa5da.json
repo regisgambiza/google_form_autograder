@@ -1,0 +1,28 @@
+{
+  "required_concepts": [
+    "parallelogram",
+    "rhombus"
+  ],
+  "optional_concepts": [
+    "rectangle"
+  ],
+  "acceptable_paraphrases": [
+    "a parallelogram and a rhombus",
+    "both a parallelogram and a rhombus",
+    "a shape that is both a parallelogram and a rhombus"
+  ],
+  "critical_errors": [
+    "square",
+    "triangle",
+    "circle"
+  ],
+  "strict_keywords": [
+    "parallelogram",
+    "rhombus"
+  ],
+  "misconceptions": [
+    "thinking a square or rectangle are the only possible answers",
+    "not considering shapes with both properties simultaneously"
+  ],
+  "grading_notes": " Any shape that is either a parallelogram OR rhombus is considered correct, so A/B, B/A and B+A are all valid"
+}

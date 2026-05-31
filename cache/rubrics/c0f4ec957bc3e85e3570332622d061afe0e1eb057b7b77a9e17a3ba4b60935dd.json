@@ -1,0 +1,33 @@
+{
+  "required_concepts": [
+    "parallelogram",
+    "rhombus"
+  ],
+  "optional_concepts": [
+    "rectangle"
+  ],
+  "acceptable_paraphrases": [
+    "A parallelogram is also a rhombus",
+    "The two shapes are identical in terms of their geometric properties",
+    "It's a shape that has all the characteristics of both",
+    "Has the same qualities as a rhombus and a parallelogram"
+  ],
+  "critical_errors": [
+    "Square",
+    "Trapezoid",
+    "Circle",
+    "Incorrect identification of properties",
+    "No mention of either term"
+  ],
+  "strict_keywords": [
+    "either",
+    "or",
+    "also",
+    "has the same characteristics as"
+  ],
+  "misconceptions": [
+    "Rhombus is always a square",
+    "Parallelogram and rhombus are mutually exclusive terms"
+  ],
+  "grading_notes": "Correct answers will acknowledge that parallelogram and rhombus share similar properties."
+}

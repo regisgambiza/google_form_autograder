@@ -1,0 +1,32 @@
+{
+  "required_concepts": [
+    "parallelogram",
+    "rectangle",
+    "rhombus"
+  ],
+  "optional_concepts": [
+    "square"
+  ],
+  "acceptable_paraphrases": [
+    "quadrilateral",
+    "four-sided shape",
+    "polygon with four sides"
+  ],
+  "critical_errors": [
+    "triangle",
+    "pentagon",
+    "hexagon"
+  ],
+  "strict_keywords": [
+    "parallelogram",
+    "rectangle",
+    "rhombus",
+    "square"
+  ],
+  "misconceptions": [
+    "assuming a rhombus is always a square",
+    "confusing a rectangle with a parallelogram",
+    "thinking a square is not a special type of rectangle"
+  ],
+  "grading_notes": "Order does not matter, but all types must be present."
+}

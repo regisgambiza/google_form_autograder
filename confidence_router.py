@@ -1,5 +1,8 @@
 import json
+import os
+import queue
 import re
+import threading
 import time
 from typing import Dict, Optional, Tuple
 
@@ -24,11 +27,12 @@ def _extract_json(raw: str) -> dict:
 
 
 def invoke_reasoning_fallback(answer: str, question: str, rubric: Dict[str, object], judge_scores: Dict[str, float], model: Optional[str] = None) -> Tuple[str, float, str]:
-    """Run reasoning fallback and strip hidden chain-of-thought tags."""
+    """Run reasoning fallback and strip hidden chain-of-thought tags with timeout protection."""
     start = time.perf_counter()
     log("INFO", f"START reasoning_fallback (model=gemma3:12b)")
     cfg = load_config()
     model = model or cfg.get("reasoning_model")
+    timeout_seconds = cfg.get("max_latency_per_answer_seconds", 30)
     prompt = (
         f"Question: {question}\n"
         f"Answer: {answer}\n"
@@ -42,8 +46,49 @@ def invoke_reasoning_fallback(answer: str, question: str, rubric: Dict[str, obje
         '}\n'
         "No preamble. No explanation. Only the JSON object."
     )
+    
+    # Use thread with timeout for the Ollama call
+    result_queue = queue.Queue()
+    exception_queue = queue.Queue()
+    
+    def call_ollama():
+        try:
+            raw = ollama.chat(model=model, messages=[{"role": "user", "content": prompt}], timeout=timeout_seconds)["message"]["content"]
+            result_queue.put(("success", raw))
+        except Exception as e:
+            exception_queue.put(e)
+            result_queue.put(("exception", None))
+    
+    thread = threading.Thread(target=call_ollama, daemon=True)
+    thread.start()
+    
+    # Poll for completion with timeout
+    poll_interval = 0.1
+    elapsed = 0
+    while thread.is_alive() and elapsed < timeout_seconds:
+        time.sleep(poll_interval)
+        elapsed += poll_interval
+    
+    if thread.is_alive():
+        log("WARNING", f"Reasoning fallback timed out after {timeout_seconds}s")
+        duration_ms = (time.perf_counter() - start) * 1000
+        log("INFO", f"END reasoning_fallback duration_ms={duration_ms:.0f} decision=NO timed_out=True")
+        return "NO", 0.5, "reasoning_fallback_timeout"
+    
+    if not exception_queue.empty():
+        ex = exception_queue.get()
+        log("WARNING", f"Reasoning fallback exception: {ex}")
+        duration_ms = (time.perf_counter() - start) * 1000
+        log("INFO", f"END reasoning_fallback duration_ms={duration_ms:.0f} decision=NO failed={ex}")
+        return "NO", 0.5, "reasoning_fallback_failed"
+    
+    status, raw = result_queue.get()
+    if status != "success":
+        duration_ms = (time.perf_counter() - start) * 1000
+        log("INFO", f"END reasoning_fallback duration_ms={duration_ms:.0f} decision=NO failed=status")
+        return "NO", 0.5, "reasoning_fallback_failed"
+    
     try:
-        raw = ollama.chat(model=model, messages=[{"role": "user", "content": prompt}], timeout=120)["message"]["content"]
         data = _extract_json(raw)
         decision = str(data.get("decision", "NO")).strip().upper()
         if decision not in {"YES", "NO"}:

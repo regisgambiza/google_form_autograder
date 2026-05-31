@@ -1,0 +1,30 @@
+{
+  "required_concepts": [
+    "number of edges in a graph",
+    "E represents the number of edges"
+  ],
+  "optional_concepts": [
+    "each edge is counted twice when calculating total edges",
+    "total edges can be calculated by dividing the sum of vertex degrees by 2"
+  ],
+  "acceptable_paraphrases": [
+    "edges are represented by E",
+    "the number of edges in a graph is equal to the sum of its vertices' degrees divided by two",
+    "each edge contributes to the degree count of each vertex"
+  ],
+  "critical_errors": [
+    "calculating total edges by multiplying the number of vertices by the number of edges"
+  ],
+  "strict_keywords": [
+    "number of edges",
+    "edges",
+    "E",
+    "graph",
+    "vertex degree",
+    "degree sum"
+  ],
+  "misconceptions": [
+    "total edges are equal to the square of the number of vertices"
+  ],
+  "grading_notes": "The correct method for calculating total edges is demonstrated in the optional concept. A good explanation would clarify that each edge contributes to the degree count of each vertex."
+}

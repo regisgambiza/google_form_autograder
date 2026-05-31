@@ -1,0 +1,33 @@
+{
+  "required_concepts": [
+    "regular",
+    "octagon",
+    "symmetry",
+    "order 8"
+  ],
+  "optional_concepts": [
+    "lines of symmetry",
+    "rotational symmetry"
+  ],
+  "acceptable_paraphrases": [
+    "The order of rotational symmetries is 8.",
+    "Regular octagons have an order of 8.",
+    "Octagons have a symmetry of 8."
+  ],
+  "critical_errors": [
+    "does not mention regular",
+    "mentions irregular shape",
+    "claims order of symmetry less than or greater than 8"
+  ],
+  "strict_keywords": [
+    "symmetry",
+    "order",
+    "octagon",
+    "regular"
+  ],
+  "misconceptions": [
+    "confuses number of sides with order of symmetry",
+    "thinks only regular polygons can have symmetry"
+  ],
+  "grading_notes": "Accept answers that imply order of rotational symmetry, but penalize vague or incomplete responses."
+}

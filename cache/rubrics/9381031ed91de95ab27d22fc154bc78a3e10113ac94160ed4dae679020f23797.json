@@ -1,0 +1,34 @@
+{
+  "required_concepts": [
+    "rotational symmetry",
+    "order of rotational symmetry",
+    "regular polygon",
+    "irregular polygon"
+  ],
+  "optional_concepts": [
+    "definition of octagon",
+    "types of symmetries in geometry"
+  ],
+  "acceptable_paraphrases": [
+    "Not all octagons are regular.",
+    "An octagon only has rotational symmetry of order 8 if it is regular."
+  ],
+  "critical_errors": [
+    "Yes",
+    "yea",
+    "True",
+    "1",
+    "Its true not false an octagon has a rotational stmmetry of order 8",
+    "A REGULAR octagon has rotational symmetry of 8"
+  ],
+  "strict_keywords": [
+    "regular",
+    "octagon"
+  ],
+  "misconceptions": [
+    "All octagon r not normal octagon",
+    "Not all octagons are regular octagons | Not all octagon are regular otagon",
+    "A regular one can have order 2"
+  ],
+  "grading_notes": "-1 for critical errors, +1 for correct reasoning"
+}

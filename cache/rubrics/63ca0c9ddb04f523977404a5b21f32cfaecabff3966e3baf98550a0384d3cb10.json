@@ -1,0 +1,31 @@
+{
+  "required_concepts": [
+    "Euler's Polyhedron formula",
+    "number of vertices (V), edges (E), and faces (F) relationship"
+  ],
+  "optional_concepts": [
+    "proof of Euler's Polyhedron formula",
+    "consequence of incorrect polyhedron characteristics"
+  ],
+  "acceptable_paraphrases": [
+    "Suhuna's mistake is due to the incorrect application of Euler's Polyhedron formula.",
+    "The given polyhedron does not meet the criteria for a valid polyhedron according to Euler's formula.",
+    "Suhuna's numbers do not satisfy the relationship described by Euler's Polyhedron formula."
+  ],
+  "critical_errors": [
+    "incorrect number of vertices, edges, or faces"
+  ],
+  "strict_keywords": [
+    "Euler",
+    "Polyhedron",
+    "formula",
+    "vertices",
+    "edges",
+    "faces"
+  ],
+  "misconceptions": [
+    "assuming that the polyhedron is valid without checking the formula",
+    "ignoring the formula and only looking at individual values"
+  ],
+  "grading_notes": "Explanation of Euler's Polyhedron formula and application is a key to get high grade."
+}

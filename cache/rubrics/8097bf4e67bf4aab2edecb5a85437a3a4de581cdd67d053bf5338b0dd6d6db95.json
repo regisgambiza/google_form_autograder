@@ -1,0 +1,31 @@
+{
+  "required_concepts": [
+    "heptagon",
+    "regular polygon",
+    "hexagon"
+  ],
+  "optional_concepts": [
+    "definition of regular",
+    "properties of polygons"
+  ],
+  "acceptable_paraphrases": [
+    "polygon with 7 sides",
+    "polygon that is a heptagon",
+    "polygon with seven sides",
+    "shape with 7 equal sides and angles"
+  ],
+  "critical_errors": [
+    "pentagon or nonagon instead of heptagon",
+    "irregular polygon instead of regular"
+  ],
+  "strict_keywords": [
+    "heptagon",
+    "seven sides",
+    "equal sides and angles"
+  ],
+  "misconceptions": [
+    "thinking a regular hexagon has six sides",
+    "confusing the number of sides with other properties"
+  ],
+  "grading_notes": "Pay attention to terminology, polygon definition, and exact count of sides."
+}

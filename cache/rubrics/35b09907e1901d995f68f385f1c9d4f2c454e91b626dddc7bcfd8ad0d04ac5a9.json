@@ -1,0 +1,34 @@
+{
+  "required_concepts": [
+    "converting between units",
+    "measurements in centimeters",
+    "calculating equivalent lengths"
+  ],
+  "optional_concepts": [
+    "understanding proportionality",
+    "unit conversions and equivalencies"
+  ],
+  "acceptable_paraphrases": [
+    "1 meter is not enough because 35.4 cm x 3 exceeds 100 cm",
+    "100 cm is only 1 m, so more wire is needed",
+    "Letseby can't finish the project with just 1 m of wire",
+    "35.4 cm times 3 is longer than 100 cm"
+  ],
+  "critical_errors": [
+    "inconsistent units or calculations",
+    "failure to account for multiple pieces of wire",
+    " incorrect conversion of measurements",
+    " failure to recognize that 100 cm is not enough"
+  ],
+  "strict_keywords": [
+    "Letseby",
+    "can't",
+    "exceeds",
+    "1 m"
+  ],
+  "misconceptions": [
+    "misunderstanding of equivalent lengths",
+    "inability to convert between units"
+  ],
+  "grading_notes": "Accept only correct calculations and wordings."
+}

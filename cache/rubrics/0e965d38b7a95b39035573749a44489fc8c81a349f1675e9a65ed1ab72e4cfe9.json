@@ -1,0 +1,26 @@
+{
+  "required_concepts": [
+    "rotational_symmetry",
+    "shapes"
+  ],
+  "optional_concepts": [],
+  "acceptable_paraphrases": [
+    "Other shapes can have this property, such as a four-pointed star or a swastika design.",
+    "Other shapes can have rotational symmetry of order 4, for example a rectangle."
+  ],
+  "critical_errors": [
+    "No it can be anything because any shape can have a order of 4 not juqst a square  eg.a 4 sided stat",
+    "Not only square"
+  ],
+  "strict_keywords": [
+    "rotational",
+    "symmetry",
+    "order",
+    "four"
+  ],
+  "misconceptions": [
+    "square has rotational symmetry of order 4",
+    "False because other shapes can have an order of 4"
+  ],
+  "grading_notes": "The question is about the property (rotational symmetry) not the shape. The key word to look for is: rotational, symmetry, order, four"
+}

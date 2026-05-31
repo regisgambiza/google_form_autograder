@@ -111,8 +111,11 @@ def _map_response_to_required_fields(obj: Dict[str, object]) -> Dict[str, object
     Map various JSON response formats to the required fields.
     Returns a dict with at least the 'decision' field set, others may remain defaults.
     """
+    # Start with defaults, but preserve any existing confidence
     result = _abstain("partial_mapping")
-    
+    # Preserve any confidence that might have been set
+    preserved_confidence = obj.get("confidence")
+
     # Try to extract decision
     decision = None
     for key in ["decision", "is_correct", "coverage_score", "score"]:
@@ -129,19 +132,18 @@ def _map_response_to_required_fields(obj: Dict[str, object]) -> Dict[str, object
                     decision = "YES" if val in [True, 1, "true", "YES"] else "NO"
             elif isinstance(val, str):
                 decision = val.upper() if val.upper() in ["YES", "NO", "ABSTAIN"] else None
-    
+
     if decision:
         result["decision"] = decision
-    
-    # Try to extract confidence
-    if "confidence" not in result or result["confidence"] == 0.0:
-        for key in ["confidence", "score", "coverage_score"]:
-            if key in obj and isinstance(obj[key], (int, float)):
-                val = float(obj[key])
-                if key == "score":
-                    val = min(1.0, val / 100.0)
-                result["confidence"] = max(0.0, min(1.0, val))
-    
+
+    # Try to extract confidence - use explicit confidence field if available
+    if "confidence" in obj and isinstance(obj["confidence"], (int, float)):
+        result["confidence"] = max(0.0, min(1.0, float(obj["confidence"])))
+    elif "score" in obj and isinstance(obj["score"], (int, float)):
+        result["confidence"] = max(0.0, min(1.0, float(obj["score"]) / 100.0))
+    elif "confidence" not in result:
+        result["confidence"] = 0.0
+
     # Try to extract other fields
     for key, req_key in [
         ("semantic_similarity", "semantic_similarity"),
@@ -152,7 +154,7 @@ def _map_response_to_required_fields(obj: Dict[str, object]) -> Dict[str, object
     ]:
         if key in obj and isinstance(obj[key], (int, float)):
             result[req_key] = max(0.0, min(1.0, float(obj[key]) / 100.0 if "percentage" in key else obj[key]))
-    
+
     return result
 
 
@@ -267,6 +269,7 @@ async def call_judge_async(
         ],
         "stream": False,
         "options": _get_ollama_options(role),
+        "format": _get_judge_format(),  # Enforce structured JSON output
         "timeout": 180
     }
 
@@ -393,16 +396,17 @@ def _run_judges_sync(
         role_model = jury_models.get(role)
         start = time.perf_counter()
         log("INFO", f"START judge_{role} (model={role_model})")
-        
+
         # Use a queue to get result from thread
         result_queue = queue.Queue()
         exception_queue = queue.Queue()
-        
+
         def call_ollama():
             try:
                 response = ollama.chat(
                     model=role_model,
                     options=_get_ollama_options(role),
+                    format=_get_judge_format(),  # Enforce structured JSON output
                     messages=[
                         {"role": "system", "content": JUDGE_PROMPTS[role]},
                         {"role": "user", "content": _make_judge_prompt(question, expected, answer, rubric)},
@@ -412,7 +416,7 @@ def _run_judges_sync(
             except Exception as e:
                 exception_queue.put(e)
                 result_queue.put(("exception", None))
-        
+
         # Run in thread with timeout
         thread = threading.Thread(target=call_ollama, daemon=True)
         thread.start()
@@ -463,5 +467,67 @@ def run_judges(
     rubric: Dict[str, object],
     retries: int = 3
 ) -> List[Dict[str, object]]:
-    """Public API - run all judges."""
-    return asyncio.run(run_all_judges_with_early_exit(answer, question, expected, rubric, retries))
+    """Public API - run all judges with asyncio support.
+    
+    This function safely handles both asyncio and non-asyncio contexts.
+    In GUI applications (PyQt5) or other contexts with existing event loops,
+    it uses the existing loop instead of creating a new one.
+    """
+    import asyncio
+    
+    cfg = load_config()
+    use_async = cfg.get("enable_async_judges", True)
+    
+    if not use_async or aiohttp is None:
+        # Fallback to synchronous execution
+        log("INFO", "Running judges synchronously (async disabled or aiohttp unavailable)")
+        jury_models = cfg.get("jury_models", {})
+        return _run_judges_sync(answer, question, expected, rubric, jury_models, retries)
+    
+    try:
+        # Try to get the existing event loop first
+        loop = asyncio.get_event_loop()
+        # If we're in the main thread and the loop is running, use it
+        if loop.is_running():
+            log("DEBUG", "Using existing running event loop")
+            # For a running loop, we need to use run_in_executor or similar
+            # Create a new thread to run the async code
+            import threading
+            result_container = [None]
+            exception_container = [None]
+            
+            def run_async():
+                try:
+                    result_container[0] = loop.run_until_complete(
+                        run_all_judges_with_early_exit(answer, question, expected, rubric, retries)
+                    )
+                except Exception as e:
+                    exception_container[0] = e
+            
+            thread = threading.Thread(target=run_async, daemon=True)
+            thread.start()
+            thread.join(timeout=300)  # 5 minute max wait
+            
+            if thread.is_alive():
+                log("WARNING", "Async judge execution timed out after 300s")
+                raise TimeoutError("Async judge execution timed out")
+            
+            if exception_container[0]:
+                raise exception_container[0]
+            
+            return result_container[0]
+            
+    except RuntimeError:
+        # No event loop exists, create a new one
+        log("DEBUG", "Creating new event loop for judge execution")
+        pass
+    
+    # No existing loop, create a new one
+    try:
+        return asyncio.run(run_all_judges_with_early_exit(answer, question, expected, rubric, retries))
+    except RuntimeError as e:
+        # This should not happen after the try/except above, but handle it just in case
+        log("ERROR", f"Failed to run async judges: {e}")
+        # Fallback to sync
+        jury_models = cfg.get("jury_models", {})
+        return _run_judges_sync(answer, question, expected, rubric, jury_models, retries)

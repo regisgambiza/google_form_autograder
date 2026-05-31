@@ -47,7 +47,7 @@ def get_embedding(text: str, model: str) -> List[float]:
 
     result_queue = queue.Queue()
     exception_queue = queue.Queue()
-    
+
     def call_ollama():
         try:
             emb = ollama.embeddings(model=model, prompt=text, options={"num_ctx": num_ctx})["embedding"]
@@ -55,23 +55,32 @@ def get_embedding(text: str, model: str) -> List[float]:
         except Exception as e:
             exception_queue.put(e)
             result_queue.put(("exception", None))
-    
+
     thread = threading.Thread(target=call_ollama, daemon=True)
     thread.start()
-    thread.join(60)  # 60 second timeout
     
+    # Use a polling approach to avoid blocking indefinitely
+    # Check every 0.1 seconds if thread is done, with a 60 second timeout
+    timeout_seconds = 60
+    poll_interval = 0.1
+    elapsed = 0
+    
+    while thread.is_alive() and elapsed < timeout_seconds:
+        time.sleep(poll_interval)
+        elapsed += poll_interval
+
     if thread.is_alive():
-        log("WARNING", f"Embedding generation timed out after 60s for model={model}")
+        log("WARNING", f"Embedding generation timed out after {timeout_seconds}s for model={model}")
         raise TimeoutError("Embedding generation timed out")
-    
+
     if not exception_queue.empty():
         ex = exception_queue.get()
         raise ex
-    
+
     success, emb = result_queue.get()
     if success != "success":
         raise Exception("Ollama embedding call failed")
-        
+
     duration_ms = (time.perf_counter() - start) * 1000
     log("INFO", f"END embedding_generate duration_ms={duration_ms:.0f} (model={model})")
     with open(path, "w", encoding="utf-8") as f:

@@ -1,0 +1,34 @@
+{
+  "required_concepts": [
+    "four",
+    "triangular",
+    "faces",
+    "shape"
+  ],
+  "optional_concepts": [
+    "tetrahedron",
+    "pyramid"
+  ],
+  "acceptable_paraphrases": [
+    "a shape with four triangular sides",
+    "four faces that are triangles",
+    "triangle-shaped surfaces on a 3D object",
+    "a three-dimensional object with triangle faces"
+  ],
+  "critical_errors": [
+    "more than four faces",
+    "not all faces are triangular",
+    "shape has non-rectangular base"
+  ],
+  "strict_keywords": [
+    "four",
+    "triangular",
+    "faces"
+  ],
+  "misconceptions": [
+    "thinking a pyramid must have a square base",
+    "believing a tetrahedron is the only possible shape with four triangular faces",
+    "assuming the object is convex"
+  ],
+  "grading_notes": "Consider the specific keywords and possible synonyms to determine if the answer is accurate."
+}

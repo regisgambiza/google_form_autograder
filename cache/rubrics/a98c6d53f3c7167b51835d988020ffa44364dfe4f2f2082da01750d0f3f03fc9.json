@@ -1,0 +1,29 @@
+{
+  "required_concepts": [
+    "2D shape that can be represented in 3 dimensions"
+  ],
+  "optional_concepts": [
+    "can be oriented with different perspectives, shapes, and forms"
+  ],
+  "acceptable_paraphrases": [
+    "shape with two sides that have the same length and are parallel to each other",
+    "figure with opposite sides of equal length and parallel",
+    "a shape where opposite sides are parallel",
+    "a quadrilateral with pairs of parallel sides"
+  ],
+  "critical_errors": [
+    "confusing it with a rectangle or square",
+    "assuming it must be oriented in a specific direction"
+  ],
+  "strict_keywords": [
+    "parallelogram",
+    "parallel sides",
+    "opposite sides equal length"
+  ],
+  "misconceptions": [
+    "thinking only squares and rectangles are parallelograms",
+    "believing a shape needs to have right angles to be a parallelogram",
+    "assuming all shapes with parallel sides are triangles"
+  ],
+  "grading_notes": "Acceptable answers may vary in capitalization or spelling, but must clearly identify the correct concept."
+}

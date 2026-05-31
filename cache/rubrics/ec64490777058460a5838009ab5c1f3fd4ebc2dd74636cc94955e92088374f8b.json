@@ -1,0 +1,33 @@
+{
+  "required_concepts": [
+    "equal sides",
+    "rectangle",
+    "parallelogram"
+  ],
+  "optional_concepts": [
+    "rhombus",
+    "interior angles are 90°",
+    "line of symmetry"
+  ],
+  "acceptable_paraphrases": [
+    "all four sides have the same length",
+    "the opposite sides are equal in length",
+    "it has four right angles",
+    "has no line of symmetry",
+    "has two lines of symmetry"
+  ],
+  "critical_errors": [
+    "all sides are not equal",
+    "only one pair of parallel sides"
+  ],
+  "strict_keywords": [
+    "rectangle",
+    "paralellagram"
+  ],
+  "misconceptions": [
+    "rhombus is the same as rectangle",
+    "a rhombus has four right angles",
+    "a parallelogram has a line of symmetry"
+  ],
+  "grading_notes": "If the statement correctly identifies that all sides are equal, it's a rhombus and if not then it is a rectangle. If it states that all interior angles are 90°, it might be either a rectangle or parallelogram, but if no line of symmetry exists, then it's a parallelogram."
+}

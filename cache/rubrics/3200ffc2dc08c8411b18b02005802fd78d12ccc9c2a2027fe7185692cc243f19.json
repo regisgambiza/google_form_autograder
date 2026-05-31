@@ -1,0 +1,36 @@
+{
+  "required_concepts": [
+    "geometry",
+    "polygons"
+  ],
+  "optional_concepts": [
+    "symmetry",
+    "rotational symmetry"
+  ],
+  "acceptable_paraphrases": [
+    "A regular tridecagon has exactly 13 lines of symmetry and rotational symmetry of order 13."
+  ],
+  "critical_errors": [
+    "Tridecagoj",
+    "Not correct: it can be a 13-sided polygon",
+    "Petergon",
+    "A regular tridegon",
+    "Wrong because it has one that have 13 side",
+    "true cus the tridecagon exists",
+    "She is false. A regular tridecagon has those",
+    "No a rugular trideagon has 13 lines",
+    "she is false. A regular tridecagon has those",
+    "No because there's a shape like that called tridecagon"
+  ],
+  "strict_keywords": [
+    "rotational symmetry of order 13",
+    "lines of symmetry"
+  ],
+  "misconceptions": [
+    "it can be a 13-sided polygon (incorrect assumption about tridecagon)",
+    "Wrong because it has one that have 13 side",
+    "true cus the tridecagon exists",
+    "No a rugular trideagon has 13 lines"
+  ],
+  "grading_notes": "This response contains some correct concepts (symmetry, rotational symmetry) but also several incorrect or incomplete ideas about what constitutes a regular tridecagon."
+}

@@ -11,6 +11,21 @@ import ollama
 from evaluator_config import load_config, sha256_text
 from logger import log
 
+# JSON schema for structured rubric output
+rubric_format = {
+    "type": "object",
+    "properties": {
+        "required_concepts": {"type": "array", "items": {"type": "string"}},
+        "optional_concepts": {"type": "array", "items": {"type": "string"}},
+        "acceptable_paraphrases": {"type": "array", "items": {"type": "string"}},
+        "critical_errors": {"type": "array", "items": {"type": "string"}},
+        "strict_keywords": {"type": "array", "items": {"type": "string"}},
+        "misconceptions": {"type": "array", "items": {"type": "string"}},
+        "grading_notes": {"type": "string"}
+    },
+    "required": ["required_concepts", "optional_concepts", "acceptable_paraphrases", "critical_errors", "strict_keywords", "misconceptions", "grading_notes"]
+}
+
 SYSTEM_PROMPT = (
     "You are an expert curriculum designer and teacher. Given a question and its correct answer, "
     "produce a structured grading rubric. Be generous with acceptable paraphrases - students may use "
@@ -192,10 +207,19 @@ def generate_rubric(question: str, expected: str, model: Optional[str] = None) -
     # 60 second timeout for rubric generation
     thread = threading.Thread(target=call_ollama, daemon=True)
     thread.start()
-    thread.join(60)
     
+    # Use a polling approach to avoid blocking indefinitely
+    # Check every 0.1 seconds if thread is done, with a 60 second timeout
+    timeout_seconds = 60
+    poll_interval = 0.1
+    elapsed = 0
+    
+    while thread.is_alive() and elapsed < timeout_seconds:
+        time.sleep(poll_interval)
+        elapsed += poll_interval
+
     if thread.is_alive():
-        log("WARNING", f"Rubric generation timed out after 60s for model={model}, using fallback")
+        log("WARNING", f"Rubric generation timed out after {timeout_seconds}s for model={model}, using fallback")
         duration_ms = (time.perf_counter() - start) * 1000
         log("INFO", f"END rubric_generate duration_ms={duration_ms:.0f} (model={model})")
         return fallback

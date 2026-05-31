@@ -127,7 +127,7 @@ def algebra_equal(a: str, b: str) -> bool:
 
 def run_deterministic_checks(answer: str, expected: Union[str, List[str]], numeric_tolerance: float = 0.01, total_timeout: int = 30) -> DeterministicResult:
     """Run stage-2 deterministic checks; returns first high-confidence hit.
-    
+
     Args:
         answer: The student's answer
         expected: Expected answer(s)
@@ -151,10 +151,10 @@ def run_deterministic_checks(answer: str, expected: Union[str, List[str]], numer
         log("INFO", f"END deterministic_checks duration_ms={duration_ms:.0f} method=exact_normalized accepted=True")
         return DeterministicResult(True, 1.0, "exact_normalized")
 
-    # Check timeout after normalized check
+    # Check timeout after normalized check (30% of total time)
     elapsed = time.perf_counter() - start
-    if elapsed > total_timeout * 0.3:  # 30% of total time
-        log("DEBUG", f"deterministic_checks aborted - timeout after normalized check ({elapsed:.1f}s)")
+    if elapsed > total_timeout * 0.3:
+        log("DEBUG", f"deterministic_checks aborted - timeout after normalized check ({elapsed:.1f}s > {total_timeout * 0.3:.1f}s)")
         return DeterministicResult(False, 0.0, "timeout")
 
     if isinstance(expected, list):

@@ -1,0 +1,32 @@
+{
+  "required_concepts": [
+    "heptagon",
+    "regular polygon",
+    "number of sides"
+  ],
+  "optional_concepts": [
+    "polygon",
+    "geometry"
+  ],
+  "acceptable_paraphrases": [
+    "seven-sided shape",
+    "polygon with seven sides",
+    "geometric figure with seven sides"
+  ],
+  "critical_errors": [
+    "heptadecagon",
+    "irregular polygon",
+    "non-convex shape",
+    "non-polygonal shape"
+  ],
+  "strict_keywords": [
+    "seven",
+    "sides",
+    "polygon"
+  ],
+  "misconceptions": [
+    "thinking a regular heptagon and a hexagon are the same",
+    "believing that any seven-sided shape is automatically a regular polygon"
+  ],
+  "grading_notes": "Consider all geometric figures with seven sides, whether they have any special properties."
+}

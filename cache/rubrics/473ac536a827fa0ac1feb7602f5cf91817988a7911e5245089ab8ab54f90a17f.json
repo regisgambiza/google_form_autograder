@@ -1,0 +1,25 @@
+{
+  "required_concepts": [
+    "place value of numbers in the US system"
+  ],
+  "optional_concepts": [],
+  "acceptable_paraphrases": [
+    "eighty-two tens and five ones",
+    "fifty tens, eighty twos, and five ones"
+  ],
+  "critical_errors": [
+    "incorrect place values (e.g. putting 'five' in the hundreds place)",
+    "using a non-US number system",
+    "not using base-10 notation"
+  ],
+  "strict_keywords": [
+    "tens",
+    "ones"
+  ],
+  "misconceptions": [
+    "believing that numbers in US place value only go up to three digits",
+    "thinking that every digit has the same value regardless of its position",
+    "confusing place values with arithmetic operations (e.g. addition, subtraction)"
+  ],
+  "grading_notes": "Students must demonstrate correct use of place value for a three-digit number."
+}

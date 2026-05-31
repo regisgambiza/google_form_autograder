@@ -2,6 +2,7 @@
 import json
 import os
 import time
+import threading
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Union
@@ -18,13 +19,15 @@ from rubric_generator import generate_rubric
 from semantic_scoring import score_concepts
 
 
-def _write_heartbeat_if_needed():
-    """Write heartbeat to file if it exists (main.py writes it)."""
+def _write_heartbeat_if_needed(hang_stage: str = "unknown"):
+    """Write heartbeat to file with stage information for hang monitoring."""
     try:
         if os.path.exists("heartbeat.json"):
             data = {
                 "last_update": datetime.now(timezone.utc).isoformat(),
-                "pid": os.getpid()
+                "pid": os.getpid(),
+                "stage": hang_stage,
+                "timestamp_epoch": time.time()
             }
             with open("heartbeat.json", "w") as f:
                 json.dump(data, f, indent=2)
@@ -124,8 +127,8 @@ def evaluate_answer(answer: str, expected: Union[str, List[str]], question: str)
         log("DEBUG", f"cache_hit=True stage={r.stage_reached}")
         return r
 
-    # Write heartbeat before expensive operations
-    _write_heartbeat_if_needed()
+    # Write heartbeat with stage info for hang monitoring
+    _write_heartbeat_if_needed(hang_stage="deterministic_checks")
 
     det = run_deterministic_checks(answer, expected, float(cfg.get("numeric_tolerance", 0.01)))
     if det.accepted and det.confidence >= 0.95:
@@ -136,11 +139,17 @@ def evaluate_answer(answer: str, expected: Union[str, List[str]], question: str)
         return res
 
     # Get rubric from cache (one rubric per question reused for all students)
+    # Write heartbeat before rubric generation
+    _write_heartbeat_if_needed(hang_stage="rubric_generation")
     exp_text = _expected_text(expected)
     rubric = get_or_generate_rubric(question, exp_text, question_id=qh)
+
+    _write_heartbeat_if_needed(hang_stage="concept_scoring")
     concept = score_concepts(normalize(answer), rubric)
     emb_score = float(concept["embedding_score"])
     emb_th = cfg.get("embedding_thresholds", {})
+    
+    _write_heartbeat_if_needed(hang_stage="misconception_detection")
     misconception = detect_misconception(answer, rubric)
 
     # High-coverage semantic accept fast path (pre-jury) when no misconception is detected.
@@ -180,6 +189,8 @@ def evaluate_answer(answer: str, expected: Union[str, List[str]], question: str)
         log("INFO", f"stage=embedding auto_reject=True score={emb_score:.3f} latency_ms={lat:.0f}")
         return res
 
+    # Write heartbeat before judges (most time-consuming step)
+    _write_heartbeat_if_needed(hang_stage="jury_consensus")
     judges = run_judges(answer, question, exp_text, rubric, retries=int(cfg.get("retry_attempts", 3)))
     active = [j for j in judges if j.get("decision") != "ABSTAIN"]
     if not active:

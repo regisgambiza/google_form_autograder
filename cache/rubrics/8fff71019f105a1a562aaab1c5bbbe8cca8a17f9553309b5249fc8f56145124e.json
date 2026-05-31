@@ -1,0 +1,35 @@
+{
+  "required_concepts": [
+    "distance",
+    "Kat and Eve's cycle length",
+    "difference"
+  ],
+  "optional_concepts": [
+    "circumference of a circle",
+    "radius",
+    "pi approximation"
+  ],
+  "acceptable_paraphrases": [
+    "further than",
+    "more distance",
+    "additional meters",
+    "extra length",
+    "cycled longer"
+  ],
+  "critical_errors": [
+    "Kat cycles less far",
+    "Eve cycles further than Kat",
+    "distance is the same"
+  ],
+  "strict_keywords": [
+    "31.4",
+    "meters",
+    "further"
+  ],
+  "misconceptions": [
+    "assuming circular motion for only one circuit",
+    "calculating circumference of a circle incorrectly",
+    "not using given data to find difference in cycle length"
+  ],
+  "grading_notes": "Answer should be in meters and include the unit. Acceptable approximations are allowed."
+}

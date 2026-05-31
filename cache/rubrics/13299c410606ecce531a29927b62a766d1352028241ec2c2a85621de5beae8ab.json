@@ -1,0 +1,30 @@
+{
+  "required_concepts": [
+    "rounding to significant figures",
+    "scientific notation",
+    "correct unit"
+  ],
+  "optional_concepts": [
+    "understanding of absolute vs relative error"
+  ],
+  "acceptable_paraphrases": [
+    "38.3 meters, 38.308 meters in scientific notation",
+    "rounded to the correct number of sig figs"
+  ],
+  "critical_errors": [
+    "improper rounding",
+    "incorrect unit (e.g. kg instead of m)",
+    "no unit at all"
+  ],
+  "strict_keywords": [
+    "38.3",
+    "meters",
+    "scientific notation",
+    "sig figs",
+    "rounding"
+  ],
+  "misconceptions": [
+    "thinking that only the given answer is correct, not understanding the concept of rounding or significant figures"
+  ],
+  "grading_notes": "be sure to check for unit correctness and proper application of sig fig rules"
+}

@@ -4,6 +4,8 @@ from logger import log
 import re
 import unicodedata
 import os
+import threading
+import queue
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 import subprocess
@@ -11,13 +13,15 @@ from datetime import datetime, timezone
 from sympy import sympify, simplify
 
 
-def _write_heartbeat_if_needed():
-    """Write heartbeat to file if it exists."""
+def _write_heartbeat_if_needed(hang_stage: str = "unknown"):
+    """Write heartbeat to file with stage info for hang monitoring."""
     try:
         if os.path.exists("heartbeat.json"):
             data = {
                 "last_update": datetime.now(timezone.utc).isoformat(),
-                "pid": os.getpid()
+                "pid": os.getpid(),
+                "stage": hang_stage,
+                "timestamp_epoch": time.time()
             }
             with open("heartbeat.json", "w") as f:
                 json.dump(data, f, indent=2)
@@ -203,9 +207,38 @@ Return your answer in **EXACTLY** this format:
 - Do NOT output more or fewer than {len(answers)} objects.
 """
 
+    TIMEOUT_SECONDS = 60  # Timeout per attempt
+
     for attempt in range(1, retries + 1):
         try:
-            response = ollama.chat(model=model, messages=[{"role": "user", "content": prompt}])
+            # Use thread with timeout to prevent hanging on Ollama call
+            result_queue = queue.Queue()
+            exception_queue = queue.Queue()
+            
+            def call_ollama():
+                try:
+                    response = ollama.chat(model=model, messages=[{"role": "user", "content": prompt}])
+                    result_queue.put(("success", response))
+                except Exception as e:
+                    exception_queue.put(e)
+                    result_queue.put(("exception", None))
+            
+            thread = threading.Thread(target=call_ollama, daemon=True)
+            thread.start()
+            thread.join(TIMEOUT_SECONDS)
+            
+            if thread.is_alive():
+                log("WARNING", f"Model {model} timed out after {TIMEOUT_SECONDS}s, attempt {attempt}/{retries}")
+                raise TimeoutError(f"Ollama call timed out after {TIMEOUT_SECONDS}s")
+            
+            if not exception_queue.empty():
+                ex = exception_queue.get()
+                raise ex
+                
+            success, response = result_queue.get()
+            if success != "success":
+                raise Exception("Ollama call failed")
+                
             text = response['message']['content']
             text = ''.join(c for c in text if unicodedata.category(c)[0] != 'C').strip()
 
@@ -254,8 +287,8 @@ def evaluate_answers_batch(question, answers, expected=None):
     """Evaluate a batch of answers for a single question using AI models to compare against expected answers, ignoring units."""
     log("DEBUG", f"Evaluating Q{question.get('index', '?')} (leniency={LENIENCY})")
 
-    # Write heartbeat before expensive operations
-    _write_heartbeat_if_needed()
+    # Write heartbeat with stage info for hang monitoring
+    _write_heartbeat_if_needed(hang_stage="ai_evaluation")
 
     if not answers:
         log("INFO", "No answers to evaluate. Returning empty list.")
@@ -292,7 +325,11 @@ def evaluate_answers_batch(question, answers, expected=None):
         for future in as_completed(future_map):
             batch_idx, model, batch = future_map[future]
             try:
-                votes = future.result()
+                # Add timeout to prevent hanging on a single Ollama call
+                votes = future.result(timeout=30.0)  # 30 second timeout per batch
+            except concurrent.futures.TimeoutError:
+                log("ERROR", f"Model {model} timed out on batch {batch_idx}. Falling back to NO.")
+                votes = [("NO", "") for _ in batch]
             except Exception as e:
                 log("ERROR", f"Model {model} crashed on batch {batch_idx}: {e}. Falling back to NO.")
                 votes = [("NO", "") for _ in batch]
