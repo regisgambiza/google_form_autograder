@@ -4,6 +4,8 @@ import json
 import os
 import re
 import time
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 from datetime import datetime, timezone
 from typing import Dict, List
 
@@ -11,12 +13,29 @@ try:
     import aiohttp
 except Exception:
     aiohttp = None
+import requests
 import ollama
 
 from evaluator_config import load_config
 from logger import log
 from ollama_diagnostics import log_post_inference_gpu_probe_once
 from ollama_options import build_ollama_options
+
+_JUDGE_HTTP_LIMIT_LOCK = threading.Lock()
+_JUDGE_HTTP_SEMAPHORE = None
+
+
+def _get_judge_http_semaphore():
+    global _JUDGE_HTTP_SEMAPHORE
+    if _JUDGE_HTTP_SEMAPHORE is not None:
+        return _JUDGE_HTTP_SEMAPHORE
+    with _JUDGE_HTTP_LIMIT_LOCK:
+        if _JUDGE_HTTP_SEMAPHORE is None:
+            cfg = load_config()
+            max_inflight = max(1, int(cfg.get("max_concurrent_judge_http", 4)))
+            _JUDGE_HTTP_SEMAPHORE = threading.Semaphore(max_inflight)
+            log("INFO", f"[JUDGES] HTTP concurrency limit enabled (max_concurrent_judge_http={max_inflight})")
+    return _JUDGE_HTTP_SEMAPHORE
 
 
 def _write_heartbeat_if_needed():
@@ -58,6 +77,12 @@ def _abstain(reason: str = "judge unavailable") -> Dict[str, object]:
         "decision": "ABSTAIN",
         "reason_short": reason
     }
+
+
+def _ollama_chat_url() -> str:
+    cfg = load_config()
+    base = str(cfg.get("ollama_api_base_url", "http://127.0.0.1:11434")).rstrip("/")
+    return f"{base}/api/chat"
 
 
 def parse_judge_response(raw: str) -> Dict[str, object]:
@@ -259,6 +284,10 @@ async def call_judge_async(
     retries: int
 ) -> Dict[str, object]:
     """Call a judge using Ollama with structured output."""
+    _write_heartbeat_if_needed()
+    cfg = load_config()
+    judge_timeout_s = max(10, int(cfg.get("judge_timeout_seconds", 45)))
+    judge_http_timeout_s = max(judge_timeout_s, int(cfg.get("judge_http_timeout_seconds", 60)))
     start = time.perf_counter()
     log("INFO", f"START judge_{role} (model={model})")
 
@@ -271,14 +300,18 @@ async def call_judge_async(
         "stream": False,
         "options": _get_ollama_options(role),
         "format": _get_judge_format(),  # Enforce structured JSON output
-        "timeout": 180
+        "timeout": judge_http_timeout_s,
     }
 
-    TIMEOUT_SECONDS = 60  # Shorter timeout for judge calls
+    sem = _get_judge_http_semaphore()
+    sem_wait = max(3, int(cfg.get("judge_http_semaphore_wait_seconds", judge_timeout_s)))
 
     for attempt in range(retries):
+        if not sem.acquire(timeout=sem_wait):
+            log("WARNING", f"Judge {role} semaphore wait timeout ({sem_wait}s)")
+            continue
         try:
-            async with session.post("http://localhost:11434/api/chat", json=payload, timeout=180) as resp:
+            async with session.post(_ollama_chat_url(), json=payload, timeout=judge_http_timeout_s) as resp:
                 data = await resp.json()
 
             content = data.get("message", {}).get("content", "")
@@ -303,6 +336,7 @@ async def call_judge_async(
                 duration_ms = (time.perf_counter() - start) * 1000
                 log_post_inference_gpu_probe_once("judge_async")
                 _log_judge_result(role, model, duration_ms, obj.get("decision", "ABSTAIN"), obj.get("confidence", 0.0))
+                _write_heartbeat_if_needed()
                 return obj
 
         except json.JSONDecodeError as ex:
@@ -313,7 +347,12 @@ async def call_judge_async(
             content = data.get("message", {}).get("content", "") if 'data' in locals() else ""
             log("WARNING", f"Judge {role} failed: {ex}")
             log("WARNING", f"  Content: {repr(content)[:200]}")
-    
+        finally:
+            try:
+                sem.release()
+            except Exception:
+                pass
+
     return _abstain("retries_exhausted")
 
 
@@ -335,6 +374,7 @@ async def run_all_judges_with_early_exit(
 
     cfg = load_config()
     jury_models = cfg.get("jury_models", {})
+    judge_timeout_s = max(10, int(cfg.get("judge_timeout_seconds", 45)))
     ee = cfg.get("early_exit", {})
     min_judges = int(ee.get("min_judges", 3))
     agree_thresh = float(ee.get("agreement_confidence", 0.90))
@@ -356,8 +396,7 @@ async def run_all_judges_with_early_exit(
         results: List[Dict[str, object]] = []
         for done in asyncio.as_completed(tasks):
             try:
-                # Add 60 second timeout per judge
-                r = await asyncio.wait_for(done, timeout=60)
+                r = await asyncio.wait_for(done, timeout=judge_timeout_s)
             except asyncio.TimeoutError:
                 log("WARNING", "Judge call timed out, using ABSTAIN")
                 r = _abstain("timeout")
@@ -388,78 +427,119 @@ def _run_judges_sync(
     retries: int
 ) -> List[Dict[str, object]]:
     """Synchronous judge execution (fallback when aiohttp unavailable)."""
-    import threading
-    import queue
-    
-    out: List[Dict[str, object]] = []
-    TIMEOUT_SECONDS = 60  # Timeout for each judge call
+    cfg = load_config()
+    TIMEOUT_SECONDS = max(10, int(cfg.get("judge_timeout_seconds", 45)))
+    http_timeout_seconds = max(TIMEOUT_SECONDS, int(cfg.get("judge_http_timeout_seconds", 60)))
+    sync_parallelism = max(1, int(cfg.get("sync_judge_parallelism", len(JUDGE_PROMPTS))))
+    ee = cfg.get("early_exit", {})
+    ee_enabled = bool(ee.get("enabled", True))
+    ee_min = max(1, int(ee.get("min_judges", 3)))
+    ee_agree = float(ee.get("agreement_confidence", 0.90))
 
-    for role in JUDGE_PROMPTS:
+    def _call_one(role: str) -> Dict[str, object]:
+        _write_heartbeat_if_needed()
         role_model = jury_models.get(role)
         start = time.perf_counter()
         log("INFO", f"START judge_{role} (model={role_model})")
+        payload = {
+            "model": role_model,
+            "messages": [
+                {"role": "system", "content": JUDGE_PROMPTS[role]},
+                {"role": "user", "content": _make_judge_prompt(question, expected, answer, rubric)},
+            ],
+            "stream": False,
+            "options": _get_ollama_options(role),
+            "format": _get_judge_format(),
+            "timeout": http_timeout_seconds,
+        }
+        sem = _get_judge_http_semaphore()
+        sem_wait = max(3, int(cfg.get("judge_http_semaphore_wait_seconds", TIMEOUT_SECONDS)))
+        if not sem.acquire(timeout=sem_wait):
+            log("WARNING", f"Judge {role} semaphore wait timeout ({sem_wait}s), falling back to ABSTAIN")
+            duration_ms = (time.perf_counter() - start) * 1000
+            _log_judge_result(role, role_model, duration_ms, "ABSTAIN", 0.0)
+            return _abstain("semaphore_timeout")
 
-        # Use a queue to get result from thread
-        result_queue = queue.Queue()
-        exception_queue = queue.Queue()
-
-        def call_ollama():
-            try:
-                response = ollama.chat(
-                    model=role_model,
-                    options=_get_ollama_options(role),
-                    format=_get_judge_format(),  # Enforce structured JSON output
-                    messages=[
-                        {"role": "system", "content": JUDGE_PROMPTS[role]},
-                        {"role": "user", "content": _make_judge_prompt(question, expected, answer, rubric)},
-                    ],
-                )
-                result_queue.put(("success", response))
-            except Exception as e:
-                exception_queue.put(e)
-                result_queue.put(("exception", None))
-
-        # Run in thread with timeout
-        thread = threading.Thread(target=call_ollama, daemon=True)
-        thread.start()
-        thread.join(TIMEOUT_SECONDS)
-        
-        if thread.is_alive():
+        try:
+            resp = requests.post(
+                _ollama_chat_url(),
+                json=payload,
+                timeout=(10, TIMEOUT_SECONDS),
+            )
+            resp.raise_for_status()
+            response = resp.json()
+        except requests.Timeout:
             log("WARNING", f"Judge {role} timed out after {TIMEOUT_SECONDS}s, falling back to ABSTAIN")
             duration_ms = (time.perf_counter() - start) * 1000
             _log_judge_result(role, role_model, duration_ms, "ABSTAIN", 0.0)
-            out.append(_abstain("timeout"))
-            continue
-            
-        if not exception_queue.empty():
-            ex = exception_queue.get()
+            return _abstain("timeout")
+        except Exception as ex:
             log("WARNING", f"Judge {role} sync attempt failed: {ex}")
             duration_ms = (time.perf_counter() - start) * 1000
             _log_judge_result(role, role_model, duration_ms, "ABSTAIN", 0.0)
-            out.append(_abstain("exception"))
-            continue
-            
-        success, response = result_queue.get()
-        if success == "success":
-            raw = response.get("message", {}).get("content", "")
-            obj = parse_judge_response(raw) if isinstance(raw, str) else raw
+            return _abstain("exception")
+        finally:
+            try:
+                sem.release()
+            except Exception:
+                pass
 
-            obj = _normalize_decision(obj)
-            obj = _fill_judge_defaults(obj)
-            if _valid(obj):
-                duration_ms = (time.perf_counter() - start) * 1000
-                log_post_inference_gpu_probe_once("judge_sync")
-                _log_judge_result(role, role_model, duration_ms, obj.get("decision", "ABSTAIN"), obj.get("confidence", 0.0))
-                out.append(obj)
-            else:
-                duration_ms = (time.perf_counter() - start) * 1000
-                _log_judge_result(role, role_model, duration_ms, "ABSTAIN", 0.0)
-                out.append(_abstain("invalid_response"))
-        else:
-            duration_ms = (time.perf_counter() - start) * 1000
-            _log_judge_result(role, role_model, duration_ms, "ABSTAIN", 0.0)
-            out.append(_abstain("unknown_error"))
-            
+        raw = response.get("message", {}).get("content", "")
+        obj = parse_judge_response(raw) if isinstance(raw, str) else raw
+        obj = _normalize_decision(obj)
+        obj = _fill_judge_defaults(obj)
+        duration_ms = (time.perf_counter() - start) * 1000
+        if _valid(obj):
+            log_post_inference_gpu_probe_once("judge_sync")
+            _log_judge_result(role, role_model, duration_ms, obj.get("decision", "ABSTAIN"), obj.get("confidence", 0.0))
+            _write_heartbeat_if_needed()
+            return obj
+        _log_judge_result(role, role_model, duration_ms, "ABSTAIN", 0.0)
+        _write_heartbeat_if_needed()
+        return _abstain("invalid_response")
+
+    roles = list(JUDGE_PROMPTS.keys())
+    out: List[Dict[str, object]] = []
+    if sync_parallelism <= 1:
+        for role in roles:
+            out.append(_call_one(role))
+            if ee_enabled and len(out) >= ee_min:
+                decisions = [str(x.get("decision", "ABSTAIN")) for x in out]
+                confs = [float(x.get("confidence", 0.0)) for x in out]
+                avg_conf = (sum(confs) / len(confs)) if confs else 0.0
+                if len(set(decisions)) == 1 and avg_conf >= ee_agree:
+                    break
+        return out
+
+    with ThreadPoolExecutor(max_workers=min(sync_parallelism, len(roles))) as ex:
+        fut_to_role = {ex.submit(_call_one, role): role for role in roles}
+        pending = set(fut_to_role.keys())
+        try:
+            for fut in as_completed(fut_to_role.keys(), timeout=http_timeout_seconds + 5):
+                pending.discard(fut)
+                try:
+                    out.append(fut.result())
+                except Exception as exx:
+                    log("WARNING", f"Judge future failed: {exx}")
+                    out.append(_abstain("future_exception"))
+
+                if ee_enabled and len(out) >= ee_min:
+                    decisions = [str(x.get("decision", "ABSTAIN")) for x in out]
+                    confs = [float(x.get("confidence", 0.0)) for x in out]
+                    avg_conf = (sum(confs) / len(confs)) if confs else 0.0
+                    if len(set(decisions)) == 1 and avg_conf >= ee_agree:
+                        for pf in list(pending):
+                            pf.cancel()
+                        break
+        except FuturesTimeoutError:
+            log("WARNING", "Synchronous judge batch timed out; unresolved judges will ABSTAIN")
+        finally:
+            for pf in pending:
+                pf.cancel()
+
+    # Keep output size stable for downstream logic.
+    while len(out) < ee_min:
+        out.append(_abstain("insufficient_judges"))
     return out
 
 
@@ -479,7 +559,7 @@ def run_judges(
     import asyncio
     
     cfg = load_config()
-    use_async = cfg.get("enable_async_judges", True)
+    use_async = bool(cfg.get("enable_async_judges", False))
     
     if not use_async or aiohttp is None:
         # Fallback to synchronous execution

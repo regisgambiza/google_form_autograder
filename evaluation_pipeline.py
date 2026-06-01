@@ -41,8 +41,11 @@ RESULT_CACHE: Dict[str, "EvaluationResult"] = {}
 QUESTION_RUBRIC_CACHE: Dict[str, Dict] = {}
 RESULT_CACHE_LOCK = threading.Lock()
 RUBRIC_CACHE_LOCK = threading.Lock()
+RUBRIC_KEY_LOCKS: Dict[str, threading.Lock] = {}
 JURY_SEMAPHORE_LOCK = threading.Lock()
 JURY_SEMAPHORE: Optional[threading.Semaphore] = None
+JURY_CIRCUIT_LOCK = threading.Lock()
+JURY_DISABLED_UNTIL_TS = 0.0
 
 
 def _get_jury_semaphore() -> threading.Semaphore:
@@ -104,30 +107,43 @@ def get_or_generate_rubric(question: str, expected: Union[str, List[str]], quest
         if qkey in QUESTION_RUBRIC_CACHE:
             log("DEBUG", f"rubric_cache_hit=True (question_id={question_id})")
             return QUESTION_RUBRIC_CACHE[qkey]
-    
-    start = time.perf_counter()
-    log("INFO", f"START rubric_generate (model=gemma3:12b, question_id={question_id})")
 
-    # Generate new rubric
-    exp_text = _expected_text(expected)
-    rubric = generate_rubric(question, exp_text)
-
-    duration_ms = (time.perf_counter() - start) * 1000
-    log("INFO", f"END rubric_generate duration_ms={duration_ms:.0f} (question_id={question_id})")
-    log("INFO", f"rubric_cache_miss=True generated_for={question_id}")
-
-    # Add expected values to acceptable paraphrases
-    if isinstance(expected, list) and expected:
-        rubric["acceptable_paraphrases"] = list(dict.fromkeys(
-            [str(x) for x in rubric.get("acceptable_paraphrases", [])] + [str(x) for x in expected]
-        ))
-
-    # Cache for future use
+    # Prevent duplicate concurrent rubric generation for the same question key.
     with RUBRIC_CACHE_LOCK:
-        QUESTION_RUBRIC_CACHE[qkey] = rubric
-    log("DEBUG", f"rubric_cache_miss=True generated_for={question_id or 'unknown'}")
+        key_lock = RUBRIC_KEY_LOCKS.get(qkey)
+        if key_lock is None:
+            key_lock = threading.Lock()
+            RUBRIC_KEY_LOCKS[qkey] = key_lock
+
+    with key_lock:
+        with RUBRIC_CACHE_LOCK:
+            if qkey in QUESTION_RUBRIC_CACHE:
+                log("DEBUG", f"rubric_cache_hit=True (question_id={question_id})")
+                return QUESTION_RUBRIC_CACHE[qkey]
     
-    return rubric
+        start = time.perf_counter()
+        log("INFO", f"START rubric_generate (model=gemma3:12b, question_id={question_id})")
+
+        # Generate new rubric
+        exp_text = _expected_text(expected)
+        rubric = generate_rubric(question, exp_text)
+
+        duration_ms = (time.perf_counter() - start) * 1000
+        log("INFO", f"END rubric_generate duration_ms={duration_ms:.0f} (question_id={question_id})")
+        log("INFO", f"rubric_cache_miss=True generated_for={question_id}")
+
+        # Add expected values to acceptable paraphrases
+        if isinstance(expected, list) and expected:
+            rubric["acceptable_paraphrases"] = list(dict.fromkeys(
+                [str(x) for x in rubric.get("acceptable_paraphrases", [])] + [str(x) for x in expected]
+            ))
+
+        # Cache for future use
+        with RUBRIC_CACHE_LOCK:
+            QUESTION_RUBRIC_CACHE[qkey] = rubric
+        log("DEBUG", f"rubric_cache_miss=True generated_for={question_id or 'unknown'}")
+    
+        return rubric
 
 
 def _cache_key(answer: str, question_hash: str) -> str:
@@ -151,9 +167,10 @@ def _chunked(items: List[str], size: int) -> List[List[str]]:
 
 
 def evaluate_answer(answer: str, expected: Union[str, List[str]], question: str) -> EvaluationResult:
+    global JURY_DISABLED_UNTIL_TS
     cfg = load_config()
     start = time.perf_counter()
-    log("INFO", f"START evaluate_answer (answer_len={len(answer)}, question_hash={_qhash(question, expected)[:8]})")
+    log("DEBUG", f"START evaluate_answer (answer_len={len(answer)}, question_hash={_qhash(question, expected)[:8]})")
     max_latency_ms = float(cfg.get("max_latency_per_answer_seconds", 30.0)) * 1000.0
     qh = _qhash(question, expected)
     ck = _cache_key(answer, qh)
@@ -232,9 +249,78 @@ def evaluate_answer(answer: str, expected: Union[str, List[str]], question: str)
 
     # Write heartbeat before judges (most time-consuming step)
     _write_heartbeat_if_needed(hang_stage="jury_consensus")
+    with JURY_CIRCUIT_LOCK:
+        jury_disabled_until = float(JURY_DISABLED_UNTIL_TS)
+    if jury_disabled_until > time.time():
+        lat = (time.perf_counter() - start) * 1000.0
+        decision = "YES" if emb_score >= float(cfg["confidence_thresholds"]["auto_accept"]) else "NO"
+        res = EvaluationResult(
+            answer, decision, emb_score, float(concept["semantic_score"]), float(concept["concept_score"]),
+            float(concept["semantic_score"]), bool(misconception["misconception_detected"]),
+            str(misconception["misconception_description"]), list(concept["missing_concepts"]),
+            list(concept["accepted_concepts"]), 0.0, emb_score, False, lat, "jury_circuit_open"
+        )
+        with RESULT_CACHE_LOCK:
+            RESULT_CACHE[ck] = res
+        return res
     jury_sem = _get_jury_semaphore()
-    with jury_sem:
-        judges = run_judges(answer, question, exp_text, rubric, retries=int(cfg.get("retry_attempts", 3)))
+    sem_wait_timeout_s = max(5.0, float(cfg.get("jury_semaphore_acquire_timeout_seconds", max(30.0, float(cfg.get("max_latency_per_answer_seconds", 30.0))))))
+    acquired = jury_sem.acquire(timeout=sem_wait_timeout_s)
+    if not acquired:
+        lat = (time.perf_counter() - start) * 1000.0
+        log("WARNING", f"[PIPELINE] jury semaphore wait timed out after {sem_wait_timeout_s:.1f}s; using embedding fallback")
+        decision = "YES" if emb_score >= float(cfg["confidence_thresholds"]["auto_accept"]) else "NO"
+        res = EvaluationResult(
+            answer,
+            decision,
+            emb_score,
+            float(concept["semantic_score"]),
+            float(concept["concept_score"]),
+            float(concept["semantic_score"]),
+            bool(misconception["misconception_detected"]),
+            str(misconception["misconception_description"]),
+            list(concept["missing_concepts"]),
+            list(concept["accepted_concepts"]),
+            0.0,
+            emb_score,
+            False,
+            lat,
+            "jury_wait_timeout",
+        )
+        with RESULT_CACHE_LOCK:
+            RESULT_CACHE[ck] = res
+        return res
+
+    def _run_judges_bounded():
+        holder = {}
+        err = {}
+        def _runner():
+            try:
+                holder["judges"] = run_judges(answer, question, exp_text, rubric, retries=int(cfg.get("retry_attempts", 3)))
+            except Exception as ex:
+                err["ex"] = ex
+        t = threading.Thread(target=_runner, daemon=True)
+        t.start()
+        hard_timeout_s = max(20, int(cfg.get("judge_total_hard_timeout_seconds", 70)))
+        t.join(timeout=hard_timeout_s)
+        if t.is_alive():
+            raise TimeoutError(f"jury hard timeout after {hard_timeout_s}s")
+        if "ex" in err:
+            raise err["ex"]
+        return holder.get("judges", [])
+
+    try:
+        judges = _run_judges_bounded()
+    except Exception as jury_ex:
+        with JURY_CIRCUIT_LOCK:
+            JURY_DISABLED_UNTIL_TS = time.time() + max(60, int(cfg.get("jury_circuit_break_seconds", 600)))
+        log("ERROR", f"[PIPELINE] jury failed: {jury_ex}; opening circuit and using embedding fallback")
+        judges = []
+    finally:
+        try:
+            jury_sem.release()
+        except Exception:
+            pass
     active = [j for j in judges if j.get("decision") != "ABSTAIN"]
     if not active:
         final_score = emb_score
@@ -272,7 +358,7 @@ def evaluate_answer(answer: str, expected: Union[str, List[str]], question: str)
                 json.dump({k: asdict(v) for k, v in RESULT_CACHE.items()}, f)
 
     log("DEBUG", f"EvaluationResult={res}")
-    log("INFO", f"decision={res.decision} score={res.final_score:.3f} stage={res.stage_reached} latency_ms={res.latency_ms:.2f}")
+    log("DEBUG", f"decision={res.decision} score={res.final_score:.3f} stage={res.stage_reached} latency_ms={res.latency_ms:.2f}")
     return res
 
 

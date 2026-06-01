@@ -72,6 +72,7 @@ def timeout_safe_simplify(expr, timeout_seconds: int = 5) -> Optional:
     return result[0]
 
 UNITS = ["°c", "°f", "k", "kg", "m", "km", "cm", "mph", "kph", "$", "%", "degrees"]
+_MATHY_RE = re.compile(r"[0-9]|[=+\-*/^()]|[a-zA-Z]")
 
 
 @dataclass
@@ -131,6 +132,16 @@ def algebra_equal(a: str, b: str) -> bool:
         return False
 
 
+def _looks_mathy(text: str) -> bool:
+    s = str(text).strip()
+    if not s:
+        return False
+    if _MATHY_RE.search(s) is None:
+        return False
+    # Require at least one operator/equality or a digit before running SymPy.
+    return bool(re.search(r"[0-9=+\-*/^]", s))
+
+
 def run_deterministic_checks(answer: str, expected: Union[str, List[str]], numeric_tolerance: float = 0.01, total_timeout: int = 30) -> DeterministicResult:
     """Run stage-2 deterministic checks; returns first high-confidence hit.
 
@@ -146,6 +157,7 @@ def run_deterministic_checks(answer: str, expected: Union[str, List[str]], numer
     exp_list = expected if isinstance(expected, list) else [expected]
     na = normalize(answer)
     ne_list = [normalize(e) for e in exp_list]
+    enable_symbolic = False
 
     # Check total timeout at start
     elapsed = time.perf_counter() - start
@@ -194,13 +206,13 @@ def run_deterministic_checks(answer: str, expected: Union[str, List[str]], numer
                     log("INFO", f"END deterministic_checks duration_ms={duration_ms:.0f} method=numeric_tolerance accepted=True")
                 return DeterministicResult(True, 0.98, "numeric_tolerance")
 
-        if algebra_equal(answer, exp):
+        if enable_symbolic and _looks_mathy(answer) and _looks_mathy(exp) and algebra_equal(answer, exp):
             duration_ms = (time.perf_counter() - start) * 1000
             if _DET_LOG_VERBOSITY == "verbose":
                 log("INFO", f"END deterministic_checks duration_ms={duration_ms:.0f} method=algebraic_equivalence accepted=True")
             return DeterministicResult(True, 0.98, "algebraic_equivalence")
 
-        if "=" in answer and "=" in exp:
+        if enable_symbolic and _looks_mathy(answer) and _looks_mathy(exp) and "=" in answer and "=" in exp:
             try:
                 a_l = timeout_safe_sympify(answer.split("=", 1)[0], timeout_seconds=3)
                 a_r = timeout_safe_sympify(answer.split("=", 1)[1], timeout_seconds=3)
