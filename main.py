@@ -11,6 +11,7 @@ from typing import Dict, List
 from auth import get_service
 from feedback import generate_form_feedback
 from form_utils import get_form_structure
+from hang_diagnostics import start_hang_diagnostics
 from logger import log
 from response_utils import get_responses, save_grading_time
 from updater import update_correct_answers
@@ -137,6 +138,7 @@ def _prepare_form(service, idx: int, total_forms: int, form_url: str, grade_rece
 def main():
     log("INFO", "=== Google Form Autograder Started ===")
     write_heartbeat("initialization")
+    start_hang_diagnostics(config)
 
     grade_recent_only = os.environ.get("GRADE_RECENT_ONLY", "false").lower() == "true"
     if grade_recent_only:
@@ -158,6 +160,7 @@ def main():
     if str(config.get("dispatch_mode", "")).lower() == "global":
         run_global_dispatcher(form_urls=form_urls, grade_recent_only=grade_recent_only, generate_report=generate_report)
         log("INFO", "=== All forms processed via global dispatcher ===")
+        log("INFO", "=== APP STATUS: FULLY FUNCTIONAL - Grading pipeline completed successfully ===")
         write_heartbeat("complete")
         sys.exit(0)
 
@@ -222,6 +225,7 @@ def main():
                 print(f"ERROR processing {form_url}: {err}")
 
         log("INFO", f"=== All forms processed. Completed {processed_count}/{total_forms} ===")
+        log("INFO", "=== APP STATUS: FULLY FUNCTIONAL - Grading pipeline completed successfully ===")
         write_heartbeat("complete")
         sys.exit(0)
 

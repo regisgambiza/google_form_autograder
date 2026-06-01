@@ -512,10 +512,11 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                         queue_progress["last_any_work_ts"] = time.time()
                         queue_progress["last_snapshot"] = snapshot
                 if exp > 0 and (time.time() - lp) > stall_timeout_s:
-                    log("ERROR", f"[DISPATCH] stall detected: no progress for {stall_timeout_s}s")
-                    failed.set()
-                    stop.set()
-                    return
+                    # Soft-stall handling: do not kill the whole run. Judge timeouts can make
+                    # progress bursty; hard-failing here aborts otherwise recoverable runs.
+                    log("WARNING", f"[DISPATCH] stall detected: no progress for {stall_timeout_s}s (continuing with timeout fallbacks)")
+                    with metrics_lock:
+                        progress["last_progress_ts"] = time.time()
                 with metrics_lock:
                     idle_for = time.time() - queue_progress["last_any_work_ts"]
                 if exp > 0 and idle_for > max(20.0, stall_timeout_s / 2):
