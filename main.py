@@ -17,6 +17,7 @@ from response_utils import get_responses, save_grading_time
 from updater import update_correct_answers
 from global_prefetch import prefetch_all_forms
 from global_dispatcher import run_global_dispatcher
+from ai_judges import prewarm_judge_runtime
 
 
 def write_heartbeat(hang_stage: str = "unknown"):
@@ -137,6 +138,8 @@ def _prepare_form(service, idx: int, total_forms: int, form_url: str, grade_rece
 
 def main():
     log("INFO", "=== Google Form Autograder Started ===")
+    log("INFO", f"Execution Mode: {config.get('execution_mode', 'Balanced')}")
+    prewarm_judge_runtime()
     write_heartbeat("initialization")
     start_hang_diagnostics(config)
 

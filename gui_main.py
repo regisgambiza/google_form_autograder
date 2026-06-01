@@ -27,6 +27,121 @@ from scheduler import scheduler as auto_scheduler
 
 BANGKOK_TZ = timezone(timedelta(hours=7))
 
+EXECUTION_MODE_PRESETS = {
+    "Max Speed": {
+        "deterministic_worker_count": 7,
+        "ai_worker_count": 4,
+        "worker_queue_size": 3000,
+        "producer_det_queue_low_watermark": 1200,
+        "producer_det_queue_high_watermark": 2500,
+        "max_concurrent_judge_http": 5,
+        "max_concurrent_jury_answers": 4,
+        "max_concurrent_embedding_http": 4,
+        "judge_timeout_seconds": 25,
+        "judge_http_timeout_seconds": 35,
+        "max_latency_per_answer_seconds": 25,
+        "dispatcher_stall_timeout_seconds": 120,
+        "ai_stall_timeout_seconds": 120,
+        "enable_async_judges": False,
+        "sync_judge_parallelism": 6,
+    },
+    "Balanced": {
+        "deterministic_worker_count": 5,
+        "ai_worker_count": 3,
+        "worker_queue_size": 2000,
+        "producer_det_queue_low_watermark": 900,
+        "producer_det_queue_high_watermark": 1700,
+        "max_concurrent_judge_http": 4,
+        "max_concurrent_jury_answers": 3,
+        "max_concurrent_embedding_http": 3,
+        "judge_timeout_seconds": 30,
+        "judge_http_timeout_seconds": 45,
+        "max_latency_per_answer_seconds": 30,
+        "dispatcher_stall_timeout_seconds": 150,
+        "ai_stall_timeout_seconds": 120,
+        "enable_async_judges": False,
+        "sync_judge_parallelism": 6,
+    },
+    "Stable": {
+        "deterministic_worker_count": 5,
+        "ai_worker_count": 2,
+        "worker_queue_size": 1800,
+        "producer_det_queue_low_watermark": 700,
+        "producer_det_queue_high_watermark": 1400,
+        "max_concurrent_judge_http": 2,
+        "max_concurrent_jury_answers": 2,
+        "max_concurrent_embedding_http": 2,
+        "judge_timeout_seconds": 45,
+        "judge_http_timeout_seconds": 65,
+        "max_latency_per_answer_seconds": 45,
+        "dispatcher_stall_timeout_seconds": 240,
+        "ai_stall_timeout_seconds": 180,
+        "enable_async_judges": False,
+        "sync_judge_parallelism": 3,
+    },
+    "High Accuracy": {
+        "deterministic_worker_count": 4,
+        "ai_worker_count": 1,
+        "worker_queue_size": 1200,
+        "producer_det_queue_low_watermark": 450,
+        "producer_det_queue_high_watermark": 900,
+        "max_concurrent_judge_http": 1,
+        "max_concurrent_jury_answers": 1,
+        "max_concurrent_embedding_http": 1,
+        "judge_timeout_seconds": 75,
+        "judge_http_timeout_seconds": 95,
+        "max_latency_per_answer_seconds": 75,
+        "dispatcher_stall_timeout_seconds": 420,
+        "ai_stall_timeout_seconds": 300,
+        "enable_async_judges": False,
+        "sync_judge_parallelism": 1,
+    },
+    "High Accuracy (Practical)": {
+        "deterministic_worker_count": 4,
+        "ai_worker_count": 1,
+        "worker_queue_size": 1200,
+        "producer_det_queue_low_watermark": 450,
+        "producer_det_queue_high_watermark": 900,
+        "max_concurrent_judge_http": 1,
+        "max_concurrent_jury_answers": 1,
+        "max_concurrent_embedding_http": 1,
+        "judge_timeout_seconds": 55,
+        "judge_http_timeout_seconds": 75,
+        "judge_total_hard_timeout_seconds": 50,
+        "jury_circuit_break_seconds": 900,
+        "max_latency_per_answer_seconds": 55,
+        "dispatcher_stall_timeout_seconds": 420,
+        "ai_stall_timeout_seconds": 300,
+        "enable_async_judges": False,
+        "sync_judge_parallelism": 1,
+        "active_judge_roles": ["semantic_judge", "factual_judge", "strict_judge"],
+        "judge_prewarm_enabled": True,
+        "judge_prewarm_timeout_seconds": 20,
+        "embedding_thresholds": {
+            "auto_accept": 0.90,
+            "auto_reject": 0.45,
+            "send_to_jury": [0.45, 0.90]
+        },
+    },
+    "Safe Mode": {
+        "deterministic_worker_count": 3,
+        "ai_worker_count": 1,
+        "worker_queue_size": 1000,
+        "producer_det_queue_low_watermark": 350,
+        "producer_det_queue_high_watermark": 700,
+        "max_concurrent_judge_http": 1,
+        "max_concurrent_jury_answers": 1,
+        "max_concurrent_embedding_http": 1,
+        "judge_timeout_seconds": 90,
+        "judge_http_timeout_seconds": 120,
+        "max_latency_per_answer_seconds": 90,
+        "dispatcher_stall_timeout_seconds": 600,
+        "ai_stall_timeout_seconds": 420,
+        "enable_async_judges": False,
+        "sync_judge_parallelism": 1,
+    },
+}
+
 class FormManager(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -355,6 +470,8 @@ class FormManager(QMainWindow):
         batch_auto_checkbox = QCheckBox("Auto", dialog)
         grading_mode_combo = QComboBox(dialog)
         grading_mode_combo.addItems(["Whole Form", "Recent Only"])
+        execution_mode_combo = QComboBox(dialog)
+        execution_mode_combo.addItems(list(EXECUTION_MODE_PRESETS.keys()))
 
         # Heartbeat monitor settings
         heartbeat_timeout_spin = QSpinBox(dialog)
@@ -401,6 +518,7 @@ class FormManager(QMainWindow):
 
         # Set Grade Mode from config
         grading_mode_combo.setCurrentText(cfg.get("grading_mode", "Whole Form"))
+        execution_mode_combo.setCurrentText(cfg.get("execution_mode", "Balanced"))
 
         form.addRow("Evaluator:", evaluator_combo)
         form.addRow("Leniency:", leniency_combo)
@@ -437,6 +555,7 @@ class FormManager(QMainWindow):
         bl.addWidget(batch_auto_checkbox)
         form.addRow("Batch Size:", batch_row)
         form.addRow("Grade Mode:", grading_mode_combo)
+        form.addRow("Execution Mode:", execution_mode_combo)
 
         # Heartbeat settings section
         heartbeat_section = QWidget(dialog)
@@ -511,6 +630,25 @@ class FormManager(QMainWindow):
                 config_data["batch_size"] = int(batch_size_spin.value())
 
             config_data["grading_mode"] = grading_mode_combo.currentText()
+            selected_mode = execution_mode_combo.currentText()
+            config_data["execution_mode"] = selected_mode
+
+            # Apply execution preset knobs that control concurrency/timeout behavior.
+            preset = EXECUTION_MODE_PRESETS.get(selected_mode, EXECUTION_MODE_PRESETS["Balanced"])
+            for key, value in preset.items():
+                config_data[key] = value
+            # Prevent stale mode-only knobs from previous selection.
+            if "active_judge_roles" not in preset:
+                config_data["active_judge_roles"] = [
+                    "semantic_judge",
+                    "concept_judge",
+                    "factual_judge",
+                    "strict_judge",
+                    "misconception_judge",
+                    "language_filter",
+                ]
+            if "judge_prewarm_enabled" not in preset:
+                config_data["judge_prewarm_enabled"] = False
 
             # Save Heartbeat monitor settings
             config_data["heartbeat_timeout"] = heartbeat_timeout_spin.value()

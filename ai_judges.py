@@ -64,6 +64,40 @@ JUDGE_PROMPTS = {
 REQUIRED_FIELDS = ["semantic_similarity", "concept_coverage", "factual_accuracy", "misconception_detected", "misconception_description", "language_noise_ratio", "confidence", "decision", "reason_short"]
 
 
+def _selected_roles(cfg: Dict[str, object]) -> List[str]:
+    raw = cfg.get("active_judge_roles", [])
+    if isinstance(raw, list):
+        roles = [str(r) for r in raw if str(r) in JUDGE_PROMPTS]
+        if roles:
+            return roles
+    return list(JUDGE_PROMPTS.keys())
+
+
+def prewarm_judge_runtime():
+    """Optional warm-up to avoid first-call latency spikes on local model runtimes."""
+    cfg = load_config()
+    if not bool(cfg.get("judge_prewarm_enabled", False)):
+        return
+    model = str(cfg.get("models", {}).get("judge", [""])[0] if cfg.get("models", {}).get("judge") else "")
+    if not model:
+        return
+    try:
+        timeout_s = max(5, int(cfg.get("judge_prewarm_timeout_seconds", 20)))
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": "Reply with: OK"}],
+            "stream": False,
+            "options": {"num_predict": 8, "temperature": 0.0},
+            "keep_alive": cfg.get("ollama_options", {}).get("keep_alive", "30m"),
+        }
+        log("INFO", f"[JUDGES] prewarm START model={model}")
+        resp = requests.post(_ollama_chat_url(), json=payload, timeout=(5, timeout_s))
+        resp.raise_for_status()
+        log("INFO", f"[JUDGES] prewarm DONE model={model}")
+    except Exception as ex:
+        log("WARNING", f"[JUDGES] prewarm failed: {ex}")
+
+
 def _abstain(reason: str = "judge unavailable") -> Dict[str, object]:
     """Return a default abstain response."""
     return {
@@ -386,8 +420,9 @@ async def run_all_judges_with_early_exit(
 
     # Run judges concurrently
     tasks = {}
+    roles = _selected_roles(cfg)
     async with aiohttp.ClientSession() as session:
-        for role in JUDGE_PROMPTS:
+        for role in roles:
             role_model = jury_models.get(role)
             tasks[asyncio.create_task(call_judge_async(
                 session, role_model, role, answer, question, expected, rubric, retries
@@ -430,7 +465,8 @@ def _run_judges_sync(
     cfg = load_config()
     TIMEOUT_SECONDS = max(10, int(cfg.get("judge_timeout_seconds", 45)))
     http_timeout_seconds = max(TIMEOUT_SECONDS, int(cfg.get("judge_http_timeout_seconds", 60)))
-    sync_parallelism = max(1, int(cfg.get("sync_judge_parallelism", len(JUDGE_PROMPTS))))
+    roles = _selected_roles(cfg)
+    sync_parallelism = max(1, int(cfg.get("sync_judge_parallelism", len(roles))))
     ee = cfg.get("early_exit", {})
     ee_enabled = bool(ee.get("enabled", True))
     ee_min = max(1, int(ee.get("min_judges", 3)))
@@ -498,7 +534,6 @@ def _run_judges_sync(
         _write_heartbeat_if_needed()
         return _abstain("invalid_response")
 
-    roles = list(JUDGE_PROMPTS.keys())
     out: List[Dict[str, object]] = []
     if sync_parallelism <= 1:
         for role in roles:

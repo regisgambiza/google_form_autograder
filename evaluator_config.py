@@ -32,6 +32,17 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "language_noise": 0.05,
         "embedding": 0.05,
     },
+    "execution_mode": "Balanced",
+    "active_judge_roles": [
+        "semantic_judge",
+        "concept_judge",
+        "factual_judge",
+        "strict_judge",
+        "misconception_judge",
+        "language_filter",
+    ],
+    "judge_prewarm_enabled": False,
+    "judge_prewarm_timeout_seconds": 20,
 }
 
 
