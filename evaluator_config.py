@@ -32,7 +32,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "language_noise": 0.05,
         "embedding": 0.05,
     },
-    "execution_mode": "Balanced",
+    "execution_mode": "Standard: Daily Grading",
     "active_judge_roles": [
         "semantic_judge",
         "concept_judge",

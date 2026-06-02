@@ -28,7 +28,7 @@ from scheduler import scheduler as auto_scheduler
 BANGKOK_TZ = timezone(timedelta(hours=7))
 
 EXECUTION_MODE_PRESETS = {
-    "Max Speed": {
+    "Fastest: Bulk Grading": {
         "deterministic_worker_count": 7,
         "ai_worker_count": 4,
         "worker_queue_size": 3000,
@@ -45,7 +45,7 @@ EXECUTION_MODE_PRESETS = {
         "enable_async_judges": False,
         "sync_judge_parallelism": 6,
     },
-    "Balanced": {
+    "Standard: Daily Grading": {
         "deterministic_worker_count": 5,
         "ai_worker_count": 3,
         "worker_queue_size": 2000,
@@ -62,7 +62,7 @@ EXECUTION_MODE_PRESETS = {
         "enable_async_judges": False,
         "sync_judge_parallelism": 6,
     },
-    "Stable": {
+    "Reliable: Slow Model Safety": {
         "deterministic_worker_count": 5,
         "ai_worker_count": 2,
         "worker_queue_size": 1800,
@@ -79,7 +79,7 @@ EXECUTION_MODE_PRESETS = {
         "enable_async_judges": False,
         "sync_judge_parallelism": 3,
     },
-    "High Accuracy": {
+    "Conservative: 2-Judge Review": {
         "deterministic_worker_count": 4,
         "ai_worker_count": 1,
         "worker_queue_size": 1200,
@@ -106,7 +106,7 @@ EXECUTION_MODE_PRESETS = {
             "send_to_jury": [0.52, 0.88]
         },
     },
-    "High Accuracy (Practical)": {
+    "Strict: 3-Judge Review": {
         "deterministic_worker_count": 4,
         "ai_worker_count": 1,
         "worker_queue_size": 1200,
@@ -133,7 +133,7 @@ EXECUTION_MODE_PRESETS = {
             "send_to_jury": [0.45, 0.90]
         },
     },
-    "Safe Mode": {
+    "Recovery: Low Load": {
         "deterministic_worker_count": 3,
         "ai_worker_count": 1,
         "worker_queue_size": 1000,
@@ -151,6 +151,21 @@ EXECUTION_MODE_PRESETS = {
         "sync_judge_parallelism": 1,
     },
 }
+
+EXECUTION_MODE_ALIASES = {
+    "Max Speed": "Fastest: Bulk Grading",
+    "Balanced": "Standard: Daily Grading",
+    "Stable": "Reliable: Slow Model Safety",
+    "High Accuracy": "Conservative: 2-Judge Review",
+    "High Accuracy (Practical)": "Strict: 3-Judge Review",
+    "Safe Mode": "Recovery: Low Load",
+}
+
+DEFAULT_EXECUTION_MODE = "Standard: Daily Grading"
+
+
+def normalize_execution_mode(mode_name):
+    return EXECUTION_MODE_ALIASES.get(mode_name, mode_name)
 
 class FormManager(QMainWindow):
     def __init__(self):
@@ -528,7 +543,9 @@ class FormManager(QMainWindow):
 
         # Set Grade Mode from config
         grading_mode_combo.setCurrentText(cfg.get("grading_mode", "Whole Form"))
-        execution_mode_combo.setCurrentText(cfg.get("execution_mode", "Balanced"))
+        execution_mode_combo.setCurrentText(
+            normalize_execution_mode(cfg.get("execution_mode", DEFAULT_EXECUTION_MODE))
+        )
 
         form.addRow("Evaluator:", evaluator_combo)
         form.addRow("Leniency:", leniency_combo)
@@ -644,7 +661,7 @@ class FormManager(QMainWindow):
             config_data["execution_mode"] = selected_mode
 
             # Apply execution preset knobs that control concurrency/timeout behavior.
-            preset = EXECUTION_MODE_PRESETS.get(selected_mode, EXECUTION_MODE_PRESETS["Balanced"])
+            preset = EXECUTION_MODE_PRESETS.get(selected_mode, EXECUTION_MODE_PRESETS[DEFAULT_EXECUTION_MODE])
             for key, value in preset.items():
                 config_data[key] = value
             # Prevent stale mode-only knobs from previous selection.
