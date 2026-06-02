@@ -1,0 +1,491 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Google Form Autograder - Main GUI Mockup</title>
+  <style>
+    :root {
+      --bg: #eef2f6;
+      --panel: #ffffff;
+      --panel-soft: #f7f9fb;
+      --line: #cfd7e3;
+      --text: #17202a;
+      --muted: #627084;
+      --primary: #1769e0;
+      --primary-hover: #1053b5;
+      --secondary: #546174;
+      --danger: #c63b3b;
+      --success: #1f8a55;
+      --warning: #b7791f;
+      --shadow: 0 8px 24px rgba(31, 45, 61, 0.12);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: "Segoe UI", Arial, sans-serif;
+      font-size: 14px;
+      letter-spacing: 0;
+    }
+
+    .app {
+      width: min(1280px, calc(100vw - 32px));
+      height: min(820px, calc(100vh - 32px));
+      min-height: 640px;
+      margin: 16px auto;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      overflow: hidden;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel-soft);
+    }
+
+    .title {
+      font-weight: 700;
+      font-size: 16px;
+      white-space: nowrap;
+    }
+
+    .status-strip {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(120px, auto));
+      gap: 8px;
+      align-items: center;
+    }
+
+    .status {
+      min-height: 34px;
+      padding: 7px 10px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--panel);
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      white-space: nowrap;
+    }
+
+    .status strong {
+      font-weight: 650;
+    }
+
+    .dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: var(--muted);
+      flex: 0 0 auto;
+    }
+
+    .dot.run {
+      background: var(--success);
+    }
+
+    .dot.wait {
+      background: var(--warning);
+    }
+
+    .main {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(360px, 0.95fr) minmax(460px, 1.25fr);
+      gap: 0;
+    }
+
+    .pane {
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      background: var(--panel);
+    }
+
+    .pane + .pane {
+      border-left: 1px solid var(--line);
+    }
+
+    .pane-header {
+      height: 44px;
+      padding: 0 14px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      background: #fbfcfe;
+    }
+
+    .pane-header h2 {
+      margin: 0;
+      font-size: 15px;
+      font-weight: 700;
+    }
+
+    .count {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .form-list {
+      min-height: 0;
+      overflow: auto;
+      padding: 10px;
+      display: grid;
+      gap: 8px;
+      align-content: start;
+    }
+
+    .form-item {
+      min-height: 66px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 10px;
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 10px;
+      align-items: center;
+      background: var(--panel);
+    }
+
+    .form-item.active {
+      border-color: #8bb7f0;
+      background: #f2f7ff;
+    }
+
+    .badge {
+      min-width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      color: #fff;
+      font-weight: 700;
+      font-size: 13px;
+    }
+
+    .badge.queue {
+      background: var(--primary);
+    }
+
+    .badge.done {
+      background: var(--success);
+    }
+
+    .badge.error {
+      background: var(--danger);
+    }
+
+    .form-title {
+      font-weight: 650;
+      margin-bottom: 3px;
+    }
+
+    .form-url {
+      color: var(--muted);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 100%;
+    }
+
+    .form-meta {
+      color: var(--muted);
+      font-size: 12px;
+      text-align: right;
+      white-space: nowrap;
+    }
+
+    .debug-tabs {
+      display: flex;
+      gap: 4px;
+      padding: 8px 10px 0;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel-soft);
+      overflow-x: auto;
+    }
+
+    .tab {
+      height: 32px;
+      padding: 0 11px;
+      border: 1px solid var(--line);
+      border-bottom: 0;
+      border-radius: 6px 6px 0 0;
+      background: #eaf0f7;
+      color: var(--secondary);
+      display: flex;
+      align-items: center;
+      white-space: nowrap;
+      font-size: 13px;
+    }
+
+    .tab.active {
+      background: #1f2937;
+      color: #f8fafc;
+      border-color: #1f2937;
+    }
+
+    .debug-output {
+      min-height: 0;
+      flex: 1;
+      overflow: auto;
+      margin: 0;
+      padding: 12px 14px;
+      background: #111827;
+      color: #d1d5db;
+      font: 12px/1.5 Consolas, "Courier New", monospace;
+    }
+
+    .line-info {
+      color: #93c5fd;
+    }
+
+    .line-ok {
+      color: #86efac;
+    }
+
+    .line-warn {
+      color: #facc15;
+    }
+
+    .pipeline-box {
+      border-top: 1px solid #2f3b4b;
+      background: #182232;
+      padding: 10px 14px;
+      color: #dbeafe;
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      font-size: 12px;
+    }
+
+    .pipeline-box span {
+      display: block;
+      color: #93a4bd;
+      margin-bottom: 3px;
+    }
+
+    .actions {
+      border-top: 1px solid var(--line);
+      background: var(--panel-soft);
+      padding: 10px 14px;
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .action-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    button {
+      min-height: 36px;
+      border: 0;
+      border-radius: 6px;
+      padding: 0 13px;
+      color: #fff;
+      background: var(--secondary);
+      font: inherit;
+      font-weight: 650;
+      cursor: default;
+      white-space: nowrap;
+    }
+
+    button.primary {
+      background: var(--primary);
+    }
+
+    button.primary:hover {
+      background: var(--primary-hover);
+    }
+
+    button.danger {
+      background: var(--danger);
+    }
+
+    button.light {
+      background: #dbe3ee;
+      color: #1f2a37;
+      border: 1px solid var(--line);
+    }
+
+    .system-actions button {
+      min-width: 36px;
+      padding: 0 11px;
+    }
+
+    @media (max-width: 880px) {
+      .app {
+        width: 100vw;
+        height: 100vh;
+        margin: 0;
+        border-radius: 0;
+        border-left: 0;
+        border-right: 0;
+      }
+
+      .topbar {
+        align-items: stretch;
+        flex-direction: column;
+      }
+
+      .status-strip {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .main {
+        grid-template-columns: 1fr;
+        grid-template-rows: minmax(220px, 0.95fr) minmax(280px, 1.05fr);
+      }
+
+      .pane + .pane {
+        border-left: 0;
+        border-top: 1px solid var(--line);
+      }
+
+      .actions {
+        grid-template-columns: 1fr;
+      }
+
+      .system-actions {
+        justify-content: flex-end;
+      }
+
+      .pipeline-box {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="title">Google Form Autograder</div>
+      <div class="status-strip" aria-label="Run summary">
+        <div class="status"><span class="dot run"></span><strong>Processing:</strong> Biology Exit Ticket</div>
+        <div class="status"><span class="dot"></span><strong>Finished:</strong> 12</div>
+        <div class="status"><span class="dot wait"></span><strong>In Queue:</strong> 4</div>
+        <div class="status"><span class="dot run"></span><strong>Run State:</strong> Running</div>
+      </div>
+    </header>
+
+    <main class="main">
+      <section class="pane" aria-label="Forms to grade">
+        <div class="pane-header">
+          <h2>Forms To Grade</h2>
+          <span class="count">16 total</span>
+        </div>
+        <div class="form-list">
+          <article class="form-item active">
+            <span class="badge queue">1</span>
+            <div>
+              <div class="form-title">Biology Exit Ticket</div>
+              <div class="form-url">https://forms.google.com/classroom/biology-exit-ticket</div>
+            </div>
+            <div class="form-meta">Processing</div>
+          </article>
+          <article class="form-item">
+            <span class="badge queue">2</span>
+            <div>
+              <div class="form-title">Chemistry Practical Check</div>
+              <div class="form-url">https://forms.google.com/classroom/chem-practical-check</div>
+            </div>
+            <div class="form-meta">Queued</div>
+          </article>
+          <article class="form-item">
+            <span class="badge queue">3</span>
+            <div>
+              <div class="form-title">Physics Short Answers</div>
+              <div class="form-url">https://forms.google.com/classroom/physics-short-answers</div>
+            </div>
+            <div class="form-meta">Queued</div>
+          </article>
+          <article class="form-item">
+            <span class="badge done">✓</span>
+            <div>
+              <div class="form-title">Photosynthesis Review</div>
+              <div class="form-url">https://forms.google.com/classroom/photosynthesis-review</div>
+            </div>
+            <div class="form-meta">Finished</div>
+          </article>
+          <article class="form-item">
+            <span class="badge error">!</span>
+            <div>
+              <div class="form-title">Math Warmup</div>
+              <div class="form-url">https://forms.google.com/classroom/math-warmup</div>
+            </div>
+            <div class="form-meta">Needs attention</div>
+          </article>
+        </div>
+      </section>
+
+      <section class="pane" aria-label="Debug output">
+        <div class="pane-header">
+          <h2>Debug Output</h2>
+          <span class="count">Timing filter off</span>
+        </div>
+        <div class="debug-tabs">
+          <div class="tab active">All</div>
+          <div class="tab">Producer</div>
+          <div class="tab">Det Workers</div>
+          <div class="tab">AI Workers</div>
+          <div class="tab">Aggregator</div>
+        </div>
+        <pre class="debug-output"><span class="line-info">[INFO]</span> Worker pipeline: ON
+<span class="line-info">[INFO]</span> Current mode: Strict: 3-Judge Review
+<span class="line-ok">[OK]</span> Deterministic checks completed for 18 responses
+<span class="line-info">[AI]</span> START judge_semantic_judge model=qwen3:8b
+<span class="line-info">[AI]</span> START judge_factual_judge model=qwen3:8b
+<span class="line-warn">[WARN]</span> Jury queue waiting on 1 active Ollama request
+<span class="line-ok">[OK]</span> Form result applied to spreadsheet</pre>
+        <div class="pipeline-box" aria-label="Pipeline diagnostics">
+          <div><span>Pipeline</span>AI Drain</div>
+          <div><span>Producer</span>q: 0, buf: 12</div>
+          <div><span>AI Workers</span>q: 4</div>
+          <div><span>Aggregator</span>q: 1</div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="actions" aria-label="Main actions">
+      <div class="action-group">
+        <button class="primary">Run Now</button>
+        <button>Auto Run</button>
+        <button class="danger">Stop</button>
+      </div>
+      <div class="action-group">
+        <button class="light">Add Forms</button>
+        <button class="light">Quick Grade</button>
+        <button class="light">Remove</button>
+        <button class="light">Clear All</button>
+        <button class="light">Settings</button>
+      </div>
+      <div class="action-group system-actions">
+        <button class="light">Minimize</button>
+        <button class="light">Exit</button>
+      </div>
+    </footer>
+  </div>
+</body>
+</html>

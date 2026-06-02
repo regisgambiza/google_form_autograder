@@ -2,11 +2,13 @@
 import sys
 import os
 import json
+import subprocess
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLineEdit, QListWidget, QListWidgetItem, QMessageBox,
-    QProgressBar, QTextEdit, QLabel, QComboBox, QCheckBox,
-    QProgressDialog, QSplitter, QSpinBox, QDialog, QFormLayout, QTabWidget
+    QTextEdit, QLabel, QComboBox, QCheckBox,
+    QProgressDialog, QSplitter, QSpinBox, QDialog, QFormLayout, QTabWidget,
+    QSystemTrayIcon, QMenu, QAction, QStyle
 )
 
 from PyQt5.QtCore import Qt, QDate, QTimer
@@ -199,6 +201,8 @@ class FormManager(QMainWindow):
         self.is_searching = False
         self.is_grading = False
         self.is_closing = False
+        self._force_exit = False
+        self.tray_icon = None
 
         # Prevent sleep
         ES_CONTINUOUS = 0x80000000
@@ -260,15 +264,6 @@ class FormManager(QMainWindow):
                 border-radius: 6px;
                 padding: 6px;
             }
-            QProgressBar {
-                height: 24px;
-                border-radius: 6px;
-                text-align: center;
-            }
-            QProgressBar::chunk {
-                background-color: #28a745;
-                border-radius: 6px;
-            }
             QSplitter::handle {
                 background-color: #d0d0d0;
             }
@@ -283,26 +278,15 @@ class FormManager(QMainWindow):
         # TOP STATUS
         top_layout = QVBoxLayout()
 
-        progress_row = QHBoxLayout()
-        self.overall_progress_label = QLabel("Overall: 0%")
-        self.overall_progress_label.setObjectName("Header")
-        self.overall_progress_bar = QProgressBar()
-        self.overall_progress_bar.setMaximum(100)
-        progress_row.addWidget(self.overall_progress_label)
-        progress_row.addWidget(self.overall_progress_bar, 1)
-        top_layout.addLayout(progress_row)
-
         status_row = QHBoxLayout()
         self.current_label = QLabel("🟡 Processing: -")
         self.finished_label = QLabel("✅ Finished: 0")
         self.in_queue_label = QLabel("⏳ In Queue: 0")
         self.run_state_label = QLabel("Run State: Idle")
         self.pipeline_state_label = QLabel("Pipeline State: Idle")
-        self.worker_metrics_label = QLabel("Worker Metrics: -")
 
         status_row.addWidget(self.current_label)
         status_row.addStretch()
-        status_row.addWidget(self.worker_metrics_label)
         status_row.addWidget(self.pipeline_state_label)
         status_row.addWidget(self.run_state_label)
         status_row.addWidget(self.finished_label)
@@ -389,9 +373,17 @@ class FormManager(QMainWindow):
         clear_all_button.setObjectName("Secondary")
 
         self.stop_button = QPushButton("⏹ Stop")
-        self.stop_button.clicked.connect(self.stop_auto_mode)
+        self.stop_button.clicked.connect(self.stop_grading)
         self.stop_button.setObjectName("Danger")
         self.stop_button.hide()
+
+        minimize_button = QPushButton("Minimize")
+        minimize_button.clicked.connect(self.minimize_app)
+        minimize_button.setObjectName("Secondary")
+
+        exit_button = QPushButton("Exit")
+        exit_button.clicked.connect(self.exit_app)
+        exit_button.setObjectName("Danger")
 
         actions_layout.addWidget(auto_add_button)
         actions_layout.addWidget(auto_run_button)
@@ -401,6 +393,8 @@ class FormManager(QMainWindow):
         actions_layout.addWidget(remove_button)
         actions_layout.addWidget(clear_all_button)
         actions_layout.addWidget(self.stop_button)
+        actions_layout.addWidget(minimize_button)
+        actions_layout.addWidget(exit_button)
 
         bottom_layout.addLayout(actions_layout)
 
@@ -414,6 +408,37 @@ class FormManager(QMainWindow):
         self.load_forms()
         self.load_config()
         self.update_in_queue_label()
+        self._setup_system_tray()
+
+    def _setup_system_tray(self):
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+        tray_menu = QMenu(self)
+        show_action = QAction("Show", self)
+        show_action.triggered.connect(self.restore_from_tray)
+        exit_action = QAction("Exit", self)
+        exit_action.triggered.connect(self.exit_app)
+        tray_menu.addAction(show_action)
+        tray_menu.addSeparator()
+        tray_menu.addAction(exit_action)
+
+        icon = self.windowIcon()
+        if icon.isNull():
+            icon = self.style().standardIcon(QStyle.SP_ComputerIcon)
+        self.tray_icon = QSystemTrayIcon(icon, self)
+        self.tray_icon.setToolTip("Google Form Autograder")
+        self.tray_icon.setContextMenu(tray_menu)
+        self.tray_icon.activated.connect(self._on_tray_activated)
+        self.tray_icon.show()
+
+    def _on_tray_activated(self, reason):
+        if reason in (QSystemTrayIcon.DoubleClick, QSystemTrayIcon.Trigger):
+            self.restore_from_tray()
+
+    def restore_from_tray(self):
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
 
     def open_settings_dialog(self):
         dialog = QDialog(self)
@@ -438,11 +463,6 @@ class FormManager(QMainWindow):
         rubric_model_combo = QComboBox(dialog)
         embedding_model_combo = QComboBox(dialog)
         reasoning_model_combo = QComboBox(dialog)
-        available_models = []
-        try:
-            available_models = [m['name'] for m in ollama.list().get('models', [])]
-        except Exception as e:
-            print(f"Error fetching Ollama models: {e}")
 
         cfg = {}
         try:
@@ -451,21 +471,72 @@ class FormManager(QMainWindow):
         except Exception:
             cfg = {}
 
-        # Add existing config model to list if it's not there
+        def normalize_model_key(model_name):
+            text = str(model_name or "").strip()
+            return text[:-7] if text.endswith(":latest") else text
+
+        def add_model_choice(model_names, seen_keys, model_name):
+            text = str(model_name or "").strip()
+            key = normalize_model_key(text)
+            if text and key and key not in seen_keys:
+                model_names.append(text)
+                seen_keys.add(key)
+
+        def read_ollama_model_name(model_info):
+            if isinstance(model_info, dict):
+                return model_info.get("name") or model_info.get("model")
+            return getattr(model_info, "name", None) or getattr(model_info, "model", None)
+
+        ollama_models = []
+        try:
+            ollama_models = [
+                read_ollama_model_name(model_info)
+                for model_info in ollama.list().get("models", [])
+            ]
+        except Exception as e:
+            print(f"Error fetching Ollama models: {e}")
+
+        ollama_keys = {
+            normalize_model_key(model_name)
+            for model_name in ollama_models
+            if normalize_model_key(model_name)
+        }
+
+        available_models = []
+        seen_model_keys = set()
+
+        # Prefer configured spelling, then append locally installed Ollama models.
         models = cfg.get("models", {}).get("judge", [])
         rubric_model = cfg.get("rubric_model")
         embedding_model = cfg.get("embedding_model")
         reasoning_model = cfg.get("reasoning_model")
         if models:
-            config_model = models[0]
-            if config_model not in available_models:
-                available_models.insert(0, config_model)
-        if rubric_model and rubric_model not in available_models:
-            available_models.insert(0, rubric_model)
-        if embedding_model and embedding_model not in available_models:
-            available_models.insert(0, embedding_model)
-        if reasoning_model and reasoning_model not in available_models:
-            available_models.insert(0, reasoning_model)
+            add_model_choice(available_models, seen_model_keys, models[0])
+        add_model_choice(available_models, seen_model_keys, rubric_model)
+        add_model_choice(available_models, seen_model_keys, embedding_model)
+        add_model_choice(available_models, seen_model_keys, reasoning_model)
+
+        cfg_jury = cfg.get("jury_models", {}) if cfg else {}
+        for configured_model in cfg_jury.values():
+            add_model_choice(available_models, seen_model_keys, configured_model)
+        for model_name in ollama_models:
+            add_model_choice(available_models, seen_model_keys, model_name)
+
+        extra_configured_models = sorted(
+            key for key in seen_model_keys if key not in ollama_keys
+        )
+        installed_model_count = len(ollama_keys)
+        model_status_label = QLabel(
+            f"{len(available_models)} selectable models "
+            f"({installed_model_count} installed"
+            f"{', ' + str(len(extra_configured_models)) + ' configured only' if extra_configured_models else ''}).",
+            dialog,
+        )
+        model_status_label.setWordWrap(True)
+        if extra_configured_models:
+            model_status_label.setToolTip(
+                "Configured but not reported by Ollama: " + ", ".join(extra_configured_models)
+            )
 
         if available_models:
             model_combo.addItems(available_models)
@@ -475,19 +546,20 @@ class FormManager(QMainWindow):
 
         # Jury model selectors (one combobox per jury role)
         jury_combos = {}
+        jury_role_labels = {}
         jury_defaults = DEFAULT_CONFIG.get("jury_models", {})
-        cfg_jury = cfg.get("jury_models", {}) if cfg else {}
         for role, default_model in jury_defaults.items():
             combo = QComboBox(dialog)
             # Ensure the configured/default model is present in the list
             role_model = cfg_jury.get(role, default_model)
             role_models = list(available_models)
-            if role_model and role_model not in role_models:
+            if normalize_model_key(role_model) not in {normalize_model_key(m) for m in role_models}:
                 role_models.insert(0, role_model)
             if role_models:
                 combo.addItems(role_models)
                 combo.setCurrentText(role_model)
             jury_combos[role] = combo
+            jury_role_labels[role] = QLabel(role.replace('_', ' ').title() + ":", dialog)
 
         report_checkbox = QCheckBox("Generate Report", dialog)
         batch_size_spin = QSpinBox(dialog)
@@ -497,6 +569,32 @@ class FormManager(QMainWindow):
         grading_mode_combo.addItems(["Whole Form", "Recent Only"])
         execution_mode_combo = QComboBox(dialog)
         execution_mode_combo.addItems(list(EXECUTION_MODE_PRESETS.keys()))
+        jury_status_label = QLabel(dialog)
+        jury_status_label.setWordWrap(True)
+
+        def active_roles_for_mode(mode_name):
+            mode_name = normalize_execution_mode(mode_name)
+            preset = EXECUTION_MODE_PRESETS.get(mode_name, {})
+            roles = preset.get("active_judge_roles", cfg.get("active_judge_roles", []))
+            if not isinstance(roles, list) or not roles:
+                roles = list(jury_defaults.keys())
+            return {role for role in roles if role in jury_defaults}
+
+        def refresh_jury_status(mode_name=None):
+            mode = mode_name or execution_mode_combo.currentText()
+            active_roles = active_roles_for_mode(mode)
+            total_roles = len(jury_defaults)
+            jury_status_label.setText(
+                f"{len(active_roles)} active jury roles for {mode}; "
+                f"{total_roles} role models configured."
+            )
+            for role, label in jury_role_labels.items():
+                active = role in active_roles
+                label.setText(
+                    f"{role.replace('_', ' ').title()} "
+                    f"({'active' if active else 'inactive'}):"
+                )
+                label.setStyleSheet("" if active else "color: #777;")
 
         # Heartbeat monitor settings
         heartbeat_timeout_spin = QSpinBox(dialog)
@@ -553,11 +651,11 @@ class FormManager(QMainWindow):
         form.addRow("Rubric Model:", rubric_model_combo)
         form.addRow("Embedding Model:", embedding_model_combo)
         form.addRow("Reasoning Model:", reasoning_model_combo)
+        form.addRow("Model Choices:", model_status_label)
         # Add jury model rows
         for role, combo in jury_combos.items():
-            # Make the label human-friendly, e.g., 'semantic_judge' -> 'Semantic Judge'
-            label = role.replace('_', ' ').title()
-            form.addRow(f"{label}:", combo)
+            form.addRow(jury_role_labels[role], combo)
+        form.addRow("Jury Roles:", jury_status_label)
         form.addRow("", report_checkbox)
         
         # Ollama options section
@@ -583,6 +681,8 @@ class FormManager(QMainWindow):
         form.addRow("Batch Size:", batch_row)
         form.addRow("Grade Mode:", grading_mode_combo)
         form.addRow("Execution Mode:", execution_mode_combo)
+        execution_mode_combo.currentTextChanged.connect(refresh_jury_status)
+        refresh_jury_status()
 
         # Heartbeat settings section
         heartbeat_section = QWidget(dialog)
@@ -1255,6 +1355,72 @@ class FormManager(QMainWindow):
         self.is_searching = False
         self.is_grading = False
 
+    def stop_grading(self):
+        """Stop active grading without closing the app."""
+        self.auto_mode = False
+        self.stop_button.hide()
+        self.run_button.setEnabled(True)
+        self.append_debug("<b><font color='red'>STOPPING GRADING...</font></b>")
+
+        if self.auto_timer:
+            self.auto_timer.stop()
+            self.auto_timer.deleteLater()
+            self.auto_timer = None
+        auto_scheduler.stop()
+
+        if self.auto_search_thread and self.auto_search_thread.isRunning():
+            self.auto_search_thread.terminate()
+            self.auto_search_thread.wait(3000)
+
+        if self.grader_thread and self.grader_thread.isRunning():
+            try:
+                self.grader_thread.stop_grading()
+            except Exception:
+                pass
+            if not self.grader_thread.wait(5000):
+                self.grader_thread.terminate()
+                self.grader_thread.wait(2000)
+
+        self.is_searching = False
+        self.is_grading = False
+        self.run_state_label.setText("Run State: Stopped")
+
+    def _terminate_project_python_processes(self):
+        """Terminate python.exe/pythonw.exe instances started from this project path."""
+        try:
+            current_pid = os.getpid()
+            project_path = os.path.abspath(os.getcwd()).replace("'", "''")
+            ps_script = (
+                "$p='" + project_path + "'; "
+                f"$self={current_pid}; "
+                "Get-CimInstance Win32_Process | "
+                "Where-Object {($_.Name -in @('python.exe','pythonw.exe')) -and $_.ProcessId -ne $self -and $_.CommandLine -like \"*$p*\"} | "
+                "ForEach-Object { try { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop } catch {} }"
+            )
+            subprocess.run(["powershell", "-NoProfile", "-Command", ps_script], check=False)
+        except Exception:
+            pass
+
+    def exit_app(self):
+        """Stop grading/search and close application."""
+        self._force_exit = True
+        self.stop_grading()
+        self._terminate_project_python_processes()
+        self.close()
+
+    def minimize_app(self):
+        """Hide the app window to the system tray."""
+        if self.tray_icon and self.tray_icon.isVisible():
+            self.hide()
+            self.tray_icon.showMessage(
+                "Google Form Autograder",
+                "App is running in system tray. Double-click tray icon to restore.",
+                QSystemTrayIcon.Information,
+                2500,
+            )
+        else:
+            self.showMinimized()
+
     def run_grader(self, force_recent_only=False):
         """Start the grading process"""
         if not self.forms_data:
@@ -1271,9 +1437,9 @@ class FormManager(QMainWindow):
         self.is_grading = True
         self.run_state_label.setText("Run State: Running")
         self.run_button.setEnabled(False)
+        self.stop_button.show()
         self.debug_output.clear()
         self.debug_lines = []
-        self.overall_progress_bar.setValue(0)
         self.finished_forms = []
         wp_enabled = False
         try:
@@ -1301,12 +1467,7 @@ class FormManager(QMainWindow):
 
     def update_overall_progress(self, cur, tot):
         if not tot:
-            self.overall_progress_bar.setValue(100)
-            self.overall_progress_label.setText("Overall: 100%")
             return
-        pct = int(cur / tot * 100)
-        self.overall_progress_bar.setValue(pct)
-        self.overall_progress_label.setText(f"Overall: {pct}%")
         self.in_queue_label.setText(f"⏳ In Queue: {tot - cur}")
 
     def update_finished_form(self, form_id):
@@ -1357,13 +1518,11 @@ class FormManager(QMainWindow):
         try:
             if "[Worker Metrics]" in message:
                 payload = message.split("[Worker Metrics]", 1)[1].strip()
-                self.worker_metrics_label.setText(f"Worker Metrics: {payload}")
                 self._update_worker_tab_queue_counts(payload)
                 return
             # Global dispatcher metrics also carry queue data and producer pending buffer.
             if "[DISPATCH METRICS]" in message:
                 payload = message.split("[DISPATCH METRICS]", 1)[1].strip()
-                self.worker_metrics_label.setText(f"Dispatch Metrics: {payload}")
                 self._update_worker_tab_queue_counts(payload)
                 return
         except Exception:
@@ -1472,6 +1631,7 @@ class FormManager(QMainWindow):
     def on_grading_finished(self, success, msg):
         self.is_grading = False
         self.run_button.setEnabled(True)
+        self.stop_button.hide()
         now_str = datetime.now().strftime("%H:%M:%S")
         
         if not success:
@@ -1522,8 +1682,14 @@ class FormManager(QMainWindow):
 
     def closeEvent(self, event):
         """Properly clean up threads before closing"""
+        if not self._force_exit:
+            if self.tray_icon and self.tray_icon.isVisible():
+                self.hide()
+                event.ignore()
+                return
         self.is_closing = True
         self.auto_mode = False
+        self._terminate_project_python_processes()
         
         # Cancel timer
         if self.auto_timer:
@@ -1543,6 +1709,8 @@ class FormManager(QMainWindow):
             if not self.auto_search_thread.wait(3000):
                 self.auto_search_thread.terminate()
                 self.auto_search_thread.wait(2000)
+        if self.tray_icon:
+            self.tray_icon.hide()
         
         event.accept()
 
