@@ -3,10 +3,25 @@
 /token.json
 /heartbeat.json
 /heartbeat_monitor.py
+
+# Python/runtime artifacts
 __pycache__/
 *.pyc
+*.pyo
+.pytest_cache/
+
+# Local environments
+venv/
+venv_broken/
+.venv/
+
+# Generated caches and logs
 cache/
 logs/
 *.log
-task_builder_metrics.jsonl
+*.jsonl
 .grading_timestamps.json
+
+# Build/package outputs
+build/
+dist/
