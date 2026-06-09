@@ -1,0 +1,1535 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Autograder Server Console Simulation</title>
+  <style>
+    :root {
+      --bg: #f4f6f8;
+      --surface: #ffffff;
+      --surface-2: #eef2f5;
+      --ink: #17202a;
+      --muted: #667483;
+      --line: #d7dde3;
+      --brand: #0f766e;
+      --brand-2: #115e59;
+      --blue: #2563eb;
+      --yellow: #b7791f;
+      --red: #b42318;
+      --green: #15803d;
+      --shadow: 0 18px 45px rgba(24, 35, 48, 0.12);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: "Segoe UI", Arial, sans-serif;
+      font-size: 14px;
+      letter-spacing: 0;
+    }
+
+    button,
+    input,
+    select,
+    textarea {
+      font: inherit;
+    }
+
+    button {
+      cursor: pointer;
+    }
+
+    .shell {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 240px 1fr;
+    }
+
+    .sidebar {
+      background: #15202b;
+      color: #ecf3f8;
+      display: grid;
+      grid-template-rows: auto auto 1fr auto;
+      border-right: 1px solid #0d141c;
+    }
+
+    .brand {
+      padding: 20px 18px 16px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .brand strong {
+      display: block;
+      font-size: 18px;
+      font-weight: 700;
+    }
+
+    .brand span {
+      display: block;
+      color: #a7b5c3;
+      margin-top: 5px;
+      font-size: 12px;
+    }
+
+    .server-pill {
+      margin: 14px 14px 10px;
+      padding: 10px 12px;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+    }
+
+    .status-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 0 4px rgba(21, 128, 61, 0.18);
+      flex: 0 0 auto;
+    }
+
+    .status-dot.paused {
+      background: var(--yellow);
+      box-shadow: 0 0 0 4px rgba(183, 121, 31, 0.2);
+    }
+
+    .status-dot.stopped {
+      background: var(--red);
+      box-shadow: 0 0 0 4px rgba(180, 35, 24, 0.2);
+    }
+
+    .nav {
+      padding: 8px;
+      display: grid;
+      gap: 4px;
+    }
+
+    .nav button {
+      border: 0;
+      background: transparent;
+      color: #d8e1e9;
+      text-align: left;
+      padding: 10px 12px;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .nav button:hover,
+    .nav button.active {
+      background: rgba(255, 255, 255, 0.12);
+      color: #ffffff;
+    }
+
+    .nav .ico,
+    .toolbar .ico,
+    .menu-button .ico,
+    .icon-button .ico {
+      width: 18px;
+      text-align: center;
+      font-weight: 700;
+    }
+
+    .sidebar-footer {
+      padding: 14px;
+      color: #a7b5c3;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .workspace {
+      min-width: 0;
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+
+    .topbar {
+      background: var(--surface);
+      border-bottom: 1px solid var(--line);
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 14px;
+      align-items: center;
+      padding: 12px 18px;
+    }
+
+    .menus {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+      flex-wrap: wrap;
+    }
+
+    .menu {
+      position: relative;
+    }
+
+    .menu-button,
+    .toolbar button,
+    .primary,
+    .secondary,
+    .danger,
+    .ghost,
+    .icon-button {
+      border: 1px solid var(--line);
+      background: var(--surface);
+      color: var(--ink);
+      min-height: 36px;
+      border-radius: 6px;
+      padding: 0 12px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      white-space: nowrap;
+    }
+
+    .menu-button:hover,
+    .toolbar button:hover,
+    .secondary:hover,
+    .ghost:hover,
+    .icon-button:hover {
+      background: var(--surface-2);
+    }
+
+    .primary {
+      background: var(--brand);
+      border-color: var(--brand);
+      color: #ffffff;
+    }
+
+    .primary:hover {
+      background: var(--brand-2);
+    }
+
+    .danger {
+      background: #fff5f4;
+      border-color: #efc0bb;
+      color: var(--red);
+    }
+
+    .danger:hover {
+      background: #ffe9e7;
+    }
+
+    .dropdown {
+      position: absolute;
+      z-index: 20;
+      top: calc(100% + 6px);
+      left: 0;
+      width: 230px;
+      display: none;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      padding: 6px;
+    }
+
+    .dropdown.open {
+      display: grid;
+    }
+
+    .dropdown button {
+      border: 0;
+      background: transparent;
+      color: var(--ink);
+      text-align: left;
+      border-radius: 6px;
+      padding: 9px 10px;
+      display: grid;
+      grid-template-columns: 22px 1fr;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .dropdown button:hover {
+      background: var(--surface-2);
+    }
+
+    .dropdown .separator {
+      height: 1px;
+      background: var(--line);
+      margin: 5px 4px;
+    }
+
+    .toolbar {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .content {
+      min-height: 0;
+      overflow: auto;
+      padding: 18px;
+    }
+
+    .view {
+      display: none;
+    }
+
+    .view.active {
+      display: grid;
+      gap: 18px;
+    }
+
+    .hero-strip {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 18px;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 16px;
+      align-items: center;
+    }
+
+    .hero-strip h1 {
+      margin: 0;
+      font-size: 24px;
+      line-height: 1.2;
+    }
+
+    .hero-strip p {
+      margin: 6px 0 0;
+      color: var(--muted);
+      max-width: 760px;
+    }
+
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(160px, 1fr));
+      gap: 12px;
+    }
+
+    .metric,
+    .panel,
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    .metric {
+      padding: 14px;
+    }
+
+    .metric span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .metric strong {
+      display: block;
+      margin-top: 7px;
+      font-size: 25px;
+    }
+
+    .grid-two {
+      display: grid;
+      grid-template-columns: minmax(0, 1.25fr) minmax(320px, 0.75fr);
+      gap: 18px;
+      align-items: start;
+    }
+
+    .panel {
+      overflow: hidden;
+    }
+
+    .panel-header {
+      min-height: 54px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .panel-header h2 {
+      margin: 0;
+      font-size: 16px;
+    }
+
+    .panel-body {
+      padding: 14px;
+    }
+
+    .table-wrap {
+      overflow: auto;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 760px;
+    }
+
+    th,
+    td {
+      border-bottom: 1px solid var(--line);
+      padding: 11px 10px;
+      text-align: left;
+      vertical-align: middle;
+    }
+
+    th {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      background: #fafbfc;
+    }
+
+    tr.selected {
+      background: #e8f4f3;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 0 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      border: 1px solid var(--line);
+      background: var(--surface-2);
+      color: var(--ink);
+    }
+
+    .badge.green {
+      background: #e9f8ee;
+      color: var(--green);
+      border-color: #bde5ca;
+    }
+
+    .badge.yellow {
+      background: #fff7e6;
+      color: var(--yellow);
+      border-color: #f1d39b;
+    }
+
+    .badge.blue {
+      background: #edf4ff;
+      color: var(--blue);
+      border-color: #bfd4ff;
+    }
+
+    .badge.red {
+      background: #fff1f0;
+      color: var(--red);
+      border-color: #efc0bb;
+    }
+
+    .progress {
+      height: 9px;
+      border-radius: 999px;
+      background: #e1e7ec;
+      overflow: hidden;
+    }
+
+    .progress div {
+      width: 0%;
+      height: 100%;
+      background: var(--brand);
+      transition: width 180ms ease;
+    }
+
+    .run-card {
+      display: grid;
+      gap: 12px;
+    }
+
+    .pipeline {
+      display: grid;
+      gap: 8px;
+    }
+
+    .stage {
+      display: grid;
+      grid-template-columns: 28px 1fr auto;
+      align-items: center;
+      gap: 10px;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcfd;
+    }
+
+    .stage .step {
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      background: var(--surface-2);
+      color: var(--muted);
+      font-weight: 700;
+      font-size: 12px;
+    }
+
+    .stage.active .step {
+      background: var(--brand);
+      color: #ffffff;
+    }
+
+    .stage.done .step {
+      background: var(--green);
+      color: #ffffff;
+    }
+
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(180px, 1fr));
+      gap: 12px;
+    }
+
+    .card {
+      padding: 14px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .card h3 {
+      margin: 0;
+      font-size: 15px;
+    }
+
+    .card p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.45;
+    }
+
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    label {
+      display: grid;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    input,
+    select,
+    textarea {
+      width: 100%;
+      min-height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #ffffff;
+      color: var(--ink);
+      padding: 8px 10px;
+      font-weight: 400;
+    }
+
+    textarea {
+      min-height: 96px;
+      resize: vertical;
+    }
+
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--line);
+      padding: 12px 0;
+    }
+
+    .toggle-row:last-child {
+      border-bottom: 0;
+    }
+
+    .toggle-row input {
+      width: 18px;
+      min-height: 18px;
+    }
+
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.46);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 50;
+      padding: 18px;
+    }
+
+    .modal-backdrop.open {
+      display: flex;
+    }
+
+    .modal {
+      width: min(720px, 100%);
+      max-height: min(760px, calc(100vh - 36px));
+      overflow: auto;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+
+    .modal-header,
+    .modal-footer {
+      padding: 14px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .modal-header {
+      border-bottom: 1px solid var(--line);
+    }
+
+    .modal-header h2 {
+      margin: 0;
+      font-size: 18px;
+    }
+
+    .modal-footer {
+      border-top: 1px solid var(--line);
+      justify-content: flex-end;
+    }
+
+    .modal-body {
+      padding: 16px;
+      display: grid;
+      gap: 14px;
+    }
+
+    .toast-stack {
+      position: fixed;
+      right: 18px;
+      bottom: 18px;
+      z-index: 80;
+      display: grid;
+      gap: 8px;
+      width: min(360px, calc(100vw - 36px));
+    }
+
+    .toast {
+      background: #17202a;
+      color: #ffffff;
+      border-radius: 8px;
+      padding: 11px 12px;
+      box-shadow: var(--shadow);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .toast button {
+      border: 0;
+      background: transparent;
+      color: #ffffff;
+      min-height: 24px;
+      padding: 0 4px;
+    }
+
+    .empty {
+      padding: 24px;
+      text-align: center;
+      color: var(--muted);
+      border: 1px dashed var(--line);
+      border-radius: 8px;
+      background: #fbfcfd;
+    }
+
+    .hide {
+      display: none !important;
+    }
+
+    @media (max-width: 980px) {
+      .shell {
+        grid-template-columns: 1fr;
+      }
+
+      .sidebar {
+        position: sticky;
+        top: 0;
+        z-index: 30;
+        grid-template-rows: auto auto;
+      }
+
+      .brand,
+      .server-pill,
+      .sidebar-footer {
+        display: none;
+      }
+
+      .nav {
+        grid-auto-flow: column;
+        overflow: auto;
+      }
+
+      .nav button {
+        white-space: nowrap;
+      }
+
+      .topbar,
+      .hero-strip,
+      .grid-two {
+        grid-template-columns: 1fr;
+      }
+
+      .toolbar {
+        justify-content: flex-start;
+      }
+
+      .metric-grid,
+      .cards,
+      .form-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <strong>GradeServer</strong>
+        <span>Web control simulation</span>
+      </div>
+      <div class="server-pill">
+        <span id="serverDot" class="status-dot"></span>
+        <div>
+          <strong id="serverState">Online</strong><br>
+          <span id="serverSubstate">localhost:8080</span>
+        </div>
+      </div>
+      <nav class="nav" aria-label="Primary">
+        <button class="active" data-view="dashboard"><span class="ico">D</span>Dashboard</button>
+        <button data-view="queue"><span class="ico">Q</span>Queue</button>
+        <button data-view="runs"><span class="ico">R</span>Runs</button>
+        <button data-view="reports"><span class="ico">P</span>Reports</button>
+        <button data-view="automation"><span class="ico">A</span>Automation</button>
+        <button data-view="settings"><span class="ico">S</span>Settings</button>
+      </nav>
+      <div class="sidebar-footer">
+        Simulated server UI<br>
+        No console output is shown
+      </div>
+    </aside>
+
+    <main class="workspace">
+      <header class="topbar">
+        <div class="menus" aria-label="Application menus">
+          <div class="menu">
+            <button class="menu-button" data-menu="formsMenu"><span class="ico">F</span>Forms</button>
+            <div id="formsMenu" class="dropdown">
+              <button data-action="add-form"><span>+</span>Add form URL</button>
+              <button data-action="import-folder"><span>I</span>Import Drive folder</button>
+              <button data-action="duplicate-form"><span>C</span>Duplicate selected</button>
+              <div class="separator"></div>
+              <button data-action="remove-selected"><span>-</span>Remove selected</button>
+              <button data-action="clear-queue"><span>X</span>Clear queue</button>
+            </div>
+          </div>
+          <div class="menu">
+            <button class="menu-button" data-menu="gradingMenu"><span class="ico">G</span>Grading</button>
+            <div id="gradingMenu" class="dropdown">
+              <button data-action="run-all"><span>></span>Run all queued</button>
+              <button data-action="run-selected"><span>1</span>Run selected</button>
+              <button data-action="pause-run"><span>||</span>Pause run</button>
+              <button data-action="stop-run"><span>[]</span>Stop run</button>
+              <div class="separator"></div>
+              <button data-action="grade-recent"><span>N</span>Recent only</button>
+              <button data-action="grade-whole"><span>W</span>Whole form</button>
+            </div>
+          </div>
+          <div class="menu">
+            <button class="menu-button" data-menu="reportsMenu"><span class="ico">P</span>Reports</button>
+            <div id="reportsMenu" class="dropdown">
+              <button data-action="open-report"><span>O</span>Open latest report</button>
+              <button data-action="export-csv"><span>E</span>Export CSV</button>
+              <button data-action="export-feedback"><span>F</span>Export feedback pack</button>
+              <button data-action="clear-reports"><span>X</span>Clear simulated reports</button>
+            </div>
+          </div>
+          <div class="menu">
+            <button class="menu-button" data-menu="serverMenu"><span class="ico">V</span>Server</button>
+            <div id="serverMenu" class="dropdown">
+              <button data-action="server-start"><span>^</span>Start server</button>
+              <button data-action="server-restart"><span>R</span>Restart server</button>
+              <button data-action="server-pause"><span>P</span>Pause intake</button>
+              <button data-action="server-stop"><span>S</span>Stop server</button>
+            </div>
+          </div>
+          <div class="menu">
+            <button class="menu-button" data-menu="toolsMenu"><span class="ico">T</span>Tools</button>
+            <div id="toolsMenu" class="dropdown">
+              <button data-action="find-forms"><span>?</span>Find forms with responses</button>
+              <button data-action="check-auth"><span>K</span>Check Google auth</button>
+              <button data-action="check-ollama"><span>M</span>Check Ollama models</button>
+              <button data-action="open-settings"><span>S</span>Open settings</button>
+            </div>
+          </div>
+          <div class="menu">
+            <button class="menu-button" data-menu="helpMenu"><span class="ico">H</span>Help</button>
+            <div id="helpMenu" class="dropdown">
+              <button data-action="show-readme"><span>R</span>Project overview</button>
+              <button data-action="show-shortcuts"><span>/</span>Shortcuts</button>
+              <button data-action="show-about"><span>i</span>About simulation</button>
+            </div>
+          </div>
+        </div>
+        <div class="toolbar">
+          <button data-action="add-form"><span class="ico">+</span>Add</button>
+          <button class="primary" data-action="run-all"><span class="ico">></span>Run</button>
+          <button class="danger" data-action="stop-run"><span class="ico">[]</span>Stop</button>
+        </div>
+      </header>
+
+      <section class="content">
+        <div id="dashboard" class="view active">
+          <section class="hero-strip">
+            <div>
+              <h1>Autograder operations</h1>
+              <p>Manage Google Forms, schedule grading, watch run health, and prepare feedback reports from one webserver surface.</p>
+            </div>
+            <button class="primary" data-action="run-all"><span class="ico">></span>Start grading</button>
+          </section>
+
+          <section class="metric-grid">
+            <div class="metric"><span>Queued forms</span><strong id="metricQueued">0</strong></div>
+            <div class="metric"><span>Completed today</span><strong id="metricDone">0</strong></div>
+            <div class="metric"><span>Pending responses</span><strong id="metricResponses">0</strong></div>
+            <div class="metric"><span>Server health</span><strong id="metricHealth">Online</strong></div>
+          </section>
+
+          <section class="grid-two">
+            <div class="panel">
+              <div class="panel-header">
+                <h2>Queue overview</h2>
+                <button class="secondary" data-view-jump="queue">Open queue</button>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Form</th>
+                      <th>Mode</th>
+                      <th>Responses</th>
+                      <th>Status</th>
+                      <th>Progress</th>
+                    </tr>
+                  </thead>
+                  <tbody id="dashboardQueue"></tbody>
+                </table>
+              </div>
+            </div>
+            <div class="panel">
+              <div class="panel-header">
+                <h2>Current run</h2>
+                <span id="runBadge" class="badge">Idle</span>
+              </div>
+              <div class="panel-body run-card">
+                <div>
+                  <strong id="currentForm">No active form</strong>
+                  <div class="progress" aria-label="Run progress"><div id="runProgress"></div></div>
+                </div>
+                <div class="pipeline" id="pipeline"></div>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <div id="queue" class="view">
+          <section class="hero-strip">
+            <div>
+              <h1>Form queue</h1>
+              <p>Add Google Form URLs or Drive folders, choose grading scope, and prepare the next server run.</p>
+            </div>
+            <div class="toolbar">
+              <button data-action="import-folder"><span class="ico">I</span>Import folder</button>
+              <button class="primary" data-action="add-form"><span class="ico">+</span>Add form</button>
+            </div>
+          </section>
+          <div class="panel">
+            <div class="panel-header">
+              <h2>Queued forms</h2>
+              <div class="toolbar">
+                <button data-action="run-selected">Run selected</button>
+                <button data-action="duplicate-form">Duplicate</button>
+                <button class="danger" data-action="remove-selected">Remove</button>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Title</th>
+                    <th>URL</th>
+                    <th>Responses</th>
+                    <th>Mode</th>
+                    <th>Status</th>
+                    <th>Progress</th>
+                  </tr>
+                </thead>
+                <tbody id="queueTable"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div id="runs" class="view">
+          <section class="hero-strip">
+            <div>
+              <h1>Run monitor</h1>
+              <p>Track simulated grading stages without exposing console output or worker logs.</p>
+            </div>
+            <div class="toolbar">
+              <button data-action="pause-run">Pause</button>
+              <button class="danger" data-action="stop-run">Stop</button>
+            </div>
+          </section>
+          <section class="grid-two">
+            <div class="panel">
+              <div class="panel-header"><h2>Pipeline stages</h2><span id="stageSummary" class="badge">Waiting</span></div>
+              <div class="panel-body"><div class="pipeline" id="pipelineLarge"></div></div>
+            </div>
+            <div class="panel">
+              <div class="panel-header"><h2>Worker capacity</h2><button data-action="check-ollama">Check models</button></div>
+              <div class="panel-body">
+                <div class="cards">
+                  <div class="card"><h3>Fetcher</h3><p id="fetcherState">Ready for Google Forms intake.</p><span class="badge green">Ready</span></div>
+                  <div class="card"><h3>Deterministic</h3><p id="detState">Rule checks available.</p><span class="badge green">Ready</span></div>
+                  <div class="card"><h3>AI judges</h3><p id="aiState">Six judge roles configured.</p><span class="badge green">Ready</span></div>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <div id="reports" class="view">
+          <section class="hero-strip">
+            <div>
+              <h1>Reports</h1>
+              <p>Preview generated feedback packs, CSV exports, and per-form summaries.</p>
+            </div>
+            <div class="toolbar">
+              <button data-action="export-csv">CSV</button>
+              <button data-action="export-feedback">Feedback pack</button>
+            </div>
+          </section>
+          <div class="panel">
+            <div class="panel-header"><h2>Generated reports</h2><button class="danger" data-action="clear-reports">Clear</button></div>
+            <div id="reportsBody" class="panel-body"></div>
+          </div>
+        </div>
+
+        <div id="automation" class="view">
+          <section class="hero-strip">
+            <div>
+              <h1>Automation</h1>
+              <p>Simulate folder scanning, recent-submission grading, and scheduled server cycles.</p>
+            </div>
+            <button class="primary" data-action="find-forms">Scan now</button>
+          </section>
+          <section class="grid-two">
+            <div class="panel">
+              <div class="panel-header"><h2>Folders</h2><button data-action="import-folder">Add folder</button></div>
+              <div class="panel-body" id="foldersBody"></div>
+            </div>
+            <div class="panel">
+              <div class="panel-header"><h2>Schedule</h2><button data-action="save-settings">Save</button></div>
+              <div class="panel-body">
+                <div class="form-grid">
+                  <label>Cycle interval<select id="scheduleInterval"><option>Every 15 minutes</option><option>Every 30 minutes</option><option>Hourly</option><option>Manual only</option></select></label>
+                  <label>Default mode<select id="scheduleMode"><option>Recent Only</option><option>Whole Form</option></select></label>
+                </div>
+                <div class="toggle-row"><span>Auto clear finished forms</span><input id="autoClear" type="checkbox" checked></div>
+                <div class="toggle-row"><span>Generate feedback reports</span><input id="autoReports" type="checkbox" checked></div>
+                <div class="toggle-row"><span>Restart stalled runs</span><input id="autoRestart" type="checkbox" checked></div>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <div id="settings" class="view">
+          <section class="hero-strip">
+            <div>
+              <h1>Settings</h1>
+              <p>Configure grading mode, evaluator strategy, local models, and server safety limits.</p>
+            </div>
+            <button class="primary" data-action="save-settings">Save settings</button>
+          </section>
+          <section class="grid-two">
+            <div class="panel">
+              <div class="panel-header"><h2>Evaluator</h2></div>
+              <div class="panel-body form-grid">
+                <label>Evaluator<select id="evaluator"><option>Semantic pipeline</option><option>Fast AI</option><option>Balanced consensus</option></select></label>
+                <label>Leniency<select id="leniency"><option>Balanced</option><option>Strict</option><option>Lenient</option></select></label>
+                <label>Execution mode<select id="executionMode"><option>Balanced</option><option>Parallel</option><option>Stable</option></select></label>
+                <label>Batch size<select id="batchSize"><option>Auto</option><option>16</option><option>32</option><option>64</option></select></label>
+              </div>
+            </div>
+            <div class="panel">
+              <div class="panel-header"><h2>Models</h2><button data-action="check-ollama">Refresh</button></div>
+              <div class="panel-body form-grid">
+                <label>Rubric model<select><option>llama3.1:8b</option><option>gemma3:12b</option></select></label>
+                <label>Reasoning model<select><option>gemma3:12b</option><option>llama3.1:8b</option></select></label>
+                <label>Embedding model<select><option>nomic-embed-text</option><option>mxbai-embed-large</option></select></label>
+                <label>Heartbeat timeout<input type="number" value="120" min="30" max="600"></label>
+              </div>
+            </div>
+          </section>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="modalBackdrop" class="modal-backdrop" role="dialog" aria-modal="true">
+    <div class="modal">
+      <div class="modal-header">
+        <h2 id="modalTitle">Dialog</h2>
+        <button class="icon-button" data-action="close-modal" aria-label="Close">X</button>
+      </div>
+      <div id="modalBody" class="modal-body"></div>
+      <div id="modalFooter" class="modal-footer"></div>
+    </div>
+  </div>
+  <div id="toastStack" class="toast-stack" aria-live="polite"></div>
+
+  <script>
+    const stages = [
+      "Fetch form",
+      "Load responses",
+      "Build rubric",
+      "Deterministic checks",
+      "Semantic scoring",
+      "Judge consensus",
+      "Write report"
+    ];
+
+    const state = {
+      server: "online",
+      selectedId: 1,
+      running: false,
+      paused: false,
+      currentStage: -1,
+      completedToday: 3,
+      forms: [
+        {
+          id: 1,
+          title: "Chapter 9 Quiz Fractions",
+          url: "https://docs.google.com/forms/d/fractions/edit",
+          responses: 28,
+          mode: "Recent Only",
+          status: "Queued",
+          progress: 0
+        },
+        {
+          id: 2,
+          title: "Chapter 10 Manipulating Expressions",
+          url: "https://docs.google.com/forms/d/expressions/edit",
+          responses: 34,
+          mode: "Whole Form",
+          status: "Queued",
+          progress: 0
+        },
+        {
+          id: 3,
+          title: "Measuring Motion Open Response",
+          url: "https://docs.google.com/forms/d/motion/edit",
+          responses: 19,
+          mode: "Recent Only",
+          status: "Ready",
+          progress: 0
+        }
+      ],
+      folders: [
+        { name: "Year 9 Mathematics", forms: 5, mode: "Recent Only" },
+        { name: "Science Open Responses", forms: 3, mode: "Whole Form" }
+      ],
+      reports: [
+        { title: "Chapter 7 Quiz Measuring Motion", type: "Feedback", score: "81%", date: "Today" },
+        { title: "Exercise 1", type: "CSV", score: "76%", date: "Yesterday" }
+      ],
+      timer: null
+    };
+
+    const byId = (id) => document.getElementById(id);
+
+    function closeMenus() {
+      document.querySelectorAll(".dropdown.open").forEach((menu) => menu.classList.remove("open"));
+    }
+
+    function toast(message) {
+      const item = document.createElement("div");
+      item.className = "toast";
+      item.innerHTML = `<span>${message}</span><button aria-label="Dismiss">X</button>`;
+      item.querySelector("button").addEventListener("click", () => item.remove());
+      byId("toastStack").appendChild(item);
+      setTimeout(() => item.remove(), 3600);
+    }
+
+    function setView(name) {
+      document.querySelectorAll(".view").forEach((view) => view.classList.toggle("active", view.id === name));
+      document.querySelectorAll(".nav button").forEach((button) => {
+        button.classList.toggle("active", button.dataset.view === name);
+      });
+      closeMenus();
+    }
+
+    function selectedForm() {
+      return state.forms.find((form) => form.id === state.selectedId) || state.forms[0];
+    }
+
+    function badgeFor(status) {
+      const key = status.toLowerCase();
+      const cls = key.includes("complete") ? "green" : key.includes("running") ? "blue" : key.includes("paused") ? "yellow" : key.includes("error") ? "red" : "";
+      return `<span class="badge ${cls}">${status}</span>`;
+    }
+
+    function renderRows(targetId, compact) {
+      const target = byId(targetId);
+      if (!state.forms.length) {
+        const colspan = compact ? 5 : 6;
+        target.innerHTML = `<tr><td colspan="${colspan}"><div class="empty">No forms are queued.</div></td></tr>`;
+        return;
+      }
+      target.innerHTML = state.forms.map((form) => {
+        const selected = form.id === state.selectedId ? "selected" : "";
+        const progress = `<div class="progress"><div style="width:${form.progress}%"></div></div>`;
+        if (compact) {
+          return `<tr class="${selected}" data-select="${form.id}">
+            <td>${form.title}</td>
+            <td>${form.mode}</td>
+            <td>${form.responses}</td>
+            <td>${badgeFor(form.status)}</td>
+            <td>${progress}</td>
+          </tr>`;
+        }
+        return `<tr class="${selected}" data-select="${form.id}">
+          <td>${form.title}</td>
+          <td>${form.url}</td>
+          <td>${form.responses}</td>
+          <td>${form.mode}</td>
+          <td>${badgeFor(form.status)}</td>
+          <td>${progress}</td>
+        </tr>`;
+      }).join("");
+      target.querySelectorAll("[data-select]").forEach((row) => {
+        row.addEventListener("click", () => {
+          state.selectedId = Number(row.dataset.select);
+          render();
+        });
+      });
+    }
+
+    function renderPipeline(targetId) {
+      const target = byId(targetId);
+      target.innerHTML = stages.map((stage, index) => {
+        const cls = index < state.currentStage ? "done" : index === state.currentStage ? "active" : "";
+        const label = index < state.currentStage ? "Done" : index === state.currentStage ? "Active" : "Waiting";
+        return `<div class="stage ${cls}">
+          <div class="step">${index + 1}</div>
+          <strong>${stage}</strong>
+          <span class="badge">${label}</span>
+        </div>`;
+      }).join("");
+    }
+
+    function renderReports() {
+      const body = byId("reportsBody");
+      if (!state.reports.length) {
+        body.innerHTML = `<div class="empty">No simulated reports yet.</div>`;
+        return;
+      }
+      body.innerHTML = `<div class="cards">${state.reports.map((report) => `
+        <div class="card">
+          <h3>${report.title}</h3>
+          <p>${report.type} generated ${report.date}</p>
+          <span class="badge green">Average ${report.score}</span>
+        </div>`).join("")}</div>`;
+    }
+
+    function renderFolders() {
+      const body = byId("foldersBody");
+      body.innerHTML = `<div class="cards">${state.folders.map((folder) => `
+        <div class="card">
+          <h3>${folder.name}</h3>
+          <p>${folder.forms} forms discovered</p>
+          <span class="badge blue">${folder.mode}</span>
+        </div>`).join("")}</div>`;
+    }
+
+    function renderServer() {
+      const dot = byId("serverDot");
+      dot.className = `status-dot ${state.server === "paused" ? "paused" : state.server === "stopped" ? "stopped" : ""}`;
+      const text = state.server === "online" ? "Online" : state.server === "paused" ? "Intake paused" : "Stopped";
+      byId("serverState").textContent = text;
+      byId("serverSubstate").textContent = state.server === "stopped" ? "offline" : "localhost:8080";
+      byId("metricHealth").textContent = text;
+    }
+
+    function render() {
+      const pendingResponses = state.forms.reduce((sum, form) => sum + (form.status === "Completed" ? 0 : form.responses), 0);
+      byId("metricQueued").textContent = state.forms.length;
+      byId("metricDone").textContent = state.completedToday;
+      byId("metricResponses").textContent = pendingResponses;
+      const active = state.forms.find((form) => form.status === "Running");
+      byId("currentForm").textContent = active ? active.title : "No active form";
+      byId("runProgress").style.width = active ? `${active.progress}%` : "0%";
+      byId("runBadge").textContent = state.paused ? "Paused" : state.running ? "Running" : "Idle";
+      byId("stageSummary").textContent = state.paused ? "Paused" : state.running ? "Running" : "Waiting";
+      renderRows("dashboardQueue", true);
+      renderRows("queueTable", false);
+      renderPipeline("pipeline");
+      renderPipeline("pipelineLarge");
+      renderReports();
+      renderFolders();
+      renderServer();
+    }
+
+    function openModal(title, body, footer) {
+      byId("modalTitle").textContent = title;
+      byId("modalBody").innerHTML = body;
+      byId("modalFooter").innerHTML = footer;
+      byId("modalBackdrop").classList.add("open");
+      closeMenus();
+    }
+
+    function closeModal() {
+      byId("modalBackdrop").classList.remove("open");
+    }
+
+    function addFormDialog() {
+      openModal(
+        "Add form",
+        `<label>Form title<input id="newFormTitle" value="New assessment form"></label>
+         <label>Google Form URL<input id="newFormUrl" value="https://docs.google.com/forms/d/new-form/edit"></label>
+         <label>Mode<select id="newFormMode"><option>Recent Only</option><option>Whole Form</option></select></label>`,
+        `<button class="secondary" data-action="close-modal">Cancel</button><button class="primary" data-action="confirm-add-form">Add form</button>`
+      );
+    }
+
+    function importFolderDialog() {
+      openModal(
+        "Import Drive folder",
+        `<label>Folder name<input id="folderName" value="Imported Google Drive folder"></label>
+         <label>Drive folder URL<input id="folderUrl" value="https://drive.google.com/drive/folders/example"></label>
+         <label>Default grading mode<select id="folderMode"><option>Recent Only</option><option>Whole Form</option></select></label>`,
+        `<button class="secondary" data-action="close-modal">Cancel</button><button class="primary" data-action="confirm-import-folder">Import</button>`
+      );
+    }
+
+    function infoDialog(title, message) {
+      openModal(title, `<p style="margin:0;line-height:1.6;color:var(--muted)">${message}</p>`, `<button class="primary" data-action="close-modal">Done</button>`);
+    }
+
+    function runForms(onlySelected) {
+      if (state.server === "stopped") {
+        toast("Start the server before grading.");
+        return;
+      }
+      if (!state.forms.length) {
+        toast("Add a form before starting a run.");
+        return;
+      }
+      const targets = onlySelected ? state.forms.filter((form) => form.id === state.selectedId) : state.forms.filter((form) => form.status !== "Completed");
+      if (!targets.length) {
+        toast("No queued forms need grading.");
+        return;
+      }
+      clearInterval(state.timer);
+      state.running = true;
+      state.paused = false;
+      state.currentStage = 0;
+      state.forms.forEach((form) => {
+        if (targets.includes(form)) {
+          form.status = "Queued";
+          form.progress = 0;
+        }
+      });
+      const queue = [...targets];
+      let active = queue.shift();
+      active.status = "Running";
+      toast(onlySelected ? "Selected form run started." : "Grading run started.");
+      state.timer = setInterval(() => {
+        if (!state.running || state.paused || !active) {
+          return;
+        }
+        active.progress = Math.min(100, active.progress + 5);
+        state.currentStage = Math.min(stages.length - 1, Math.floor(active.progress / (100 / stages.length)));
+        if (active.progress >= 100) {
+          active.status = "Completed";
+          state.completedToday += 1;
+          state.reports.unshift({ title: active.title, type: "Feedback", score: `${74 + Math.floor(Math.random() * 18)}%`, date: "Just now" });
+          active = queue.shift();
+          if (active) {
+            active.status = "Running";
+            active.progress = 0;
+            state.currentStage = 0;
+          } else {
+            clearInterval(state.timer);
+            state.running = false;
+            state.currentStage = -1;
+            toast("Grading run completed.");
+          }
+        }
+        render();
+      }, 420);
+      render();
+    }
+
+    function handleAction(action) {
+      const form = selectedForm();
+      switch (action) {
+        case "add-form":
+          addFormDialog();
+          break;
+        case "confirm-add-form": {
+          const id = Date.now();
+          state.forms.push({
+            id,
+            title: byId("newFormTitle").value || "Untitled form",
+            url: byId("newFormUrl").value || "https://docs.google.com/forms/d/untitled/edit",
+            responses: 10 + Math.floor(Math.random() * 40),
+            mode: byId("newFormMode").value,
+            status: "Queued",
+            progress: 0
+          });
+          state.selectedId = id;
+          closeModal();
+          toast("Form added to queue.");
+          render();
+          break;
+        }
+        case "import-folder":
+          importFolderDialog();
+          break;
+        case "confirm-import-folder": {
+          const mode = byId("folderMode").value;
+          state.folders.push({ name: byId("folderName").value || "Imported folder", forms: 3, mode });
+          for (let index = 1; index <= 3; index += 1) {
+            state.forms.push({
+              id: Date.now() + index,
+              title: `Imported folder form ${index}`,
+              url: `https://docs.google.com/forms/d/imported-${index}/edit`,
+              responses: 12 + Math.floor(Math.random() * 35),
+              mode,
+              status: "Queued",
+              progress: 0
+            });
+          }
+          closeModal();
+          toast("Folder imported and forms queued.");
+          render();
+          break;
+        }
+        case "duplicate-form":
+          if (!form) {
+            toast("Select a form first.");
+            break;
+          }
+          state.forms.push({ ...form, id: Date.now(), title: `${form.title} copy`, status: "Queued", progress: 0 });
+          toast("Selected form duplicated.");
+          render();
+          break;
+        case "remove-selected":
+          if (!form) {
+            toast("Select a form first.");
+            break;
+          }
+          state.forms = state.forms.filter((item) => item.id !== form.id);
+          state.selectedId = state.forms[0]?.id || 0;
+          toast("Selected form removed.");
+          render();
+          break;
+        case "clear-queue":
+          state.forms = [];
+          state.selectedId = 0;
+          state.running = false;
+          state.currentStage = -1;
+          clearInterval(state.timer);
+          toast("Queue cleared.");
+          render();
+          break;
+        case "run-all":
+          runForms(false);
+          break;
+        case "run-selected":
+          runForms(true);
+          break;
+        case "pause-run":
+          if (!state.running) {
+            toast("No active run to pause.");
+            break;
+          }
+          state.paused = !state.paused;
+          toast(state.paused ? "Run paused." : "Run resumed.");
+          render();
+          break;
+        case "stop-run":
+          clearInterval(state.timer);
+          state.running = false;
+          state.paused = false;
+          state.currentStage = -1;
+          state.forms.forEach((item) => {
+            if (item.status === "Running") {
+              item.status = "Stopped";
+            }
+          });
+          toast("Run stopped.");
+          render();
+          break;
+        case "grade-recent":
+        case "grade-whole":
+          state.forms.forEach((item) => {
+            item.mode = action === "grade-recent" ? "Recent Only" : "Whole Form";
+          });
+          toast(`Queue set to ${action === "grade-recent" ? "Recent Only" : "Whole Form"}.`);
+          render();
+          break;
+        case "open-report":
+          if (!state.reports.length) {
+            toast("No reports are available.");
+          } else {
+            infoDialog("Latest report", `${state.reports[0].title} is ready as a ${state.reports[0].type} report with an average score of ${state.reports[0].score}.`);
+          }
+          break;
+        case "export-csv":
+          toast("CSV export prepared.");
+          break;
+        case "export-feedback":
+          toast("Feedback pack prepared.");
+          break;
+        case "clear-reports":
+          state.reports = [];
+          toast("Simulated reports cleared.");
+          render();
+          break;
+        case "server-start":
+          state.server = "online";
+          toast("Server online.");
+          render();
+          break;
+        case "server-restart":
+          state.server = "online";
+          toast("Server restarted.");
+          render();
+          break;
+        case "server-pause":
+          state.server = "paused";
+          toast("Server intake paused.");
+          render();
+          break;
+        case "server-stop":
+          state.server = "stopped";
+          toast("Server stopped.");
+          render();
+          break;
+        case "find-forms":
+          state.forms.push({
+            id: Date.now(),
+            title: "Auto-found recent submissions",
+            url: "https://docs.google.com/forms/d/auto-found/edit",
+            responses: 17,
+            mode: "Recent Only",
+            status: "Queued",
+            progress: 0
+          });
+          toast("Scan found one new form.");
+          render();
+          break;
+        case "check-auth":
+          infoDialog("Google auth", "OAuth token and client credentials are present in the local simulation state.");
+          break;
+        case "check-ollama":
+          byId("aiState").textContent = "Model check completed successfully.";
+          toast("Ollama model check completed.");
+          render();
+          break;
+        case "open-settings":
+          setView("settings");
+          break;
+        case "save-settings":
+          toast("Settings saved in simulation.");
+          break;
+        case "show-readme":
+          infoDialog("Project overview", "The app fetches Google Form responses, builds rubrics, grades answers with deterministic and AI checks, then prepares feedback reports.");
+          break;
+        case "show-shortcuts":
+          infoDialog("Shortcuts", "Use the side navigation for sections, top menus for actions, and table rows to select forms.");
+          break;
+        case "show-about":
+          infoDialog("About simulation", "This is a browser-only mock webserver GUI. It changes local interface state but does not call Google, Ollama, or Python services.");
+          break;
+        case "close-modal":
+          closeModal();
+          break;
+        default:
+          toast("Action completed.");
+      }
+      closeMenus();
+    }
+
+    document.addEventListener("click", (event) => {
+      const menuButton = event.target.closest("[data-menu]");
+      const actionButton = event.target.closest("[data-action]");
+      const navButton = event.target.closest("[data-view]");
+      const jumpButton = event.target.closest("[data-view-jump]");
+
+      if (menuButton) {
+        const target = byId(menuButton.dataset.menu);
+        const wasOpen = target.classList.contains("open");
+        closeMenus();
+        target.classList.toggle("open", !wasOpen);
+        return;
+      }
+      if (actionButton) {
+        handleAction(actionButton.dataset.action);
+        return;
+      }
+      if (navButton) {
+        setView(navButton.dataset.view);
+        return;
+      }
+      if (jumpButton) {
+        setView(jumpButton.dataset.viewJump);
+        return;
+      }
+      if (!event.target.closest(".dropdown")) {
+        closeMenus();
+      }
+    });
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        closeMenus();
+        closeModal();
+      }
+    });
+
+    render();
+  </script>
+</body>
+</html>
