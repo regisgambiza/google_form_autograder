@@ -1,0 +1,994 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Autograder Firebase Web App Simulation</title>
+  <style>
+    :root {
+      --bg: #f3f5f7;
+      --surface: #ffffff;
+      --surface-soft: #f8fafb;
+      --ink: #17202a;
+      --muted: #607080;
+      --line: #d7dee6;
+      --blue: #2364d2;
+      --blue-dark: #174fae;
+      --green: #16784a;
+      --amber: #b46a11;
+      --red: #b42318;
+      --teal: #08798a;
+      --shadow: 0 12px 28px rgba(25, 38, 52, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: Inter, "Segoe UI", Roboto, Arial, sans-serif;
+      letter-spacing: 0;
+    }
+
+    button,
+    input,
+    select {
+      font: inherit;
+    }
+
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 248px minmax(0, 1fr);
+    }
+
+    .sidebar {
+      border-right: 1px solid var(--line);
+      background: #202933;
+      color: #eef4fa;
+      padding: 18px 14px;
+      display: grid;
+      grid-template-rows: auto auto 1fr auto;
+      gap: 22px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 4px 6px 14px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+    }
+
+    .brand-mark {
+      width: 34px;
+      height: 34px;
+      border-radius: 8px;
+      background: linear-gradient(135deg, #2f75dc, #0f8b7f);
+      display: grid;
+      place-items: center;
+      font-weight: 800;
+      color: white;
+    }
+
+    .brand strong {
+      display: block;
+      font-size: 15px;
+    }
+
+    .brand span {
+      display: block;
+      color: #aebdca;
+      font-size: 12px;
+      margin-top: 2px;
+    }
+
+    .nav {
+      display: grid;
+      gap: 6px;
+    }
+
+    .nav button,
+    .worker-card button,
+    .icon-button {
+      border: 0;
+      cursor: pointer;
+    }
+
+    .nav button {
+      min-height: 38px;
+      border-radius: 6px;
+      background: transparent;
+      color: #c7d2dc;
+      text-align: left;
+      padding: 0 10px;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+    }
+
+    .nav button.active {
+      background: #344150;
+      color: white;
+    }
+
+    .nav svg,
+    .icon {
+      width: 18px;
+      height: 18px;
+      flex: 0 0 auto;
+    }
+
+    .worker-card {
+      background: #2b3642;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 8px;
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .worker-card h2 {
+      margin: 0;
+      font-size: 13px;
+      color: #d8e3ec;
+    }
+
+    .worker-line {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      font-size: 12px;
+      color: #aebdca;
+    }
+
+    .switch {
+      width: 42px;
+      height: 24px;
+      border-radius: 999px;
+      background: #4b5b6b;
+      padding: 3px;
+      transition: background 160ms ease;
+    }
+
+    .switch::before {
+      content: "";
+      display: block;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: white;
+      transition: transform 160ms ease;
+    }
+
+    .switch.on {
+      background: var(--green);
+    }
+
+    .switch.on::before {
+      transform: translateX(18px);
+    }
+
+    .main {
+      min-width: 0;
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+
+    .topbar {
+      min-height: 66px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 12px 22px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 20px;
+      line-height: 1.2;
+    }
+
+    .topbar p {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .actions {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .button {
+      min-height: 38px;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      padding: 0 12px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      background: var(--blue);
+      color: white;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .button:hover {
+      background: var(--blue-dark);
+    }
+
+    .button.secondary {
+      background: white;
+      color: var(--ink);
+      border-color: var(--line);
+    }
+
+    .button.secondary:hover {
+      background: var(--surface-soft);
+    }
+
+    .content {
+      min-width: 0;
+      padding: 18px 22px 22px;
+      display: grid;
+      grid-template-columns: minmax(0, 1.25fr) minmax(340px, 0.75fr);
+      gap: 18px;
+      align-items: start;
+    }
+
+    .stack {
+      display: grid;
+      gap: 18px;
+    }
+
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .panel-header {
+      min-height: 50px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      background: var(--surface-soft);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .panel-header h2 {
+      margin: 0;
+      font-size: 15px;
+    }
+
+    .panel-header span,
+    .muted {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(130px, 1fr));
+      gap: 12px;
+    }
+
+    .metric {
+      min-height: 92px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      padding: 14px;
+      display: grid;
+      align-content: space-between;
+      gap: 8px;
+    }
+
+    .metric span {
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .metric strong {
+      font-size: 26px;
+      line-height: 1;
+    }
+
+    .add-form {
+      padding: 14px;
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) 160px 140px;
+      gap: 10px;
+    }
+
+    label {
+      display: grid;
+      gap: 6px;
+      color: #2f3a45;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    input,
+    select {
+      width: 100%;
+      min-height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: white;
+      color: var(--ink);
+      padding: 0 10px;
+      outline: none;
+    }
+
+    input:focus,
+    select:focus {
+      border-color: var(--blue);
+      box-shadow: 0 0 0 3px rgba(35, 100, 210, 0.14);
+    }
+
+    .queue {
+      display: grid;
+    }
+
+    .job {
+      min-height: 92px;
+      padding: 13px 14px;
+      border-bottom: 1px solid var(--line);
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 130px;
+      gap: 14px;
+      align-items: center;
+    }
+
+    .job:last-child {
+      border-bottom: 0;
+    }
+
+    .job-title {
+      font-weight: 750;
+      overflow-wrap: anywhere;
+    }
+
+    .job-sub {
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 13px;
+      overflow-wrap: anywhere;
+    }
+
+    .progress-wrap {
+      margin-top: 10px;
+      height: 8px;
+      border-radius: 999px;
+      background: #e6ebf0;
+      overflow: hidden;
+    }
+
+    .progress-bar {
+      height: 100%;
+      width: 0%;
+      background: var(--blue);
+      transition: width 260ms ease;
+    }
+
+    .progress-bar.completed {
+      background: var(--green);
+    }
+
+    .progress-bar.failed {
+      background: var(--red);
+    }
+
+    .status-badge {
+      min-height: 28px;
+      border-radius: 999px;
+      padding: 5px 10px;
+      font-size: 12px;
+      font-weight: 800;
+      text-align: center;
+      border: 1px solid var(--line);
+      background: white;
+      color: var(--muted);
+      text-transform: uppercase;
+    }
+
+    .status-badge.pending {
+      color: var(--amber);
+      background: #fff8ec;
+      border-color: #f0d8ad;
+    }
+
+    .status-badge.running {
+      color: var(--blue);
+      background: #eff5ff;
+      border-color: #c8d9f7;
+    }
+
+    .status-badge.completed {
+      color: var(--green);
+      background: #edf8f2;
+      border-color: #bfe0cf;
+    }
+
+    .status-badge.failed {
+      color: var(--red);
+      background: #fff1ef;
+      border-color: #f2c4bf;
+    }
+
+    .pipeline {
+      padding: 14px;
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 9px;
+    }
+
+    .stage {
+      min-height: 106px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: white;
+      padding: 11px;
+      display: grid;
+      align-content: start;
+      gap: 8px;
+      position: relative;
+    }
+
+    .stage.active {
+      border-color: #95b5ec;
+      box-shadow: inset 0 0 0 1px #95b5ec;
+    }
+
+    .stage strong {
+      font-size: 13px;
+    }
+
+    .stage span {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .mini-visual {
+      height: 46px;
+      border-radius: 6px;
+      background:
+        linear-gradient(90deg, rgba(35, 100, 210, 0.13), transparent),
+        repeating-linear-gradient(90deg, #dbe4ee 0 8px, transparent 8px 15px);
+      border: 1px solid #dbe4ee;
+    }
+
+    .events {
+      max-height: 410px;
+      overflow: auto;
+      display: grid;
+    }
+
+    .event {
+      padding: 11px 14px;
+      border-bottom: 1px solid var(--line);
+      display: grid;
+      grid-template-columns: 78px minmax(0, 1fr);
+      gap: 10px;
+      font-size: 13px;
+    }
+
+    .event:last-child {
+      border-bottom: 0;
+    }
+
+    .event time {
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .event strong {
+      display: block;
+      margin-bottom: 2px;
+    }
+
+    .doc-list {
+      padding: 14px;
+      display: grid;
+      gap: 9px;
+    }
+
+    .doc-row {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: white;
+      padding: 10px;
+      display: grid;
+      gap: 6px;
+      font-size: 13px;
+    }
+
+    .doc-row code {
+      color: var(--teal);
+      overflow-wrap: anywhere;
+    }
+
+    .empty {
+      padding: 26px 14px;
+      color: var(--muted);
+      text-align: center;
+      font-size: 14px;
+    }
+
+    @media (max-width: 1040px) {
+      .app {
+        grid-template-columns: 1fr;
+      }
+
+      .sidebar {
+        display: none;
+      }
+
+      .content {
+        grid-template-columns: 1fr;
+      }
+
+      .metrics {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .pipeline {
+        grid-template-columns: repeat(2, 1fr);
+      }
+    }
+
+    @media (max-width: 680px) {
+      .topbar {
+        align-items: stretch;
+        flex-direction: column;
+      }
+
+      .actions {
+        justify-content: stretch;
+      }
+
+      .actions .button {
+        flex: 1 1 auto;
+      }
+
+      .content {
+        padding: 12px;
+      }
+
+      .add-form {
+        grid-template-columns: 1fr;
+      }
+
+      .metrics {
+        grid-template-columns: 1fr;
+      }
+
+      .job {
+        grid-template-columns: 1fr;
+      }
+
+      .pipeline {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">G</div>
+        <div>
+          <strong>Form Autograder</strong>
+          <span>Firebase handoff demo</span>
+        </div>
+      </div>
+
+      <nav class="nav" aria-label="Main">
+        <button class="active" type="button">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 13h7V4H4v9Zm9 7h7V4h-7v16ZM4 20h7v-5H4v5Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+          Dashboard
+        </button>
+        <button type="button">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M7 4h10l3 3v13H7V4Z" stroke="currentColor" stroke-width="2"/><path d="M10 11h8M10 15h8M10 19h5" stroke="currentColor" stroke-width="2"/></svg>
+          Forms
+        </button>
+        <button type="button">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12h14M12 5v14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          New Job
+        </button>
+        <button type="button">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 19V5m0 14h18M8 16V9m5 7V4m5 12v-5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          Reports
+        </button>
+      </nav>
+
+      <div></div>
+
+      <div class="worker-card">
+        <h2>Python Worker</h2>
+        <div class="worker-line"><span>Listener</span><span id="listenerText">online</span></div>
+        <div class="worker-line"><span>Mode</span><span id="workerMode">Firestore watch</span></div>
+        <button id="workerToggle" class="switch on" type="button" aria-label="Toggle Python worker"></button>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <h1>Grading Jobs</h1>
+          <p>React writes Firestore jobs, Python claims them, and progress streams back here.</p>
+        </div>
+        <div class="actions">
+          <button id="seedJobs" class="button secondary" type="button">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3v18M5 8h14M7 16h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            Seed demo
+          </button>
+          <button id="clearDone" class="button secondary" type="button">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M7 7h10m-8 0V5h4v2m-8 0h14l-1 15H6L5 7Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+            Clear done
+          </button>
+        </div>
+      </header>
+
+      <div class="content">
+        <section class="stack">
+          <div class="metrics" aria-label="Job metrics">
+            <div class="metric"><span>Pending</span><strong id="pendingCount">0</strong></div>
+            <div class="metric"><span>Running</span><strong id="runningCount">0</strong></div>
+            <div class="metric"><span>Completed</span><strong id="completedCount">0</strong></div>
+            <div class="metric"><span>Average Score</span><strong id="averageScore">--</strong></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-header">
+              <h2>Add Form For Grading</h2>
+              <span>creates <code>grading_jobs/{jobId}</code></span>
+            </div>
+            <form id="jobForm" class="add-form">
+              <label>
+                Google Form URL
+                <input id="formUrl" type="url" placeholder="https://docs.google.com/forms/d/..." required>
+              </label>
+              <label>
+                Mode
+                <select id="gradingMode">
+                  <option value="recent">Recent submissions</option>
+                  <option value="whole">Whole form</option>
+                </select>
+              </label>
+              <label>
+                &nbsp;
+                <button class="button" type="submit">
+                  <svg class="icon" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                  Add job
+                </button>
+              </label>
+            </form>
+          </div>
+
+          <div class="panel">
+            <div class="panel-header">
+              <h2>Live Queue</h2>
+              <span id="queueSub">0 active jobs</span>
+            </div>
+            <div id="queue" class="queue"></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-header">
+              <h2>Handoff Pipeline</h2>
+              <span id="pipelineSub">waiting for pending job</span>
+            </div>
+            <div class="pipeline">
+              <div class="stage" data-stage="create">
+                <div class="mini-visual"></div>
+                <strong>React</strong>
+                <span>Creates the grading job document.</span>
+              </div>
+              <div class="stage" data-stage="firestore">
+                <div class="mini-visual"></div>
+                <strong>Firestore</strong>
+                <span>Stores status, progress, and events.</span>
+              </div>
+              <div class="stage" data-stage="worker">
+                <div class="mini-visual"></div>
+                <strong>Python</strong>
+                <span>Claims pending work and runs main.py.</span>
+              </div>
+              <div class="stage" data-stage="grading">
+                <div class="mini-visual"></div>
+                <strong>Grading</strong>
+                <span>Evaluates responses with your pipeline.</span>
+              </div>
+              <div class="stage" data-stage="result">
+                <div class="mini-visual"></div>
+                <strong>Results</strong>
+                <span>Writes summaries and report links.</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <aside class="stack">
+          <div class="panel">
+            <div class="panel-header">
+              <h2>Firestore Documents</h2>
+              <span id="docCount">0 docs</span>
+            </div>
+            <div id="docs" class="doc-list"></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-header">
+              <h2>Realtime Events</h2>
+              <span>listener snapshot</span>
+            </div>
+            <div id="events" class="events"></div>
+          </div>
+        </aside>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    const queueEl = document.getElementById("queue");
+    const docsEl = document.getElementById("docs");
+    const eventsEl = document.getElementById("events");
+    const jobForm = document.getElementById("jobForm");
+    const formUrl = document.getElementById("formUrl");
+    const gradingMode = document.getElementById("gradingMode");
+    const workerToggle = document.getElementById("workerToggle");
+    const listenerText = document.getElementById("listenerText");
+    const seedJobs = document.getElementById("seedJobs");
+    const clearDone = document.getElementById("clearDone");
+
+    const state = {
+      jobs: [],
+      events: [],
+      workerOnline: true,
+      activeStage: "firestore"
+    };
+
+    const sampleUrls = [
+      "https://docs.google.com/forms/d/1fractionQuiz/viewform",
+      "https://docs.google.com/forms/d/1measuringMotion/viewform",
+      "https://docs.google.com/forms/d/1algebraExpressions/viewform"
+    ];
+
+    function nowLabel() {
+      return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    }
+
+    function shortId() {
+      return Math.random().toString(36).slice(2, 8);
+    }
+
+    function formTitle(url) {
+      const clean = url.split("/").filter(Boolean).pop() || "Google Form";
+      return clean.replace(/[-_]/g, " ").replace(/\b\w/g, c => c.toUpperCase()).slice(0, 42);
+    }
+
+    function addEvent(type, text) {
+      state.events.unshift({ type, text, time: nowLabel() });
+      state.events = state.events.slice(0, 36);
+      render();
+    }
+
+    function addJob(url, mode) {
+      const total = 18 + Math.floor(Math.random() * 38);
+      const job = {
+        id: `job_${shortId()}`,
+        url,
+        title: formTitle(url),
+        mode,
+        status: "pending",
+        progress: 0,
+        total,
+        score: null,
+        lastMessage: "Waiting for Python worker",
+        createdAt: nowLabel(),
+        updatedAt: nowLabel()
+      };
+      state.jobs.unshift(job);
+      state.activeStage = "create";
+      addEvent("React write", `Created grading_jobs/${job.id}`);
+      setTimeout(() => {
+        state.activeStage = "firestore";
+        addEvent("Firestore", `${job.id} visible to Python listener`);
+      }, 450);
+      render();
+    }
+
+    function claimNextJob() {
+      if (!state.workerOnline) return;
+      if (state.jobs.some(job => job.status === "running")) return;
+      const job = state.jobs.find(item => item.status === "pending");
+      if (!job) return;
+      job.status = "running";
+      job.lastMessage = "Python worker claimed job";
+      job.updatedAt = nowLabel();
+      state.activeStage = "worker";
+      addEvent("Python claim", `${job.id} status changed to running`);
+    }
+
+    function tickWorker() {
+      if (!state.workerOnline) return;
+      const job = state.jobs.find(item => item.status === "running");
+      if (!job) {
+        claimNextJob();
+        return;
+      }
+
+      const step = 1 + Math.floor(Math.random() * 4);
+      job.progress = Math.min(job.total, job.progress + step);
+      job.updatedAt = nowLabel();
+      state.activeStage = job.progress < job.total ? "grading" : "result";
+
+      if (job.progress < job.total) {
+        job.lastMessage = `Grading response ${job.progress} of ${job.total}`;
+        addEvent("Progress update", `${job.id} ${job.progress}/${job.total}`);
+      } else {
+        job.status = "completed";
+        job.score = 72 + Math.floor(Math.random() * 24);
+        job.lastMessage = "Feedback report ready";
+        addEvent("Result write", `${job.id} completed with ${job.score}% average`);
+        setTimeout(claimNextJob, 600);
+      }
+    }
+
+    function statusLabel(status) {
+      return status.replace("_", " ");
+    }
+
+    function renderMetrics() {
+      const pending = state.jobs.filter(job => job.status === "pending").length;
+      const running = state.jobs.filter(job => job.status === "running").length;
+      const completedJobs = state.jobs.filter(job => job.status === "completed");
+      const completed = completedJobs.length;
+      const average = completed
+        ? `${Math.round(completedJobs.reduce((sum, job) => sum + job.score, 0) / completed)}%`
+        : "--";
+
+      document.getElementById("pendingCount").textContent = pending;
+      document.getElementById("runningCount").textContent = running;
+      document.getElementById("completedCount").textContent = completed;
+      document.getElementById("averageScore").textContent = average;
+      document.getElementById("queueSub").textContent = `${pending + running} active jobs`;
+      document.getElementById("docCount").textContent = `${state.jobs.length} docs`;
+      document.getElementById("pipelineSub").textContent = running ? "worker is grading" : pending ? "pending job available" : "waiting for pending job";
+    }
+
+    function renderQueue() {
+      if (!state.jobs.length) {
+        queueEl.innerHTML = `<div class="empty">No grading jobs yet.</div>`;
+        return;
+      }
+
+      queueEl.innerHTML = state.jobs.map(job => {
+        const pct = Math.round((job.progress / job.total) * 100);
+        return `
+          <article class="job">
+            <div>
+              <div class="job-title">${job.title}</div>
+              <div class="job-sub">${job.mode === "recent" ? "Recent submissions" : "Whole form"} · ${job.lastMessage}</div>
+              <div class="progress-wrap" aria-label="Progress">
+                <div class="progress-bar ${job.status}" style="width: ${pct}%"></div>
+              </div>
+            </div>
+            <div>
+              <div class="status-badge ${job.status}">${statusLabel(job.status)}</div>
+              <div class="job-sub">${pct}% · ${job.progress}/${job.total}</div>
+            </div>
+          </article>
+        `;
+      }).join("");
+    }
+
+    function renderDocs() {
+      if (!state.jobs.length) {
+        docsEl.innerHTML = `<div class="empty">Firestore document preview is empty.</div>`;
+        return;
+      }
+
+      docsEl.innerHTML = state.jobs.slice(0, 6).map(job => `
+        <div class="doc-row">
+          <code>grading_jobs/${job.id}</code>
+          <span><strong>status:</strong> ${job.status} · <strong>progress:</strong> ${job.progress}/${job.total}</span>
+          <span class="muted">${job.url}</span>
+        </div>
+      `).join("");
+    }
+
+    function renderEvents() {
+      if (!state.events.length) {
+        eventsEl.innerHTML = `<div class="empty">No realtime events yet.</div>`;
+        return;
+      }
+
+      eventsEl.innerHTML = state.events.map(event => `
+        <div class="event">
+          <time>${event.time}</time>
+          <div><strong>${event.type}</strong><span>${event.text}</span></div>
+        </div>
+      `).join("");
+    }
+
+    function renderPipeline() {
+      document.querySelectorAll(".stage").forEach(stage => {
+        stage.classList.toggle("active", stage.dataset.stage === state.activeStage);
+      });
+    }
+
+    function renderWorker() {
+      workerToggle.classList.toggle("on", state.workerOnline);
+      listenerText.textContent = state.workerOnline ? "online" : "paused";
+      document.getElementById("workerMode").textContent = state.workerOnline ? "Firestore watch" : "manual pause";
+    }
+
+    function render() {
+      renderMetrics();
+      renderQueue();
+      renderDocs();
+      renderEvents();
+      renderPipeline();
+      renderWorker();
+    }
+
+    jobForm.addEventListener("submit", event => {
+      event.preventDefault();
+      addJob(formUrl.value.trim(), gradingMode.value);
+      formUrl.value = "";
+      claimNextJob();
+    });
+
+    workerToggle.addEventListener("click", () => {
+      state.workerOnline = !state.workerOnline;
+      addEvent("Worker", state.workerOnline ? "Python listener resumed" : "Python listener paused");
+      if (state.workerOnline) claimNextJob();
+      render();
+    });
+
+    seedJobs.addEventListener("click", () => {
+      sampleUrls.forEach((url, index) => {
+        setTimeout(() => addJob(url, index === 0 ? "recent" : "whole"), index * 180);
+      });
+      setTimeout(claimNextJob, 700);
+    });
+
+    clearDone.addEventListener("click", () => {
+      const before = state.jobs.length;
+      state.jobs = state.jobs.filter(job => job.status !== "completed" && job.status !== "failed");
+      addEvent("React write", `Archived ${before - state.jobs.length} completed job documents`);
+      render();
+    });
+
+    setInterval(tickWorker, 1400);
+    addJob("https://docs.google.com/forms/d/exampleChapter9Fractions/viewform", "recent");
+    setTimeout(claimNextJob, 700);
+    render();
+  </script>
+</body>
+</html>

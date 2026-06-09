@@ -3,3 +3,10 @@
 /token.json
 /heartbeat.json
 /heartbeat_monitor.py
+__pycache__/
+*.pyc
+cache/
+logs/
+*.log
+task_builder_metrics.jsonl
+.grading_timestamps.json

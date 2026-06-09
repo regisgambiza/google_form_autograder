@@ -1640,10 +1640,27 @@ class FormManager(QMainWindow):
         else:
             self.append_debug(f"<font color='green'>[AUTO {now_str}] ✅ Grading completed successfully!</font>")
             self.append_debug("<b><font color='green'>ALL FORMS FINISHED. Grading run complete.</font></b>")
+            if not self.auto_mode:
+                cleared_count = self.form_list.count()
+                self.clear_all_forms(confirm=False)
+                self.append_debug(f"<font color='gray'>[GRADER] Cleared {cleared_count} forms from queue</font>")
 
         if self.auto_mode:
             # Clear finished forms
             forms_cleared = 0
+            finished_ids = set(self.finished_forms)
+            i = 0
+            while i < self.form_list.count():
+                item = self.form_list.item(i)
+                url = item.data(Qt.UserRole)
+                form_id = self.extract_form_id(url) if url else None
+                if form_id in finished_ids:
+                    self.form_list.takeItem(i)
+                    if url in self.forms_data:
+                        del self.forms_data[url]
+                    forms_cleared += 1
+                else:
+                    i += 1
             i = 0
             while i < self.form_list.count():
                 item = self.form_list.item(i)

@@ -72,6 +72,14 @@ class GraderThread(QThread):
                     except:
                         pass
 
+                if "[FORM] FINISHED" in ls and "(" in ls and ")" in ls:
+                    try:
+                        form_id = ls.rsplit("(", 1)[1].split(")", 1)[0].strip()
+                        if form_id:
+                            self.finished_form.emit(form_id)
+                    except:
+                        pass
+
             # Wait for process to finish
             process.wait()
 

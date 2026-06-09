@@ -19,7 +19,13 @@ def update_correct_answers(service, form_id, question_id, correct_answers, quest
         items = form.get("items", [])
         log("DEBUG", f"Form data retrieved: {len(items)} items found")
         
-        target_item = next((item for item in items if item["itemId"] == question_id), None)
+        target_item_index = None
+        target_item = None
+        for item_index, item in enumerate(items):
+            if item.get("itemId") == question_id:
+                target_item = item
+                target_item_index = item_index
+                break
         
         if not target_item:
             log("ERROR", f"Item with ID {question_id} not found in form {form_id}. "
@@ -99,7 +105,7 @@ def update_correct_answers(service, form_id, question_id, correct_answers, quest
                         },
                     },
                     "location": {
-                        "index": question_index - 1  # Convert to 0-based index
+                        "index": target_item_index
                     },
                     "updateMask": "questionItem.question.grading"
                 }

@@ -1,0 +1,1477 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Google Form Autograder - Web Server GUI Simulation</title>
+  <style>
+    :root {
+      --bg: #e9eef4;
+      --panel: #ffffff;
+      --panel-soft: #f7f9fb;
+      --line: #cbd5df;
+      --text: #17202a;
+      --muted: #617184;
+      --primary: #1769e0;
+      --primary-hover: #1054b5;
+      --secondary: #536273;
+      --danger: #c73737;
+      --success: #1f8754;
+      --warning: #b66b10;
+      --code-bg: #111827;
+      --code-fg: #d7dee8;
+      --shadow: 0 10px 28px rgba(30, 44, 62, 0.12);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: "Segoe UI", Arial, sans-serif;
+      font-size: 14px;
+      letter-spacing: 0;
+    }
+
+    button,
+    input,
+    select,
+    textarea {
+      font: inherit;
+    }
+
+    .app {
+      width: min(1380px, calc(100vw - 28px));
+      height: min(900px, calc(100vh - 28px));
+      min-height: 720px;
+      margin: 14px auto;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      display: grid;
+      grid-template-rows: auto auto 1fr auto;
+      overflow: hidden;
+    }
+
+    .titlebar {
+      min-height: 38px;
+      background: #202a36;
+      color: #e8eef5;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 0 12px;
+      border-bottom: 1px solid #141b24;
+    }
+
+    .titlebar strong {
+      font-size: 14px;
+    }
+
+    .server-chip {
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 999px;
+      padding: 4px 9px;
+      color: #c7d5e3;
+      font-size: 12px;
+    }
+
+    .menubar {
+      min-height: 34px;
+      background: #f3f6f9;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      padding: 0 8px;
+      position: relative;
+      z-index: 10;
+    }
+
+    .menu {
+      position: relative;
+    }
+
+    .menu > button {
+      min-height: 28px;
+      border: 0;
+      border-radius: 5px;
+      padding: 0 10px;
+      background: transparent;
+      color: #243140;
+      cursor: pointer;
+    }
+
+    .menu > button:hover,
+    .menu.open > button {
+      background: #dfe7f1;
+    }
+
+    .dropdown {
+      position: absolute;
+      top: 31px;
+      left: 0;
+      min-width: 220px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: white;
+      box-shadow: 0 12px 26px rgba(20, 31, 45, 0.18);
+      padding: 5px;
+      display: none;
+    }
+
+    .menu.open .dropdown {
+      display: grid;
+    }
+
+    .dropdown button {
+      min-height: 32px;
+      border: 0;
+      border-radius: 4px;
+      background: white;
+      color: var(--text);
+      text-align: left;
+      padding: 0 10px;
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 20px;
+    }
+
+    .dropdown button:hover {
+      background: #edf3fb;
+    }
+
+    .dropdown .sep {
+      height: 1px;
+      background: var(--line);
+      margin: 5px 4px;
+    }
+
+    .statusbar {
+      min-height: 52px;
+      padding: 8px 14px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel-soft);
+      display: grid;
+      grid-template-columns: minmax(220px, 1fr) repeat(4, auto);
+      align-items: center;
+      gap: 10px;
+    }
+
+    .status-pill {
+      min-height: 34px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: white;
+      padding: 7px 10px;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      white-space: nowrap;
+    }
+
+    .dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: var(--muted);
+      flex: 0 0 auto;
+    }
+
+    .dot.run {
+      background: var(--success);
+    }
+
+    .dot.wait {
+      background: var(--warning);
+    }
+
+    .dot.stop {
+      background: var(--danger);
+    }
+
+    .main {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(380px, 0.92fr) minmax(500px, 1.08fr);
+      gap: 0;
+    }
+
+    .pane {
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      background: var(--panel);
+    }
+
+    .pane + .pane {
+      border-left: 1px solid var(--line);
+    }
+
+    .pane-header {
+      min-height: 45px;
+      padding: 0 14px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      background: #fbfcfe;
+    }
+
+    h2 {
+      margin: 0;
+      font-size: 15px;
+    }
+
+    .subtle {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .form-list {
+      min-height: 0;
+      overflow: auto;
+      padding: 10px;
+      display: grid;
+      gap: 8px;
+      align-content: start;
+    }
+
+    .form-item {
+      min-height: 74px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: white;
+      padding: 10px;
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 10px;
+      align-items: center;
+      cursor: pointer;
+    }
+
+    .form-item.selected {
+      border-color: #78aaf0;
+      background: #f0f6ff;
+      box-shadow: inset 0 0 0 1px #9cc2f6;
+    }
+
+    .badge {
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      color: white;
+      font-weight: 800;
+      font-size: 13px;
+    }
+
+    .badge.queue {
+      background: var(--primary);
+    }
+
+    .badge.done {
+      background: var(--success);
+    }
+
+    .badge.running {
+      background: var(--warning);
+    }
+
+    .form-title {
+      font-weight: 700;
+      margin-bottom: 4px;
+      overflow-wrap: anywhere;
+    }
+
+    .form-url {
+      max-width: 100%;
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .form-meta {
+      color: var(--muted);
+      font-size: 12px;
+      text-align: right;
+      white-space: nowrap;
+    }
+
+    .tabs-row {
+      min-height: 42px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel-soft);
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: end;
+      gap: 10px;
+      padding: 7px 10px 0;
+    }
+
+    .tabs {
+      min-width: 0;
+      display: flex;
+      gap: 4px;
+      overflow-x: auto;
+    }
+
+    .tab {
+      min-height: 34px;
+      border: 1px solid var(--line);
+      border-bottom: 0;
+      border-radius: 6px 6px 0 0;
+      background: #e9eff6;
+      color: #445365;
+      padding: 0 10px;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+
+    .tab.active {
+      background: var(--code-bg);
+      border-color: var(--code-bg);
+      color: white;
+    }
+
+    .filter {
+      height: 34px;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding-bottom: 7px;
+      white-space: nowrap;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .log-output {
+      min-height: 0;
+      flex: 1;
+      overflow: auto;
+      margin: 0;
+      padding: 12px 14px;
+      background: var(--code-bg);
+      color: var(--code-fg);
+      font: 12px/1.55 Consolas, "Courier New", monospace;
+      white-space: pre-wrap;
+    }
+
+    .line-info {
+      color: #93c5fd;
+    }
+
+    .line-ok {
+      color: #86efac;
+    }
+
+    .line-warn {
+      color: #facc15;
+    }
+
+    .line-error {
+      color: #fca5a5;
+    }
+
+    .pipeline {
+      border-top: 1px solid #2f3b4b;
+      background: #182232;
+      color: #dbeafe;
+      padding: 9px 12px;
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 7px;
+      font-size: 12px;
+    }
+
+    .metric {
+      border: 1px solid #314155;
+      border-radius: 5px;
+      padding: 7px;
+      background: #121c2a;
+      min-height: 48px;
+    }
+
+    .metric span {
+      display: block;
+      color: #91a2b8;
+      margin-bottom: 3px;
+    }
+
+    .bottombar {
+      min-height: 58px;
+      border-top: 1px solid var(--line);
+      background: var(--panel-soft);
+      padding: 9px 12px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .button-row {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    button.action {
+      min-height: 36px;
+      border: 0;
+      border-radius: 6px;
+      padding: 0 12px;
+      color: white;
+      background: var(--secondary);
+      font-weight: 700;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    button.action.primary {
+      background: var(--primary);
+    }
+
+    button.action.primary:hover {
+      background: var(--primary-hover);
+    }
+
+    button.action.secondary {
+      background: #dde5ee;
+      color: #1f2a37;
+      border: 1px solid var(--line);
+    }
+
+    button.action.danger {
+      background: var(--danger);
+    }
+
+    button.action:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(17, 24, 39, 0.42);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 18px;
+      z-index: 30;
+    }
+
+    .modal-backdrop.show {
+      display: flex;
+    }
+
+    .modal {
+      width: min(760px, 100%);
+      max-height: min(760px, calc(100vh - 36px));
+      overflow: auto;
+      background: white;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: 0 24px 60px rgba(10, 18, 30, 0.28);
+    }
+
+    .modal.small {
+      width: min(520px, 100%);
+    }
+
+    .modal-header,
+    .modal-footer {
+      min-height: 52px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel-soft);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .modal-footer {
+      border-top: 1px solid var(--line);
+      border-bottom: 0;
+      justify-content: flex-end;
+    }
+
+    .modal-header h3 {
+      margin: 0;
+      font-size: 16px;
+    }
+
+    .modal-body {
+      padding: 14px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .form-grid {
+      display: grid;
+      grid-template-columns: 180px minmax(0, 1fr);
+      gap: 10px 12px;
+      align-items: center;
+    }
+
+    label.label {
+      font-weight: 700;
+      color: #334155;
+    }
+
+    input,
+    select,
+    textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: white;
+      color: var(--text);
+      padding: 8px 9px;
+      outline: none;
+    }
+
+    textarea {
+      min-height: 78px;
+      resize: vertical;
+    }
+
+    input:focus,
+    select:focus,
+    textarea:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(23, 105, 224, 0.13);
+    }
+
+    .folder-list {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      min-height: 98px;
+      max-height: 150px;
+      overflow: auto;
+      background: #fbfcfe;
+      padding: 7px;
+      display: grid;
+      gap: 6px;
+    }
+
+    .folder-row {
+      min-height: 30px;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      background: white;
+      padding: 6px 8px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      cursor: pointer;
+    }
+
+    .folder-row.selected {
+      border-color: #78aaf0;
+      background: #edf5ff;
+    }
+
+    .days {
+      display: flex;
+      gap: 7px;
+      flex-wrap: wrap;
+    }
+
+    .day {
+      min-width: 48px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #f8fafc;
+      padding: 6px 8px;
+      display: flex;
+      gap: 5px;
+      align-items: center;
+    }
+
+    .toast {
+      position: fixed;
+      right: 16px;
+      bottom: 16px;
+      max-width: 420px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #202a36;
+      color: white;
+      box-shadow: 0 14px 34px rgba(14, 22, 34, 0.25);
+      padding: 11px 13px;
+      display: none;
+      z-index: 40;
+      line-height: 1.4;
+    }
+
+    .toast.show {
+      display: block;
+    }
+
+    @media (max-width: 980px) {
+      .app {
+        width: 100vw;
+        height: 100vh;
+        min-height: 0;
+        margin: 0;
+        border-radius: 0;
+        border-left: 0;
+        border-right: 0;
+      }
+
+      .statusbar {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .main {
+        grid-template-columns: 1fr;
+        grid-template-rows: minmax(250px, 0.9fr) minmax(320px, 1.1fr);
+      }
+
+      .pane + .pane {
+        border-left: 0;
+        border-top: 1px solid var(--line);
+      }
+
+      .pipeline {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .bottombar {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 640px) {
+      .form-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .statusbar {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app" id="app">
+    <header class="titlebar">
+      <strong>Google Form Autograder - Web Server GUI</strong>
+      <span class="server-chip" id="serverChip">FastAPI server: online · Firestore bridge: simulated</span>
+    </header>
+
+    <nav class="menubar" aria-label="Application menus">
+      <div class="menu">
+        <button type="button">File</button>
+        <div class="dropdown">
+          <button data-action="add-url">Grade Folder/Form URL <span>Ctrl+G</span></button>
+          <button data-action="save-queue">Save Queue <span>Ctrl+S</span></button>
+          <button data-action="export-report">Export Feedback</button>
+          <div class="sep"></div>
+          <button data-action="minimize">Minimize to Tray</button>
+          <button data-action="restore">Show / Restore</button>
+          <button data-action="exit">Exit Server GUI</button>
+        </div>
+      </div>
+      <div class="menu">
+        <button type="button">Queue</button>
+        <div class="dropdown">
+          <button data-action="auto-find">Auto Find Forms</button>
+          <button data-action="grade-all">Grade All Folders</button>
+          <button data-action="remove">Remove Selected</button>
+          <button data-action="clear-finished">Clear Finished</button>
+          <button data-action="clear-all">Clear All</button>
+        </div>
+      </div>
+      <div class="menu">
+        <button type="button">Run</button>
+        <div class="dropdown">
+          <button data-action="run-now">Run Now</button>
+          <button data-action="auto-run">Auto Run</button>
+          <button data-action="stop">Stop</button>
+          <div class="sep"></div>
+          <button data-action="heartbeat">Restart Heartbeat Monitor</button>
+        </div>
+      </div>
+      <div class="menu">
+        <button type="button">View</button>
+        <div class="dropdown">
+          <button data-action="tab-all">Logs: All</button>
+          <button data-action="tab-producer">Logs: Producer</button>
+          <button data-action="tab-det">Logs: Det Workers</button>
+          <button data-action="tab-ai">Logs: AI Workers</button>
+          <button data-action="tab-agg">Logs: Aggregator</button>
+          <div class="sep"></div>
+          <button data-action="toggle-timing">Toggle Timing Filter</button>
+        </div>
+      </div>
+      <div class="menu">
+        <button type="button">Tools</button>
+        <div class="dropdown">
+          <button data-action="settings">Settings</button>
+          <button data-action="ollama">Ollama Diagnostics</button>
+          <button data-action="auth-refresh">Refresh Google Auth</button>
+          <button data-action="open-feedback">Open Feedback Folder</button>
+        </div>
+      </div>
+      <div class="menu">
+        <button type="button">Help</button>
+        <div class="dropdown">
+          <button data-action="architecture">Architecture</button>
+          <button data-action="about">About</button>
+        </div>
+      </div>
+    </nav>
+
+    <section class="statusbar" aria-label="Run status">
+      <div class="status-pill"><span class="dot wait" id="processingDot"></span><span id="currentLabel">Processing: -</span></div>
+      <div class="status-pill"><span id="pipelineLabel">Pipeline State: Idle</span></div>
+      <div class="status-pill"><span class="dot" id="runDot"></span><span id="runStateLabel">Run State: Idle</span></div>
+      <div class="status-pill"><span id="finishedLabel">Finished: 0</span></div>
+      <div class="status-pill"><span id="queueLabel">In Queue: 0</span></div>
+    </section>
+
+    <main class="main">
+      <section class="pane">
+        <div class="pane-header">
+          <h2>Forms to Grade</h2>
+          <span class="subtle" id="formsSummary">0 queued</span>
+        </div>
+        <div class="form-list" id="formList"></div>
+      </section>
+
+      <section class="pane">
+        <div class="pane-header">
+          <h2>Debug Output</h2>
+          <span class="subtle" id="logSummary">All logs</span>
+        </div>
+        <div class="tabs-row">
+          <div class="tabs" id="tabs">
+            <button class="tab active" data-tab="all" type="button">All</button>
+            <button class="tab" data-tab="producer" type="button">Producer</button>
+            <button class="tab" data-tab="det" type="button">Det Workers</button>
+            <button class="tab" data-tab="ai" type="button">AI Workers</button>
+            <button class="tab" data-tab="agg" type="button">Aggregator</button>
+          </div>
+          <label class="filter"><input id="timingOnly" type="checkbox"> Timing Only</label>
+        </div>
+        <pre class="log-output" id="logOutput"></pre>
+        <div class="pipeline">
+          <div class="metric"><span>fetch</span><strong id="mFetch">0</strong></div>
+          <div class="metric"><span>pending</span><strong id="mPending">0</strong></div>
+          <div class="metric"><span>det</span><strong id="mDet">0</strong></div>
+          <div class="metric"><span>ai</span><strong id="mAi">0</strong></div>
+          <div class="metric"><span>result</span><strong id="mResult">0</strong></div>
+          <div class="metric"><span>done</span><strong id="mDone">0/0</strong></div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="bottombar">
+      <div class="button-row">
+        <button class="action primary" data-action="auto-find" type="button">Auto Find</button>
+        <button class="action primary" data-action="auto-run" type="button">Auto Run</button>
+        <button class="action primary" data-action="add-url" type="button">Grade Folder/URL</button>
+        <button class="action primary" data-action="grade-all" type="button">Grade All Folders</button>
+        <button class="action primary" data-action="run-now" id="runButton" type="button">Run Now</button>
+        <button class="action secondary" data-action="remove" type="button">Remove</button>
+        <button class="action secondary" data-action="clear-all" type="button">Clear All</button>
+        <button class="action danger" data-action="stop" id="stopButton" type="button" hidden>Stop</button>
+        <button class="action secondary" data-action="minimize" type="button">Minimize</button>
+        <button class="action danger" data-action="exit" type="button">Exit</button>
+      </div>
+      <button class="action secondary" data-action="settings" type="button">Settings</button>
+    </footer>
+  </div>
+
+  <div class="modal-backdrop" id="modalBackdrop">
+    <div class="modal" id="modal">
+      <div class="modal-header">
+        <h3 id="modalTitle">Dialog</h3>
+        <button class="action secondary" id="modalClose" type="button">Close</button>
+      </div>
+      <div class="modal-body" id="modalBody"></div>
+      <div class="modal-footer" id="modalFooter"></div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const state = {
+      forms: [],
+      selectedId: null,
+      logs: [],
+      activeTab: "all",
+      timingOnly: false,
+      isGrading: false,
+      autoMode: false,
+      minimized: false,
+      exited: false,
+      finished: 0,
+      activeFormId: null,
+      activeProgress: 0,
+      tickHandle: null,
+      autoHandle: null,
+      folders: ["Math Grade 7 - Class A", "Science Forms 2026", "Algebra Practice Folder"],
+      selectedFolder: null,
+      settings: {
+        evaluator: "ai_evaluator_semantic",
+        leniency: "lenient",
+        judgeModel: "llama3.1:8b",
+        rubricModel: "gemma3:12b",
+        embeddingModel: "mxbai-embed-large",
+        reasoningModel: "gemma3:12b",
+        semanticJudge: "llama3.1:8b",
+        conceptJudge: "llama3.1:8b",
+        factualJudge: "gemma3:12b",
+        strictJudge: "gemma3:12b",
+        misconceptionJudge: "llama3.1:8b",
+        languageFilter: "llama3.1:8b",
+        generateReport: true,
+        batchSize: "auto",
+        gradingMode: "Whole Form",
+        executionMode: "Standard: Daily Grading",
+        heartbeatTimeout: 90,
+        heartbeatInterval: 10,
+        heartbeatRestarts: 5,
+        judgeCtx: 2048,
+        judgePred: 256,
+        rubricCtx: 512,
+        rubricPred: 512
+      },
+      metrics: { fetch: 0, pending: 0, det: 0, ai: 0, result: 0, done: 0, total: 0 }
+    };
+
+    const formList = document.getElementById("formList");
+    const logOutput = document.getElementById("logOutput");
+    const modalBackdrop = document.getElementById("modalBackdrop");
+    const modal = document.getElementById("modal");
+    const modalTitle = document.getElementById("modalTitle");
+    const modalBody = document.getElementById("modalBody");
+    const modalFooter = document.getElementById("modalFooter");
+    const toast = document.getElementById("toast");
+
+    function id(prefix) {
+      return `${prefix}_${Math.random().toString(36).slice(2, 8)}`;
+    }
+
+    function timeLabel() {
+      return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    }
+
+    function titleFromUrl(url) {
+      if (url.includes("folder")) return "Folder Search Result";
+      const part = url.split("/").filter(Boolean).pop() || "Google Form";
+      return part.replace(/[-_]/g, " ").replace(/\b\w/g, c => c.toUpperCase()).slice(0, 44);
+    }
+
+    function showToast(message) {
+      toast.textContent = message;
+      toast.classList.add("show");
+      clearTimeout(showToast.timer);
+      showToast.timer = setTimeout(() => toast.classList.remove("show"), 2600);
+    }
+
+    function log(channel, message, kind = "info") {
+      state.logs.push({ time: timeLabel(), channel, message, kind });
+      if (state.logs.length > 350) state.logs.shift();
+      renderLogs();
+    }
+
+    function addForm(url, title = titleFromUrl(url), source = "Manual") {
+      if (!url) return;
+      if (state.forms.some(form => form.url === url)) {
+        showToast("That form is already in the queue.");
+        log("all", `[QUEUE] Duplicate ignored: ${url}`, "warn");
+        return;
+      }
+      const form = {
+        id: id("form"),
+        title,
+        url,
+        source,
+        status: "queued",
+        responses: 18 + Math.floor(Math.random() * 48),
+        completed: 0
+      };
+      state.forms.push(form);
+      state.selectedId = form.id;
+      log("all", `[QUEUE] Added ${title} from ${source}`, "ok");
+      render();
+    }
+
+    function selectedForm() {
+      return state.forms.find(form => form.id === state.selectedId);
+    }
+
+    function setRunState(running) {
+      state.isGrading = running;
+      document.getElementById("runButton").disabled = running;
+      document.getElementById("stopButton").hidden = !running;
+      renderStatus();
+    }
+
+    function runGrader(forceRecent = false) {
+      if (state.isGrading) {
+        showToast("Grading is already running.");
+        return;
+      }
+      const next = state.forms.find(form => form.status === "queued");
+      if (!next) {
+        showToast("No queued forms to grade.");
+        log("all", "[GRADER] No forms queued.", "warn");
+        return;
+      }
+      state.activeFormId = next.id;
+      state.activeProgress = 0;
+      state.finished = state.forms.filter(form => form.status === "done").length;
+      state.metrics = { fetch: 4, pending: next.responses, det: 0, ai: 0, result: 0, done: 0, total: next.responses };
+      next.status = "running";
+      next.completed = 0;
+      setRunState(true);
+      log("all", `[GRADER] Starting main.py in ${forceRecent ? "Recent Only" : state.settings.gradingMode} mode`, "info");
+      log("producer", `[Worker: Producer] Fetching form structure for ${next.title}`, "info");
+      log("all", `Progress: ${state.finished}/${state.forms.length}`, "info");
+      clearInterval(state.tickHandle);
+      state.tickHandle = setInterval(gradingTick, 900);
+      render();
+    }
+
+    function gradingTick() {
+      const form = state.forms.find(item => item.id === state.activeFormId);
+      if (!form || !state.isGrading) return;
+      const step = 1 + Math.floor(Math.random() * 4);
+      form.completed = Math.min(form.responses, form.completed + step);
+      state.metrics.done = form.completed;
+      state.metrics.pending = Math.max(0, form.responses - form.completed);
+      state.metrics.det = Math.max(0, Math.min(12, state.metrics.pending));
+      state.metrics.ai = Math.max(0, Math.min(8, Math.floor(state.metrics.pending / 2)));
+      state.metrics.result = Math.max(0, Math.min(6, Math.floor(form.completed / 4) % 7));
+      document.getElementById("pipelineLabel").textContent = `Pipeline State: ${state.metrics.ai > 5 ? "AI Backlog" : state.metrics.pending > 0 ? "Balanced" : "Draining"}`;
+      log("all", `FormProgress: ${form.completed}/${form.responses}`, "info");
+      log("det", `[Worker: Deterministic] done=${Math.min(form.completed, form.responses)} exact/numeric/algebraic checks`, "ok");
+      if (form.completed % 5 < step) log("ai", `[Worker: AI] jury batch scored; q_ai=${state.metrics.ai}`, "info");
+      if (form.completed % 7 < step) log("agg", `[Worker: Aggregator] [Worker Metrics] done=${form.completed}/${form.responses} q_fetch=${state.metrics.fetch} pending=${state.metrics.pending} q_det=${state.metrics.det} q_ai=${state.metrics.ai} q_result=${state.metrics.result}`, "info");
+      render();
+      if (form.completed >= form.responses) finishActiveForm();
+    }
+
+    function finishActiveForm() {
+      const form = state.forms.find(item => item.id === state.activeFormId);
+      if (!form) return;
+      form.status = "done";
+      state.finished = state.forms.filter(item => item.status === "done").length;
+      log("all", `[FORM] FINISHED '${form.title}' (${form.id})`, "ok");
+      log("all", `[FORM] Stats | questions=8 responses=${form.responses} elapsed_s=${(18 + Math.random() * 42).toFixed(2)}`, "ok");
+      clearInterval(state.tickHandle);
+      setRunState(false);
+      state.activeFormId = null;
+      const next = state.forms.find(item => item.status === "queued");
+      if (next && state.autoMode) {
+        setTimeout(() => runGrader(true), 900);
+      }
+      render();
+    }
+
+    function stopGrading() {
+      if (!state.isGrading) {
+        showToast("No active grading process.");
+        return;
+      }
+      clearInterval(state.tickHandle);
+      const form = state.forms.find(item => item.id === state.activeFormId);
+      if (form) form.status = "queued";
+      state.activeFormId = null;
+      setRunState(false);
+      log("all", "[GRADER] Stop requested. Python process terminated in simulation.", "warn");
+      render();
+    }
+
+    function autoFindForms() {
+      const found = [
+        ["Chapter 9 Quiz Fractions", "https://docs.google.com/forms/d/chapter-9-quiz-fractions/viewform"],
+        ["Chapter 7 Measuring Motion", "https://docs.google.com/forms/d/measuring-motion-open/viewform"]
+      ];
+      found.forEach(([title, url]) => addForm(url, title, "Auto Find"));
+      log("producer", `[SEARCH] Found ${found.length} form(s) with recent submissions`, "ok");
+      showToast("Auto Find added recent forms to the queue.");
+    }
+
+    function gradeAllFolders() {
+      ["Exercise 1", "10.1 Simplifying Expressions", "10.2 Multiplying Brackets"].forEach(title => {
+        addForm(`https://docs.google.com/forms/d/${title.toLowerCase().replaceAll(" ", "-")}/viewform`, title, "All Folders");
+      });
+      log("producer", "[GRADE ALL] All predefined folders scanned.", "ok");
+      runGrader(false);
+    }
+
+    function startAutoMode(config = {}) {
+      state.autoMode = true;
+      log("all", `[AUTO] Auto run started. Interval=${config.interval || "5 minutes"}, recency=${config.recency || "1 hour"}`, "ok");
+      showToast("Auto mode started.");
+      clearInterval(state.autoHandle);
+      state.autoHandle = setInterval(() => {
+        log("producer", "[AUTO CYCLE] Searching folders for new submissions", "info");
+        if (Math.random() > 0.45) {
+          addForm(`https://docs.google.com/forms/d/auto-${id("job")}/viewform`, "Auto Cycle Form", "Auto Run");
+          if (!state.isGrading) runGrader(true);
+        } else {
+          log("producer", "[AUTO CYCLE] No new forms to add", "info");
+        }
+      }, 8000);
+      if (!state.isGrading) runGrader(true);
+      renderStatus();
+    }
+
+    function stopAutoMode() {
+      state.autoMode = false;
+      clearInterval(state.autoHandle);
+      log("all", "[AUTO] Auto mode stopped.", "warn");
+      renderStatus();
+    }
+
+    function renderForms() {
+      const queued = state.forms.filter(form => form.status !== "done").length;
+      document.getElementById("formsSummary").textContent = `${queued} queued · ${state.forms.length} total`;
+      if (!state.forms.length) {
+        formList.innerHTML = `<div class="subtle" style="padding:18px;text-align:center;">No forms in queue.</div>`;
+        return;
+      }
+      formList.innerHTML = state.forms.map(form => {
+        const icon = form.status === "done" ? "✓" : form.status === "running" ? "…" : "⏳";
+        const badge = form.status === "done" ? "done" : form.status === "running" ? "running" : "queue";
+        const pct = form.responses ? Math.round((form.completed / form.responses) * 100) : 0;
+        return `
+          <article class="form-item ${form.id === state.selectedId ? "selected" : ""}" data-id="${form.id}">
+            <div class="badge ${badge}">${icon}</div>
+            <div>
+              <div class="form-title">${form.title}</div>
+              <div class="form-url">${form.url}</div>
+            </div>
+            <div class="form-meta">${form.status}<br>${pct}%</div>
+          </article>
+        `;
+      }).join("");
+      formList.querySelectorAll(".form-item").forEach(item => {
+        item.addEventListener("click", () => {
+          state.selectedId = item.dataset.id;
+          renderForms();
+        });
+      });
+    }
+
+    function renderLogs() {
+      const filtered = state.logs.filter(entry => {
+        const tabMatch = state.activeTab === "all" || entry.channel === state.activeTab || entry.channel === "all";
+        const timingMatch = !state.timingOnly || entry.message.includes("Timing") || entry.message.includes("elapsed_s") || entry.message.includes("Metrics");
+        return tabMatch && timingMatch;
+      });
+      document.getElementById("logSummary").textContent = `${state.activeTab === "all" ? "All" : state.activeTab} logs${state.timingOnly ? " · timing only" : ""}`;
+      logOutput.innerHTML = filtered.map(entry => {
+        const cls = entry.kind === "ok" ? "line-ok" : entry.kind === "warn" ? "line-warn" : entry.kind === "error" ? "line-error" : "line-info";
+        return `<span class="${cls}">[${entry.time}] ${entry.message}</span>`;
+      }).join("\n");
+      logOutput.scrollTop = logOutput.scrollHeight;
+    }
+
+    function renderStatus() {
+      const active = state.forms.find(form => form.id === state.activeFormId);
+      const queued = state.forms.filter(form => form.status === "queued").length;
+      document.getElementById("currentLabel").textContent = `Processing: ${active ? active.title : "-"}`;
+      document.getElementById("runStateLabel").textContent = `Run State: ${state.isGrading ? "Running" : state.exited ? "Exited" : "Idle"}${state.autoMode ? " · Auto" : ""}`;
+      document.getElementById("finishedLabel").textContent = `Finished: ${state.forms.filter(form => form.status === "done").length}`;
+      document.getElementById("queueLabel").textContent = `In Queue: ${queued}`;
+      document.getElementById("runDot").className = `dot ${state.isGrading ? "run" : state.exited ? "stop" : ""}`;
+      document.getElementById("processingDot").className = `dot ${state.isGrading ? "run" : queued ? "wait" : ""}`;
+      document.getElementById("serverChip").textContent = `FastAPI server: ${state.exited ? "stopped" : "online"} · ${state.minimized ? "tray mode" : "web GUI visible"}`;
+    }
+
+    function renderMetrics() {
+      document.getElementById("mFetch").textContent = state.metrics.fetch;
+      document.getElementById("mPending").textContent = state.metrics.pending;
+      document.getElementById("mDet").textContent = state.metrics.det;
+      document.getElementById("mAi").textContent = state.metrics.ai;
+      document.getElementById("mResult").textContent = state.metrics.result;
+      document.getElementById("mDone").textContent = `${state.metrics.done}/${state.metrics.total}`;
+    }
+
+    function renderTabs() {
+      document.querySelectorAll(".tab").forEach(tab => tab.classList.toggle("active", tab.dataset.tab === state.activeTab));
+      document.getElementById("timingOnly").checked = state.timingOnly;
+    }
+
+    function render() {
+      renderForms();
+      renderLogs();
+      renderStatus();
+      renderMetrics();
+      renderTabs();
+    }
+
+    function openModal(title, bodyHtml, footerHtml = "") {
+      modalTitle.textContent = title;
+      modalBody.innerHTML = bodyHtml;
+      modalFooter.innerHTML = footerHtml;
+      modal.classList.remove("small");
+      modalBackdrop.classList.add("show");
+    }
+
+    function closeModal() {
+      modalBackdrop.classList.remove("show");
+    }
+
+    function settingsDialog() {
+      const s = state.settings;
+      openModal("Settings", `
+        <div class="form-grid">
+          <label class="label">Evaluator:</label>
+          <select id="setEvaluator">
+            <option value="ai_evaluator">ai_evaluator (Basic)</option>
+            <option value="ai_evaluator_2">ai_evaluator_2 (Advanced)</option>
+            <option value="ai_evaluator_semantic">ai_evaluator_semantic (Semantic Pipeline)</option>
+          </select>
+          <label class="label">Leniency:</label>
+          <select id="setLeniency"><option>extreme</option><option>lenient</option><option>balanced</option><option>strict</option></select>
+          <label class="label">Primary Judge Model:</label><select id="setJudge"><option>llama3.1:8b</option><option>gemma3:12b</option><option>mistral:7b</option></select>
+          <label class="label">Rubric Model:</label><select id="setRubric"><option>gemma3:12b</option><option>llama3.1:8b</option></select>
+          <label class="label">Embedding Model:</label><select id="setEmbedding"><option>mxbai-embed-large</option><option>nomic-embed-text</option></select>
+          <label class="label">Reasoning Model:</label><select id="setReasoning"><option>gemma3:12b</option><option>llama3.1:8b</option></select>
+          <label class="label">Generate Report:</label><label><input id="setReport" type="checkbox"> Enabled</label>
+          <label class="label">Batch Size:</label><input id="setBatch" value="${s.batchSize}">
+          <label class="label">Grade Mode:</label><select id="setGradeMode"><option>Whole Form</option><option>Recent Only</option></select>
+          <label class="label">Execution Mode:</label>
+          <select id="setExecution">
+            <option>Fastest: Bulk Grading</option>
+            <option>Standard: Daily Grading</option>
+            <option>Reliable: Slow Model Safety</option>
+            <option>Conservative: 2-Judge Review</option>
+            <option>Strict: 3-Judge Review</option>
+            <option>Recovery: Low Load</option>
+          </select>
+          <label class="label">Heartbeat:</label>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;">
+            <input id="setHeartbeatTimeout" type="number" value="${s.heartbeatTimeout}" title="Timeout">
+            <input id="setHeartbeatInterval" type="number" value="${s.heartbeatInterval}" title="Interval">
+            <input id="setHeartbeatRestarts" type="number" value="${s.heartbeatRestarts}" title="Restarts">
+          </div>
+          <label class="label">Ollama Options:</label>
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;">
+            <input id="setJudgeCtx" type="number" value="${s.judgeCtx}">
+            <input id="setJudgePred" type="number" value="${s.judgePred}">
+            <input id="setRubricCtx" type="number" value="${s.rubricCtx}">
+            <input id="setRubricPred" type="number" value="${s.rubricPred}">
+          </div>
+        </div>
+      `, `
+        <button class="action secondary" id="cancelSettings" type="button">Cancel</button>
+        <button class="action primary" id="saveSettings" type="button">Save</button>
+      `);
+      document.getElementById("setEvaluator").value = s.evaluator;
+      document.getElementById("setLeniency").value = s.leniency;
+      document.getElementById("setJudge").value = s.judgeModel;
+      document.getElementById("setRubric").value = s.rubricModel;
+      document.getElementById("setEmbedding").value = s.embeddingModel;
+      document.getElementById("setReasoning").value = s.reasoningModel;
+      document.getElementById("setReport").checked = s.generateReport;
+      document.getElementById("setGradeMode").value = s.gradingMode;
+      document.getElementById("setExecution").value = s.executionMode;
+      document.getElementById("cancelSettings").onclick = closeModal;
+      document.getElementById("saveSettings").onclick = () => {
+        state.settings.evaluator = document.getElementById("setEvaluator").value;
+        state.settings.leniency = document.getElementById("setLeniency").value;
+        state.settings.judgeModel = document.getElementById("setJudge").value;
+        state.settings.rubricModel = document.getElementById("setRubric").value;
+        state.settings.embeddingModel = document.getElementById("setEmbedding").value;
+        state.settings.reasoningModel = document.getElementById("setReasoning").value;
+        state.settings.generateReport = document.getElementById("setReport").checked;
+        state.settings.batchSize = document.getElementById("setBatch").value;
+        state.settings.gradingMode = document.getElementById("setGradeMode").value;
+        state.settings.executionMode = document.getElementById("setExecution").value;
+        state.settings.heartbeatTimeout = Number(document.getElementById("setHeartbeatTimeout").value);
+        state.settings.heartbeatInterval = Number(document.getElementById("setHeartbeatInterval").value);
+        state.settings.heartbeatRestarts = Number(document.getElementById("setHeartbeatRestarts").value);
+        state.settings.judgeCtx = Number(document.getElementById("setJudgeCtx").value);
+        state.settings.judgePred = Number(document.getElementById("setJudgePred").value);
+        state.settings.rubricCtx = Number(document.getElementById("setRubricCtx").value);
+        state.settings.rubricPred = Number(document.getElementById("setRubricPred").value);
+        log("all", `[CONFIG] Saved settings: ${state.settings.executionMode}, ${state.settings.gradingMode}`, "ok");
+        showToast("Settings saved in the simulation.");
+        closeModal();
+      };
+    }
+
+    function autoAddDialog(mode) {
+      const isAuto = mode === "auto";
+      openModal(isAuto ? "Auto Run" : "Auto Add Forms", `
+        <label class="label">Predefined Folders:</label>
+        <div class="folder-list" id="folderList">${state.folders.map(folder => `<div class="folder-row" data-folder="${folder}"><span>${folder}</span><small>Drive folder</small></div>`).join("")}</div>
+        <label class="label">Temporary folders:</label>
+        <textarea id="tempFolders" placeholder="Enter folder names/IDs/URLs separated by commas..."></textarea>
+        ${isAuto ? `
+          <div class="form-grid">
+            <label class="label">Look for submissions in last:</label><div style="display:grid;grid-template-columns:1fr 130px;gap:8px;"><input id="recencyValue" type="number" value="1"><select id="recencyUnit"><option>hours</option><option>minutes</option></select></div>
+            <label class="label">Check every:</label><div style="display:grid;grid-template-columns:1fr 130px;gap:8px;"><input id="intervalValue" type="number" value="5"><select id="intervalUnit"><option>minutes</option><option>hours</option></select></div>
+            <label class="label">Specific time:</label><label><input id="specificTime" type="checkbox"> Run at <input type="time" id="scheduleTime" value="09:00" style="width:130px;"></label>
+            <label class="label">Days:</label><div class="days">${["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map(day => `<label class="day"><input type="checkbox" checked> ${day}</label>`).join("")}</div>
+          </div>
+        ` : `
+          <div class="form-grid">
+            <label class="label">From:</label><input id="fromDate" type="date">
+            <label class="label">To:</label><input id="toDate" type="date">
+          </div>
+        `}
+      `, `
+        <button class="action secondary" id="addPredefined" type="button">Add to Predefined</button>
+        <button class="action secondary" id="removePredefined" type="button">Remove Selected</button>
+        <button class="action secondary" id="cancelAutoAdd" type="button">Cancel</button>
+        <button class="action primary" id="startSearch" type="button">${isAuto ? "Start Auto Run" : "Search and Add Forms"}</button>
+      `);
+      const today = new Date().toISOString().slice(0, 10);
+      if (!isAuto) {
+        document.getElementById("toDate").value = today;
+        const old = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+        document.getElementById("fromDate").value = old;
+      }
+      document.querySelectorAll(".folder-row").forEach(row => {
+        row.onclick = () => {
+          row.classList.toggle("selected");
+          state.selectedFolder = row.dataset.folder;
+        };
+      });
+      document.getElementById("addPredefined").onclick = () => {
+        const values = document.getElementById("tempFolders").value.split(",").map(v => v.trim()).filter(Boolean);
+        values.forEach(value => { if (!state.folders.includes(value)) state.folders.push(value); });
+        log("all", `[FOLDERS] Added ${values.length} predefined folder(s).`, "ok");
+        closeModal();
+        autoAddDialog(mode);
+      };
+      document.getElementById("removePredefined").onclick = () => {
+        const selected = [...document.querySelectorAll(".folder-row.selected")].map(row => row.dataset.folder);
+        state.folders = state.folders.filter(folder => !selected.includes(folder));
+        log("all", `[FOLDERS] Removed ${selected.length} predefined folder(s).`, "warn");
+        closeModal();
+        autoAddDialog(mode);
+      };
+      document.getElementById("cancelAutoAdd").onclick = closeModal;
+      document.getElementById("startSearch").onclick = () => {
+        closeModal();
+        if (isAuto) {
+          startAutoMode({
+            recency: `${document.getElementById("recencyValue").value} ${document.getElementById("recencyUnit").value}`,
+            interval: `${document.getElementById("intervalValue").value} ${document.getElementById("intervalUnit").value}`
+          });
+        } else {
+          log("producer", "[SEARCH] Starting Drive folder scan from web GUI.", "info");
+          autoFindForms();
+        }
+      };
+    }
+
+    function quickGradeDialog() {
+      openModal("Grade Folder/Form Now", `
+        <p class="subtle">Enter a Google Drive folder URL or Google Form URL to grade immediately.</p>
+        <input id="quickUrl" placeholder="Paste folder URL or form URL here...">
+      `, `
+        <button class="action secondary" id="cancelQuick" type="button">Cancel</button>
+        <button class="action primary" id="gradeQuick" type="button">Grade</button>
+      `);
+      document.getElementById("cancelQuick").onclick = closeModal;
+      document.getElementById("gradeQuick").onclick = () => {
+        const value = document.getElementById("quickUrl").value.trim();
+        if (!value) {
+          showToast("Please enter a URL.");
+          return;
+        }
+        addForm(value, titleFromUrl(value), "Quick Grade");
+        closeModal();
+        runGrader(false);
+      };
+    }
+
+    function infoDialog(title, message) {
+      openModal(title, `<p>${message}</p>`, `<button class="action primary" id="okInfo" type="button">OK</button>`);
+      document.getElementById("okInfo").onclick = closeModal;
+    }
+
+    function confirmDialog(title, message, onYes) {
+      openModal(title, `<p>${message}</p>`, `
+        <button class="action secondary" id="noConfirm" type="button">No</button>
+        <button class="action danger" id="yesConfirm" type="button">Yes</button>
+      `);
+      document.getElementById("noConfirm").onclick = closeModal;
+      document.getElementById("yesConfirm").onclick = () => {
+        closeModal();
+        onYes();
+      };
+    }
+
+    function handleAction(action) {
+      document.querySelectorAll(".menu.open").forEach(menu => menu.classList.remove("open"));
+      const tabActions = { "tab-all": "all", "tab-producer": "producer", "tab-det": "det", "tab-ai": "ai", "tab-agg": "agg" };
+      if (tabActions[action]) {
+        state.activeTab = tabActions[action];
+        render();
+        return;
+      }
+      switch (action) {
+        case "add-url": quickGradeDialog(); break;
+        case "save-queue":
+          log("all", `[QUEUE] Saved ${state.forms.length} form(s) to forms_to_grade.json simulation.`, "ok");
+          showToast("Queue saved.");
+          break;
+        case "export-report":
+          log("all", "[REPORT] Exported Feedback/*.md bundle in simulation.", "ok");
+          showToast("Feedback export simulated.");
+          break;
+        case "minimize":
+          state.minimized = true;
+          showToast("Window hidden to system tray. Use File > Show/restore in a real app.");
+          log("all", "[TRAY] Application minimized to tray.", "info");
+          renderStatus();
+          break;
+        case "restore":
+          state.minimized = false;
+          showToast("Window restored from tray.");
+          log("all", "[TRAY] Application restored from tray.", "ok");
+          renderStatus();
+          break;
+        case "exit":
+          confirmDialog("Exit Server GUI", "Stop grading/search and close the simulated web server GUI?", () => {
+            stopGrading();
+            stopAutoMode();
+            state.exited = true;
+            log("all", "[APP] Exit requested. Server GUI stopped in simulation.", "warn");
+            renderStatus();
+          });
+          break;
+        case "auto-find": autoAddDialog("manual"); break;
+        case "grade-all": gradeAllFolders(); break;
+        case "remove": {
+          const form = selectedForm();
+          if (!form) return showToast("Select a form first.");
+          if (form.status === "running") return showToast("Stop grading before removing the running form.");
+          state.forms = state.forms.filter(item => item.id !== form.id);
+          state.selectedId = state.forms[0]?.id || null;
+          log("all", `[QUEUE] Removed ${form.title}`, "warn");
+          render();
+          break;
+        }
+        case "clear-finished":
+          state.forms = state.forms.filter(form => form.status !== "done");
+          state.selectedId = state.forms[0]?.id || null;
+          log("all", "[QUEUE] Cleared finished forms.", "warn");
+          render();
+          break;
+        case "clear-all":
+          confirmDialog("Clear All", "Clear all forms?", () => {
+            state.forms = [];
+            state.selectedId = null;
+            state.finished = 0;
+            log("all", "[QUEUE] Cleared all forms.", "warn");
+            render();
+          });
+          break;
+        case "run-now": runGrader(false); break;
+        case "auto-run": autoAddDialog("auto"); break;
+        case "stop": stopGrading(); break;
+        case "heartbeat":
+          log("all", "[HEARTBEAT] Monitor restarted. heartbeat.json status=running", "ok");
+          showToast("Heartbeat monitor restarted.");
+          break;
+        case "toggle-timing":
+          state.timingOnly = !state.timingOnly;
+          render();
+          break;
+        case "settings": settingsDialog(); break;
+        case "ollama":
+          log("ai", "[OLLAMA] Diagnostics passed: llama3.1:8b, gemma3:12b, mxbai-embed-large available.", "ok");
+          infoDialog("Ollama Diagnostics", "Simulation result: local Ollama service is reachable and configured models are available.");
+          break;
+        case "auth-refresh":
+          log("all", "[AUTH] Google OAuth token refreshed in simulation.", "ok");
+          showToast("Google auth refreshed.");
+          break;
+        case "open-feedback":
+          infoDialog("Feedback Folder", "In the desktop app this opens the Feedback/ directory. In the server GUI this would navigate to a reports page.");
+          break;
+        case "architecture":
+          infoDialog("Architecture", "React/web GUI -> Python web server -> Firestore or local DB -> existing main.py grading pipeline -> Feedback reports.");
+          break;
+        case "about":
+          infoDialog("About", "Google Form Autograder web-server GUI simulation. Menus and buttons update simulated queue, logs, settings, auto mode, and worker metrics.");
+          break;
+      }
+    }
+
+    document.querySelectorAll(".menu > button").forEach(button => {
+      button.addEventListener("click", event => {
+        const menu = event.currentTarget.parentElement;
+        document.querySelectorAll(".menu.open").forEach(item => {
+          if (item !== menu) item.classList.remove("open");
+        });
+        menu.classList.toggle("open");
+      });
+    });
+
+    document.addEventListener("click", event => {
+      if (!event.target.closest(".menu")) document.querySelectorAll(".menu.open").forEach(menu => menu.classList.remove("open"));
+      const actionEl = event.target.closest("[data-action]");
+      if (actionEl) handleAction(actionEl.dataset.action);
+    });
+
+    document.getElementById("tabs").addEventListener("click", event => {
+      const tab = event.target.closest(".tab");
+      if (!tab) return;
+      state.activeTab = tab.dataset.tab;
+      render();
+    });
+
+    document.getElementById("timingOnly").addEventListener("change", event => {
+      state.timingOnly = event.target.checked;
+      render();
+    });
+
+    document.getElementById("modalClose").onclick = closeModal;
+    modalBackdrop.addEventListener("click", event => {
+      if (event.target === modalBackdrop) closeModal();
+    });
+
+    document.addEventListener("keydown", event => {
+      if (event.key === "Escape") closeModal();
+      if (event.ctrlKey && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        handleAction("save-queue");
+      }
+      if (event.ctrlKey && event.key.toLowerCase() === "g") {
+        event.preventDefault();
+        quickGradeDialog();
+      }
+    });
+
+    addForm("https://docs.google.com/forms/d/chapter-9-quiz-fractions/viewform", "Chapter 9 Quiz Fractions", "forms_to_grade.json");
+    addForm("https://docs.google.com/forms/d/measuring-motion-open/viewform", "Chapter 7 Measuring Motion Open", "forms_to_grade.json");
+    log("all", "Sleep prevention active. App is running.", "info");
+    log("all", "[SERVER] FastAPI wrapper listening on http://localhost:8000 in simulation.", "ok");
+    log("producer", "[QUEUE] Loaded forms_to_grade.json", "info");
+    render();
+  </script>
+</body>
+</html>

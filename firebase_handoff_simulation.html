@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Form Grading Handoff Simulation</title>
+  <style>
+    :root {
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --text: #18202a;
+      --muted: #647084;
+      --line: #d9dee7;
+      --accent: #2563eb;
+      --accent-dark: #1d4ed8;
+      --ok: #16803c;
+      --warn: #b45309;
+      --error: #b42318;
+      --shadow: 0 12px 30px rgba(24, 32, 42, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, Segoe UI, Roboto, Arial, sans-serif;
+    }
+
+    header {
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+    }
+
+    .topbar {
+      width: min(1120px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 18px 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-weight: 750;
+      letter-spacing: 0;
+    }
+
+    .brand-mark {
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      background: var(--accent);
+      color: white;
+      font-weight: 800;
+    }
+
+    .status-pill {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 7px 12px;
+      color: var(--muted);
+      background: #fbfcfe;
+      font-size: 13px;
+    }
+
+    main {
+      width: min(1120px, calc(100% - 32px));
+      margin: 28px auto;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 360px;
+      gap: 22px;
+      align-items: start;
+    }
+
+    section,
+    aside {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+
+    .panel-head {
+      padding: 18px 20px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+    }
+
+    h1,
+    h2 {
+      margin: 0;
+      letter-spacing: 0;
+    }
+
+    h1 {
+      font-size: 24px;
+      line-height: 1.2;
+    }
+
+    h2 {
+      font-size: 16px;
+    }
+
+    .subtle {
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.45;
+    }
+
+    .submit-area {
+      padding: 20px;
+      display: grid;
+      gap: 14px;
+    }
+
+    label {
+      display: grid;
+      gap: 7px;
+      font-size: 13px;
+      font-weight: 650;
+      color: #2b3441;
+    }
+
+    input,
+    select {
+      width: 100%;
+      height: 42px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 0 12px;
+      color: var(--text);
+      background: #fff;
+      font: inherit;
+      outline: none;
+    }
+
+    input:focus,
+    select:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+    }
+
+    .form-grid {
+      display: grid;
+      grid-template-columns: 1fr 180px;
+      gap: 14px;
+    }
+
+    button {
+      height: 42px;
+      border: 0;
+      border-radius: 6px;
+      padding: 0 14px;
+      background: var(--accent);
+      color: #fff;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background: var(--accent-dark);
+    }
+
+    button.secondary {
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--text);
+    }
+
+    button.secondary:hover {
+      background: #f8fafc;
+    }
+
+    .queue {
+      border-top: 1px solid var(--line);
+    }
+
+    .job {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 14px;
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .job:last-child {
+      border-bottom: 0;
+    }
+
+    .job-title {
+      font-weight: 700;
+      overflow-wrap: anywhere;
+    }
+
+    .job-meta {
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .badge {
+      height: 28px;
+      min-width: 86px;
+      border-radius: 999px;
+      padding: 6px 10px;
+      text-align: center;
+      font-size: 12px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0;
+    }
+
+    .pending {
+      background: #fff7ed;
+      color: var(--warn);
+    }
+
+    .running {
+      background: #eff6ff;
+      color: var(--accent-dark);
+    }
+
+    .done {
+      background: #ecfdf3;
+      color: var(--ok);
+    }
+
+    .failed {
+      background: #fef3f2;
+      color: var(--error);
+    }
+
+    aside {
+      padding: 18px;
+      display: grid;
+      gap: 16px;
+    }
+
+    .worker-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      display: grid;
+      gap: 12px;
+      background: #fbfcfe;
+    }
+
+    .worker-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .worker-row strong {
+      color: var(--text);
+    }
+
+    .activity {
+      min-height: 124px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #101828;
+      color: #d1fadf;
+      padding: 12px;
+      font-family: Consolas, Monaco, monospace;
+      font-size: 12px;
+      line-height: 1.5;
+      overflow: auto;
+    }
+
+    .empty {
+      padding: 26px 20px;
+      color: var(--muted);
+      text-align: center;
+    }
+
+    @media (max-width: 840px) {
+      main {
+        grid-template-columns: 1fr;
+      }
+
+      .form-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .job {
+        grid-template-columns: 1fr;
+      }
+
+      .badge {
+        width: fit-content;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="topbar">
+      <div class="brand">
+        <div class="brand-mark">G</div>
+        <div>
+          <div>Google Form Autograder</div>
+          <div class="subtle">Firebase URL handoff simulation</div>
+        </div>
+      </div>
+      <div class="status-pill" id="connectionStatus">Firestore: connected</div>
+    </div>
+  </header>
+
+  <main>
+    <section>
+      <div class="panel-head">
+        <div>
+          <h1>Submit a Form URL</h1>
+          <div class="subtle">The browser only sends the URL. Your desktop app does the grading.</div>
+        </div>
+      </div>
+
+      <form class="submit-area" id="jobForm">
+        <div class="form-grid">
+          <label>
+            Google Form URL
+            <input id="formUrl" type="url" placeholder="https://docs.google.com/forms/d/e/..." required>
+          </label>
+          <label>
+            Priority
+            <select id="priority">
+              <option>Normal</option>
+              <option>High</option>
+              <option>Low</option>
+            </select>
+          </label>
+        </div>
+        <button type="submit">Add to Firebase Queue</button>
+      </form>
+
+      <div class="queue" id="queue"></div>
+    </section>
+
+    <aside>
+      <div>
+        <h2>Desktop Worker</h2>
+        <div class="subtle">Simulates your local app polling Firestore for pending form URLs.</div>
+      </div>
+
+      <div class="worker-card">
+        <div class="worker-row">
+          <span>Worker status</span>
+          <strong id="workerStatus">Idle</strong>
+        </div>
+        <div class="worker-row">
+          <span>Pending jobs</span>
+          <strong id="pendingCount">0</strong>
+        </div>
+        <div class="worker-row">
+          <span>Completed jobs</span>
+          <strong id="doneCount">0</strong>
+        </div>
+        <button class="secondary" id="processButton" type="button">Process Next Job</button>
+      </div>
+
+      <div class="activity" id="activityLog">[ready] Waiting for form URLs...</div>
+    </aside>
+  </main>
+
+  <script>
+    const jobs = [
+      {
+        id: crypto.randomUUID(),
+        url: 'https://docs.google.com/forms/d/e/sample-chapter-9-quiz/viewform',
+        priority: 'Normal',
+        status: 'done',
+        createdAt: new Date(Date.now() - 1000 * 60 * 15)
+      },
+      {
+        id: crypto.randomUUID(),
+        url: 'https://docs.google.com/forms/d/e/sample-motion-open-response/viewform',
+        priority: 'High',
+        status: 'pending',
+        createdAt: new Date(Date.now() - 1000 * 60 * 4)
+      }
+    ];
+
+    const queue = document.querySelector('#queue');
+    const jobForm = document.querySelector('#jobForm');
+    const formUrl = document.querySelector('#formUrl');
+    const priority = document.querySelector('#priority');
+    const workerStatus = document.querySelector('#workerStatus');
+    const pendingCount = document.querySelector('#pendingCount');
+    const doneCount = document.querySelector('#doneCount');
+    const processButton = document.querySelector('#processButton');
+    const activityLog = document.querySelector('#activityLog');
+
+    function renderJobs() {
+      const pending = jobs.filter(job => job.status === 'pending').length;
+      const done = jobs.filter(job => job.status === 'done').length;
+      pendingCount.textContent = pending;
+      doneCount.textContent = done;
+
+      if (!jobs.length) {
+        queue.innerHTML = '<div class="empty">No submitted forms yet.</div>';
+        return;
+      }
+
+      queue.innerHTML = jobs.map(job => `
+        <div class="job">
+          <div>
+            <div class="job-title">${escapeHtml(job.url)}</div>
+            <div class="job-meta">${job.priority} priority · submitted ${timeAgo(job.createdAt)}</div>
+          </div>
+          <div class="badge ${job.status}">${job.status}</div>
+        </div>
+      `).join('');
+    }
+
+    function addLog(message) {
+      const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      activityLog.textContent += `\n[${timestamp}] ${message}`;
+      activityLog.scrollTop = activityLog.scrollHeight;
+    }
+
+    function processNextJob() {
+      const job = jobs.find(item => item.status === 'pending');
+      if (!job) {
+        addLog('No pending jobs found.');
+        return;
+      }
+
+      job.status = 'running';
+      workerStatus.textContent = 'Grading';
+      processButton.disabled = true;
+      addLog(`Claimed job ${job.id.slice(0, 8)} from Firestore.`);
+      addLog('Desktop app is grading the form locally...');
+      renderJobs();
+
+      setTimeout(() => {
+        job.status = 'done';
+        workerStatus.textContent = 'Idle';
+        processButton.disabled = false;
+        addLog(`Updated Firestore status to done for ${job.id.slice(0, 8)}.`);
+        renderJobs();
+      }, 2200);
+    }
+
+    function timeAgo(date) {
+      const seconds = Math.max(1, Math.floor((Date.now() - date.getTime()) / 1000));
+      if (seconds < 60) return `${seconds}s ago`;
+      const minutes = Math.floor(seconds / 60);
+      if (minutes < 60) return `${minutes}m ago`;
+      return `${Math.floor(minutes / 60)}h ago`;
+    }
+
+    function escapeHtml(value) {
+      return value
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;');
+    }
+
+    jobForm.addEventListener('submit', event => {
+      event.preventDefault();
+
+      jobs.unshift({
+        id: crypto.randomUUID(),
+        url: formUrl.value.trim(),
+        priority: priority.value,
+        status: 'pending',
+        createdAt: new Date()
+      });
+
+      addLog('New form URL written to Firestore.');
+      formUrl.value = '';
+      priority.value = 'Normal';
+      renderJobs();
+    });
+
+    processButton.addEventListener('click', processNextJob);
+    renderJobs();
+  </script>
+</body>
+</html>
