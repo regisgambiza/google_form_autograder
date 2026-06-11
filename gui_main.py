@@ -35,7 +35,46 @@ from scheduler import scheduler as auto_scheduler
 BANGKOK_TZ = timezone(timedelta(hours=7))
 
 EXECUTION_MODE_PRESETS = {
-    "Fastest: Bulk Grading": {
+    "Math: deterministic checks + semantic judge only (recommended)": {
+        "deterministic_worker_count": 4,
+        "ai_worker_count": 1,
+        "worker_queue_size": 1200,
+        "producer_det_queue_low_watermark": 450,
+        "producer_det_queue_high_watermark": 900,
+        "max_concurrent_judge_http": 1,
+        "max_concurrent_jury_answers": 1,
+        "max_concurrent_embedding_http": 1,
+        "judge_timeout_seconds": 45,
+        "judge_http_timeout_seconds": 65,
+        "judge_total_hard_timeout_seconds": 55,
+        "jury_circuit_break_seconds": 900,
+        "max_latency_per_answer_seconds": 45,
+        "dispatcher_stall_timeout_seconds": 420,
+        "ai_stall_timeout_seconds": 300,
+        "enable_async_judges": False,
+        "sync_judge_parallelism": 1,
+        "active_judge_roles": ["semantic_judge"],
+        "judge_prewarm_enabled": True,
+        "judge_prewarm_timeout_seconds": 20,
+        "confidence_thresholds": {
+            "auto_accept": 0.90,
+            "auto_reject": 0.35,
+        },
+        "embedding_thresholds": {
+            "auto_accept": 0.90,
+            "auto_reject": 0.42,
+            "send_to_jury": [0.42, 0.90]
+        },
+        "consensus_weights": {
+            "semantic_similarity": 0.45,
+            "concept_coverage": 0.25,
+            "factual_accuracy": 0.15,
+            "strict_judge": 0.05,
+            "language_noise": 0.0,
+            "embedding": 0.10,
+        },
+    },
+    "Bulk speed: all forms, high concurrency, less review": {
         "deterministic_worker_count": 7,
         "ai_worker_count": 4,
         "worker_queue_size": 3000,
@@ -52,7 +91,7 @@ EXECUTION_MODE_PRESETS = {
         "enable_async_judges": False,
         "sync_judge_parallelism": 6,
     },
-    "Standard: Daily Grading": {
+    "Daily balanced: semantic/factual review with moderate concurrency": {
         "deterministic_worker_count": 5,
         "ai_worker_count": 3,
         "worker_queue_size": 2000,
@@ -69,7 +108,7 @@ EXECUTION_MODE_PRESETS = {
         "enable_async_judges": False,
         "sync_judge_parallelism": 6,
     },
-    "Reliable: Slow Model Safety": {
+    "Slow-model safe: lower concurrency, longer timeouts": {
         "deterministic_worker_count": 5,
         "ai_worker_count": 2,
         "worker_queue_size": 1800,
@@ -86,7 +125,7 @@ EXECUTION_MODE_PRESETS = {
         "enable_async_judges": False,
         "sync_judge_parallelism": 3,
     },
-    "Conservative: 2-Judge Review": {
+    "General accuracy: semantic + factual 2-judge review": {
         "deterministic_worker_count": 4,
         "ai_worker_count": 1,
         "worker_queue_size": 1200,
@@ -113,7 +152,7 @@ EXECUTION_MODE_PRESETS = {
             "send_to_jury": [0.52, 0.88]
         },
     },
-    "Strict: 3-Judge Review": {
+    "Strict review: semantic + factual + strict judge": {
         "deterministic_worker_count": 4,
         "ai_worker_count": 1,
         "worker_queue_size": 1200,
@@ -140,7 +179,7 @@ EXECUTION_MODE_PRESETS = {
             "send_to_jury": [0.45, 0.90]
         },
     },
-    "Recovery: Low Load": {
+    "Recovery: lowest load, longest timeouts": {
         "deterministic_worker_count": 3,
         "ai_worker_count": 1,
         "worker_queue_size": 1000,
@@ -160,15 +199,21 @@ EXECUTION_MODE_PRESETS = {
 }
 
 EXECUTION_MODE_ALIASES = {
-    "Max Speed": "Fastest: Bulk Grading",
-    "Balanced": "Standard: Daily Grading",
-    "Stable": "Reliable: Slow Model Safety",
-    "High Accuracy": "Conservative: 2-Judge Review",
-    "High Accuracy (Practical)": "Strict: 3-Judge Review",
-    "Safe Mode": "Recovery: Low Load",
+    "Max Speed": "Bulk speed: all forms, high concurrency, less review",
+    "Balanced": "Daily balanced: semantic/factual review with moderate concurrency",
+    "Stable": "Slow-model safe: lower concurrency, longer timeouts",
+    "High Accuracy": "General accuracy: semantic + factual 2-judge review",
+    "High Accuracy (Practical)": "Strict review: semantic + factual + strict judge",
+    "Safe Mode": "Recovery: lowest load, longest timeouts",
+    "Fastest: Bulk Grading": "Bulk speed: all forms, high concurrency, less review",
+    "Standard: Daily Grading": "Daily balanced: semantic/factual review with moderate concurrency",
+    "Reliable: Slow Model Safety": "Slow-model safe: lower concurrency, longer timeouts",
+    "Conservative: 2-Judge Review": "General accuracy: semantic + factual 2-judge review",
+    "Strict: 3-Judge Review": "Strict review: semantic + factual + strict judge",
+    "Recovery: Low Load": "Recovery: lowest load, longest timeouts",
 }
 
-DEFAULT_EXECUTION_MODE = "Standard: Daily Grading"
+DEFAULT_EXECUTION_MODE = "Math: deterministic checks + semantic judge only (recommended)"
 
 
 def normalize_execution_mode(mode_name):

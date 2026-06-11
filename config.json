@@ -1,20 +1,20 @@
 {
     "models": {
         "judge": [
-            "qwen3:8b"
+            "llama3.1:8b"
         ]
     },
     "jury_models": {
-        "semantic_judge": "qwen3:8b",
-        "concept_judge": "qwen3:8b",
-        "factual_judge": "qwen3:8b",
-        "strict_judge": "qwen3:8b",
-        "misconception_judge": "qwen3:8b",
-        "language_filter": "qwen3:8b"
+        "semantic_judge": "llama3.1:8b",
+        "concept_judge": "llama3.1:8b",
+        "factual_judge": "llama3.1:8b",
+        "strict_judge": "llama3.1:8b",
+        "misconception_judge": "llama3.1:8b",
+        "language_filter": "gpt-oss:latest"
     },
-    "rubric_model": "qwen3:8b",
+    "rubric_model": "llama3.1:8b",
     "embedding_model": "mxbai-embed-large",
-    "reasoning_model": "gpt-oss:latest",
+    "reasoning_model": "llama3.1:8b",
     "leniency": "extreme",
     "leniency_note": "options: extreme, lenient, balanced, strict",
     "evaluator": "ai_evaluator_semantic",
@@ -46,8 +46,8 @@
     "jury_semaphore_acquire_timeout_seconds": 45,
     "enable_async_judges": false,
     "sync_judge_parallelism": 1,
-    "judge_timeout_seconds": 55,
-    "judge_http_timeout_seconds": 75,
+    "judge_timeout_seconds": 45,
+    "judge_http_timeout_seconds": 65,
     "embedding_timeout_seconds": 45,
     "embedding_connect_timeout_seconds": 10,
     "semantic_similarity_batch_timeout_seconds": 90,
@@ -55,29 +55,29 @@
     "rubric_connect_timeout_seconds": 10,
     "batch_size": 15,
     "numeric_tolerance": 0.01,
-    "max_latency_per_answer_seconds": 55,
+    "max_latency_per_answer_seconds": 45,
     "enable_reflection": false,
     "misconception_penalty": 0.4,
     "retry_attempts": 3,
     "confidence_thresholds": {
-        "auto_accept": 0.92,
+        "auto_accept": 0.9,
         "auto_reject": 0.35
     },
     "embedding_thresholds": {
         "auto_accept": 0.9,
-        "auto_reject": 0.45,
+        "auto_reject": 0.42,
         "send_to_jury": [
-            0.45,
+            0.42,
             0.9
         ]
     },
     "consensus_weights": {
-        "semantic_similarity": 0.35,
+        "semantic_similarity": 0.45,
         "concept_coverage": 0.25,
-        "factual_accuracy": 0.2,
-        "strict_judge": 0.1,
-        "language_noise": 0.05,
-        "embedding": 0.05
+        "factual_accuracy": 0.15,
+        "strict_judge": 0.05,
+        "language_noise": 0.0,
+        "embedding": 0.1
     },
     "ollama_options": {
         "judge_num_ctx": 2048,
@@ -112,17 +112,15 @@
     "hang_diag_stackdump_path": "logs/hang_stack_dumps.log",
     "console_log_enabled": true,
     "console_log_min_level": "INFO",
-    "execution_mode": "Strict: 3-Judge Review",
+    "execution_mode": "Math: deterministic checks + semantic judge only (recommended)",
     "max_concurrent_judge_http": 1,
     "max_concurrent_embedding_http": 1,
     "ai_stall_timeout_seconds": 300,
-    "judge_total_hard_timeout_seconds": 50,
+    "judge_total_hard_timeout_seconds": 55,
     "jury_circuit_break_seconds": 900,
     "judge_prewarm_enabled": true,
     "judge_prewarm_timeout_seconds": 20,
     "active_judge_roles": [
-        "semantic_judge",
-        "factual_judge",
-        "strict_judge"
+        "semantic_judge"
     ]
 }
