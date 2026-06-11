@@ -1,14 +1,15 @@
 # auto_add_dialog.py - FIXED: Prevent duplicate searches, proper auto-cycle initialization
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLineEdit,
-    QListWidget, QLabel, QDateEdit, QMessageBox,
+    QListWidget, QLabel, QDateEdit, QMessageBox, QTextEdit,
     QProgressDialog, QComboBox, QListWidgetItem, QGroupBox, QCheckBox, QTimeEdit
 )
 from PyQt5.QtCore import Qt, QDate, QTime, QThread, pyqtSignal
 from form_searcher import (
     load_predefined_folders,
     save_predefined_folders,
-    find_forms_with_submissions_in_range
+    find_forms_with_submissions_in_range,
+    split_identifiers,
 )
 from datetime import datetime, timedelta, time, timezone
 
@@ -33,7 +34,7 @@ class SearchThread(QThread):
         if to_dt.tzinfo is None:
             to_dt = to_dt.replace(tzinfo=timezone.utc)
 
-        self.progress.emit(f"Starting search in {len(self.folder_identifiers)} folder(s)")
+        self.progress.emit(f"Starting search in {len(self.folder_identifiers)} source(s)")
         
         forms = find_forms_with_submissions_in_range(
             self.folder_identifiers,
@@ -55,9 +56,9 @@ class AutoAddDialog(QDialog):
 
         layout = QVBoxLayout(self)
 
-        # Predefined folders
+        # Predefined folders/forms
         predefined_layout = QVBoxLayout()
-        predefined_label = QLabel("Predefined Folders:")
+        predefined_label = QLabel("Predefined Folders / Forms:")
         predefined_layout.addWidget(predefined_label)
 
         self.predefined_list = QListWidget()
@@ -74,11 +75,12 @@ class AutoAddDialog(QDialog):
         predefined_layout.addLayout(btn_layout)
         layout.addLayout(predefined_layout)
 
-        # Temporary folders
-        self.temp_input = QLineEdit()
+        # Temporary folders/forms
+        self.temp_input = QTextEdit()
         self.temp_input.setPlaceholderText(
-            "Enter folder names/IDs/URLs separated by commas..."
+            "Paste Google Form URLs or Drive folder URLs, separated by commas or new lines..."
         )
+        self.temp_input.setFixedHeight(72)
         layout.addWidget(self.temp_input)
 
         if self.mode != 'auto':
@@ -167,10 +169,10 @@ class AutoAddDialog(QDialog):
             self.predefined_list.addItem(folder)
 
     def add_to_predefined(self):
-        text = self.temp_input.text().strip()
+        text = self.temp_input.toPlainText().strip()
         if not text:
             return
-        new_folders = [f.strip() for f in text.split(',') if f.strip()]
+        new_folders = split_identifiers(text)
         existing = [
             self.predefined_list.item(i).text()
             for i in range(self.predefined_list.count())
@@ -194,11 +196,11 @@ class AutoAddDialog(QDialog):
             self.predefined_list.item(i).text()
             for i in range(self.predefined_list.count())
         ]
-        temp = [f.strip() for f in self.temp_input.text().split(',') if f.strip()]
+        temp = split_identifiers(self.temp_input.toPlainText())
         all_folders = list(set(predefined + temp))
 
         if not all_folders:
-            QMessageBox.warning(self, "No Folders", "Add at least one folder.")
+            QMessageBox.warning(self, "No Sources", "Add at least one folder or form URL.")
             return
 
         if self.mode == 'auto':

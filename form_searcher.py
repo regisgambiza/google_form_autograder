@@ -1,6 +1,7 @@
 # form_searcher.py - OPTIMIZED FOR AUTO MODE: USE FILTER FOR RECENT RESPONSES ONLY
 import json
 import random
+import re
 import time
 from datetime import datetime, timezone, timedelta
 from auth import get_drive_service, get_service
@@ -8,6 +9,28 @@ from logger import log
 from googleapiclient.errors import HttpError
 
 BANGKOK_TZ = timezone(timedelta(hours=7))
+
+
+def split_identifiers(identifiers):
+    if isinstance(identifiers, str):
+        raw_items = re.split(r"[\n,]+", identifiers)
+    else:
+        raw_items = []
+        for identifier in identifiers:
+            raw_items.extend(re.split(r"[\n,]+", str(identifier)))
+    return [item.strip() for item in raw_items if item.strip()]
+
+
+def extract_form_id(identifier):
+    identifier = identifier.strip()
+    match = re.search(r"docs\.google\.com/forms/d/(?:e/)?([^/?#]+)", identifier)
+    if match:
+        return match.group(1)
+    return None
+
+
+def normalize_form_url(form_id):
+    return f"https://docs.google.com/forms/d/{form_id}/edit"
 
 
 def _is_retryable_error(err):
@@ -48,8 +71,6 @@ def parse_folder_identifier(identifier):
     if identifier.startswith('http'):
         if '/folders/' in identifier:
             folder_id = identifier.split('/folders/')[1].split('?')[0]
-        elif '/d/' in identifier:
-            folder_id = identifier.split('/d/')[1].split('/')[0]
         else:
             log("WARNING", f"Invalid folder URL: {identifier}")
             return []
@@ -77,6 +98,20 @@ def parse_folder_identifier(identifier):
         return []
 
     return [f['id'] for f in folders]
+
+
+def get_form_title(form_id, progress_callback=None):
+    forms_service = get_service()
+    try:
+        form = _execute_with_retries(
+            forms_service.forms().get(formId=form_id),
+            context=f"Forms metadata get for {form_id}",
+            progress_callback=progress_callback,
+        )
+        return form.get("info", {}).get("title") or form.get("title") or "Untitled"
+    except Exception as e:
+        log("WARNING", f"Could not fetch title for form {form_id}: {e}")
+        return "Untitled"
 
 
 def get_last_submission_time(form_id, from_dt=None, progress_callback=None):
@@ -216,6 +251,101 @@ def find_forms_in_folder(folder_id, from_dt, to_dt, visited=None, progress_callb
     return matching
 
 
+def find_all_forms_in_folder(folder_id, visited=None, progress_callback=None, seen_forms=None):
+    if visited is None:
+        visited = set()
+    if seen_forms is None:
+        seen_forms = set()
+    if folder_id in visited:
+        return []
+
+    visited.add(folder_id)
+    drive_service = get_drive_service()
+
+    form_query = (
+        f"'{folder_id}' in parents and "
+        "mimeType='application/vnd.google-apps.form' and trashed=false"
+    )
+    try:
+        forms = _execute_with_retries(
+            drive_service.files().list(q=form_query, fields="files(id, name)"),
+            context=f"Drive forms list in folder {folder_id}",
+            progress_callback=progress_callback,
+        ).get('files', [])
+    except Exception as e:
+        log("ERROR", f"Drive forms list failed in folder {folder_id}: {e}")
+        return []
+
+    matching = []
+    for form in forms:
+        form_id = form['id']
+        if form_id in seen_forms:
+            continue
+        seen_forms.add(form_id)
+        matching.append({
+            "url": normalize_form_url(form_id),
+            "title": form.get('name', 'Untitled'),
+            "last_submission": None,
+        })
+
+    folder_query = (
+        f"'{folder_id}' in parents and "
+        "mimeType='application/vnd.google-apps.folder' and trashed=false"
+    )
+    try:
+        subfolders = _execute_with_retries(
+            drive_service.files().list(q=folder_query, fields="files(id)"),
+            context=f"Drive subfolder list in folder {folder_id}",
+            progress_callback=progress_callback,
+        ).get('files', [])
+    except Exception as e:
+        log("ERROR", f"Drive subfolder list failed in folder {folder_id}: {e}")
+        return matching
+
+    for sub in subfolders:
+        matching.extend(
+            find_all_forms_in_folder(sub['id'], visited, progress_callback, seen_forms)
+        )
+
+    return matching
+
+
+def find_all_forms_in_sources(sources, progress_callback=None):
+    all_folder_ids = set()
+    all_form_ids = set()
+    for ident in split_identifiers(sources):
+        form_id = extract_form_id(ident)
+        if form_id:
+            all_form_ids.add(form_id)
+            continue
+        all_folder_ids.update(parse_folder_identifier(ident))
+
+    all_forms = []
+    seen_forms = set()
+    for form_id in all_form_ids:
+        if form_id in seen_forms:
+            continue
+        seen_forms.add(form_id)
+        if progress_callback:
+            progress_callback(f"Adding form URL {form_id}")
+        all_forms.append({
+            "url": normalize_form_url(form_id),
+            "title": "Form",
+            "last_submission": None,
+        })
+
+    for folder_id in all_folder_ids:
+        if progress_callback:
+            progress_callback(f"Finding forms in folder {folder_id}")
+        all_forms.extend(
+            find_all_forms_in_folder(
+                folder_id, progress_callback=progress_callback, seen_forms=seen_forms
+            )
+        )
+
+    return list({f['url']: f for f in all_forms}.values())
+
+
 def find_forms_with_submissions_in_range(
     folder_identifiers, from_dt, to_dt, progress_callback=None
 ):
@@ -225,11 +355,35 @@ def find_forms_with_submissions_in_range(
         )
 
     all_folder_ids = set()
-    for ident in folder_identifiers:
+    all_form_ids = set()
+    for ident in split_identifiers(folder_identifiers):
+        form_id = extract_form_id(ident)
+        if form_id:
+            all_form_ids.add(form_id)
+            continue
         all_folder_ids.update(parse_folder_identifier(ident))
 
     all_forms = []
     seen_forms = set()
+    for form_id in all_form_ids:
+        if form_id in seen_forms:
+            continue
+        seen_forms.add(form_id)
+
+        if progress_callback:
+            progress_callback(f"Checking form URL {form_id}")
+
+        title = get_form_title(form_id, progress_callback=progress_callback)
+        last_ts = get_last_submission_time(
+            form_id, from_dt=from_dt, progress_callback=progress_callback
+        )
+        if last_ts and from_dt <= last_ts <= to_dt:
+            all_forms.append({
+                "url": normalize_form_url(form_id),
+                "title": title,
+                "last_submission": last_ts,
+            })
+
     for folder_id in all_folder_ids:
         if progress_callback:
             progress_callback(f"Searching folder {folder_id}")

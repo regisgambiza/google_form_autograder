@@ -161,11 +161,40 @@ def main():
     service = get_service()
 
     if str(config.get("dispatch_mode", "")).lower() == "global":
-        run_global_dispatcher(form_urls=form_urls, grade_recent_only=grade_recent_only, generate_report=generate_report)
-        log("INFO", "=== All forms processed via global dispatcher ===")
+        processed_count = 0
+        failed_count = 0
+        log("INFO", "[DISPATCH] Sequential form mode enabled: grading one queued form at a time.")
+        for idx, form_url in enumerate(form_urls, start=1):
+            form_id = "unknown"
+            try:
+                form_id = extract_form_id(form_url)
+            except Exception:
+                pass
+
+            print(f"Progress: {idx - 1}/{total_forms}")
+            log("INFO", f"Processing form ID: {form_id} from URL: {form_url}")
+            log("INFO", f"[FORM] QUEUED {idx}/{total_forms} | form_id={form_id}")
+            write_heartbeat("form_start")
+
+            try:
+                run_global_dispatcher(form_urls=[form_url], grade_recent_only=grade_recent_only, generate_report=generate_report)
+                processed_count += 1
+            except Exception as ex:
+                failed_count += 1
+                log("ERROR", f"Failed to process form: {form_url}")
+                log("ERROR", f"Form ID: {form_id} | Error: {ex}")
+                print(f"ERROR processing {form_url}: {ex}")
+
+            print(f"Progress: {idx}/{total_forms}")
+            write_heartbeat("form_complete")
+
+        if failed_count:
+            log("WARNING", f"=== Sequential dispatcher completed with failures. Completed {processed_count}/{total_forms}, failed {failed_count} ===")
+        else:
+            log("INFO", f"=== Sequential dispatcher completed. Completed {processed_count}/{total_forms} ===")
         log("INFO", "=== APP STATUS: FULLY FUNCTIONAL - Grading pipeline completed successfully ===")
         write_heartbeat("complete")
-        sys.exit(0)
+        sys.exit(1 if failed_count and processed_count == 0 else 0)
 
     # Global prefetch mode: fetch all forms/questions first with high concurrency.
     if bool(config.get("global_prefetch_mode", True)):

@@ -8,10 +8,10 @@ from PyQt5.QtWidgets import (
     QPushButton, QLineEdit, QListWidget, QListWidgetItem, QMessageBox,
     QTextEdit, QLabel, QComboBox, QCheckBox,
     QProgressDialog, QSplitter, QSpinBox, QDialog, QFormLayout, QTabWidget,
-    QSystemTrayIcon, QMenu, QAction, QStyle
+    QSystemTrayIcon, QMenu, QAction, QStyle, QFrame
 )
 
-from PyQt5.QtCore import Qt, QDate, QTimer
+from PyQt5.QtCore import Qt, QDate, QTimer, QSize
 from PyQt5.QtGui import QColor, QBrush, QFont, QPalette
 from datetime import datetime, timedelta, timezone, time
 import ctypes
@@ -19,7 +19,12 @@ import atexit
 
 # Local imports
 from auth import get_service, get_drive_service, get_classroom_service
-from form_searcher import find_forms_with_submissions_in_range, load_predefined_folders, save_predefined_folders
+from form_searcher import (
+    find_all_forms_in_sources,
+    find_forms_with_submissions_in_range,
+    load_predefined_folders,
+    save_predefined_folders,
+)
 from auto_add_dialog import AutoAddDialog, SearchThread
 from grader_thread import GraderThread
 from class_loader_thread import ClassLoaderThread
@@ -264,6 +269,71 @@ class FormManager(QMainWindow):
                 border-radius: 6px;
                 padding: 6px;
             }
+            QListWidget#FormQueueList {
+                background-color: #eef3f8;
+                border: 1px solid #c9d5e2;
+                border-radius: 8px;
+                padding: 8px;
+            }
+            QListWidget#FormQueueList::item {
+                border: none;
+                margin: 4px 0;
+            }
+            QFrame#FormCard {
+                background-color: #ffffff;
+                border: 1px solid #d7e0ea;
+                border-left: 5px solid #6c757d;
+                border-radius: 8px;
+            }
+            QFrame#FormCard[status="queued"] {
+                border-left-color: #0d6efd;
+            }
+            QFrame#FormCard[status="running"] {
+                border-left-color: #f59f00;
+                background-color: #fff9e8;
+            }
+            QFrame#FormCard[status="done"] {
+                border-left-color: #198754;
+                background-color: #f1fbf5;
+            }
+            QFrame#FormCard[status="failed"] {
+                border-left-color: #dc3545;
+                background-color: #fff3f3;
+            }
+            QLabel#FormTitle {
+                font-size: 14px;
+                font-weight: 700;
+                color: #1f2937;
+            }
+            QLabel#FormMeta {
+                font-size: 11px;
+                color: #5b6775;
+            }
+            QLabel#FormUrl {
+                font-size: 11px;
+                color: #0d6efd;
+            }
+            QLabel#StatusBadge {
+                font-size: 11px;
+                font-weight: 700;
+                color: white;
+                background-color: #6c757d;
+                border-radius: 10px;
+                padding: 3px 8px;
+            }
+            QLabel#StatusBadge[status="queued"] {
+                background-color: #0d6efd;
+            }
+            QLabel#StatusBadge[status="running"] {
+                background-color: #f59f00;
+                color: #342100;
+            }
+            QLabel#StatusBadge[status="done"] {
+                background-color: #198754;
+            }
+            QLabel#StatusBadge[status="failed"] {
+                background-color: #dc3545;
+            }
             QSplitter::handle {
                 background-color: #d0d0d0;
             }
@@ -303,8 +373,14 @@ class FormManager(QMainWindow):
         left_label = QLabel("Forms to Grade")
         left_label.setObjectName("Header")
         left_layout.addWidget(left_label)
+        self.form_queue_summary = QLabel("Queue idle")
+        self.form_queue_summary.setStyleSheet("color:#5b6775; font-size:12px;")
+        left_layout.addWidget(self.form_queue_summary)
 
         self.form_list = QListWidget()
+        self.form_list.setObjectName("FormQueueList")
+        self.form_list.setSpacing(6)
+        self.form_list.setUniformItemSizes(False)
         left_layout.addWidget(self.form_list)
 
         left_widget = QWidget()
@@ -357,9 +433,9 @@ class FormManager(QMainWindow):
         auto_add_button.clicked.connect(self.open_manual_add_dialog)
         auto_run_button = QPushButton("▶ Auto Run")
         auto_run_button.clicked.connect(self.open_auto_run_dialog)
-        grade_now_button = QPushButton("⚡ Grade Folder/URL")
+        grade_now_button = QPushButton("⚡ Grade Sources Now")
         grade_now_button.clicked.connect(self.open_quick_grade_dialog)
-        grade_all_button = QPushButton("📚 Grade All Folders")
+        grade_all_button = QPushButton("📚 Grade All Sources")
         grade_all_button.clicked.connect(self.grade_all_forms_in_all_folders)
         self.run_button = QPushButton("🚀 Run Now")
         self.run_button.clicked.connect(self.run_grader)
@@ -805,15 +881,10 @@ class FormManager(QMainWindow):
             with open("forms_to_grade.json", "r") as f:
                 data = json.load(f)
                 form_urls = data.get("forms", [])
-                for form in form_urls:
+                for position, form in enumerate(form_urls, start=1):
                     url = form.get("url") if isinstance(form, dict) else form
                     title = form.get("title", "Untitled") if isinstance(form, dict) else "Untitled"
-                    self.forms_data[url] = title
-                    display_text = f"{title} — {url}"
-                    item = QListWidgetItem(f"⏳ {display_text}")
-                    item.setData(Qt.UserRole, url)
-                    item.setForeground(QColor("#0d6efd"))
-                    self.form_list.addItem(item)
+                    self._add_form_to_queue(url, title, position=position)
         except (FileNotFoundError, json.JSONDecodeError):
             pass
 
@@ -821,6 +892,182 @@ class FormManager(QMainWindow):
         forms = [{"url": url, "title": self.forms_data[url]} for url in self.forms_data]
         with open("forms_to_grade.json", "w") as f:
             json.dump({"forms": forms}, f)
+
+    def _short_url(self, url):
+        if not url:
+            return "-"
+        clean = url.replace("https://", "").replace("http://", "")
+        return clean if len(clean) <= 78 else clean[:75] + "..."
+
+    def _form_meta(self, url, title, status="queued", position=None, source=None, last_submission=None):
+        form_id = self.extract_form_id(url) or "unknown"
+        return {
+            "url": url,
+            "title": title or "Untitled",
+            "form_id": form_id,
+            "status": status,
+            "position": position,
+            "source": source or "Queue",
+            "last_submission": last_submission,
+            "started_at": None,
+            "finished_at": None,
+            "detail": "Waiting for its turn",
+        }
+
+    def _status_label(self, status):
+        return {
+            "queued": "QUEUED",
+            "running": "RUNNING",
+            "done": "DONE",
+            "failed": "FAILED",
+        }.get(status, str(status).upper())
+
+    def _format_form_meta_line(self, meta):
+        parts = []
+        if meta.get("position"):
+            parts.append(f"#{meta.get('position')}")
+        parts.append(f"ID: {meta.get('form_id') or 'unknown'}")
+        if meta.get("source"):
+            parts.append(f"Source: {meta.get('source')}")
+        if meta.get("last_submission"):
+            parts.append(f"Last submission: {meta.get('last_submission')}")
+        if meta.get("started_at"):
+            parts.append(f"Started: {meta.get('started_at')}")
+        if meta.get("finished_at"):
+            parts.append(f"Finished: {meta.get('finished_at')}")
+        return "  |  ".join(parts)
+
+    def _make_form_row_widget(self, meta):
+        card = QFrame()
+        card.setObjectName("FormCard")
+        card.setProperty("status", meta.get("status", "queued"))
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(12, 9, 12, 9)
+        layout.setSpacing(5)
+
+        top = QHBoxLayout()
+        title = QLabel(meta.get("title", "Untitled"))
+        title.setObjectName("FormTitle")
+        title.setWordWrap(True)
+        badge = QLabel(self._status_label(meta.get("status", "queued")))
+        badge.setObjectName("StatusBadge")
+        badge.setProperty("status", meta.get("status", "queued"))
+        badge.setAlignment(Qt.AlignCenter)
+        top.addWidget(title, 1)
+        top.addWidget(badge, 0, Qt.AlignTop)
+
+        meta_label = QLabel(self._format_form_meta_line(meta))
+        meta_label.setObjectName("FormMeta")
+        meta_label.setWordWrap(True)
+        detail = QLabel(meta.get("detail", "Waiting for its turn"))
+        detail.setObjectName("FormMeta")
+        detail.setWordWrap(True)
+        url_label = QLabel(self._short_url(meta.get("url", "")))
+        url_label.setObjectName("FormUrl")
+        url_label.setWordWrap(True)
+
+        layout.addLayout(top)
+        layout.addWidget(meta_label)
+        layout.addWidget(detail)
+        layout.addWidget(url_label)
+        card._title_label = title
+        card._badge_label = badge
+        card._meta_label = meta_label
+        card._detail_label = detail
+        card._url_label = url_label
+        return card
+
+    def _refresh_form_row(self, item):
+        meta = item.data(Qt.UserRole + 1) or {}
+        widget = self.form_list.itemWidget(item)
+        if not widget:
+            return
+        status = meta.get("status", "queued")
+        widget.setProperty("status", status)
+        widget.style().unpolish(widget)
+        widget.style().polish(widget)
+        widget._title_label.setText(meta.get("title", "Untitled"))
+        widget._badge_label.setText(self._status_label(status))
+        widget._badge_label.setProperty("status", status)
+        widget._badge_label.style().unpolish(widget._badge_label)
+        widget._badge_label.style().polish(widget._badge_label)
+        widget._meta_label.setText(self._format_form_meta_line(meta))
+        widget._detail_label.setText(meta.get("detail", "Waiting for its turn"))
+        widget._url_label.setText(self._short_url(meta.get("url", "")))
+        item.setSizeHint(QSize(0, max(104, widget.sizeHint().height())))
+
+    def _add_form_to_queue(self, url, title, source="Queue", last_submission=None, position=None):
+        if not url:
+            return None
+        if url in self.forms_data:
+            return self._find_form_item_by_url(url)
+        self.forms_data[url] = title or "Untitled"
+        meta = self._form_meta(
+            url,
+            title,
+            position=position or self.form_list.count() + 1,
+            source=source,
+            last_submission=last_submission,
+        )
+        item = QListWidgetItem()
+        item.setData(Qt.UserRole, url)
+        item.setData(Qt.UserRole + 1, meta)
+        widget = self._make_form_row_widget(meta)
+        item.setSizeHint(QSize(0, 104))
+        self.form_list.addItem(item)
+        self.form_list.setItemWidget(item, widget)
+        self._refresh_queue_positions()
+        return item
+
+    def _find_form_item_by_url(self, url):
+        for i in range(self.form_list.count()):
+            item = self.form_list.item(i)
+            if item.data(Qt.UserRole) == url:
+                return item
+        return None
+
+    def _find_form_item_by_id(self, form_id):
+        for i in range(self.form_list.count()):
+            item = self.form_list.item(i)
+            meta = item.data(Qt.UserRole + 1) or {}
+            if meta.get("form_id") == form_id:
+                return item
+        return None
+
+    def _set_form_status(self, item, status, detail=None):
+        if not item:
+            return
+        meta = item.data(Qt.UserRole + 1) or {}
+        meta["status"] = status
+        if detail:
+            meta["detail"] = detail
+        now = datetime.now().strftime("%H:%M:%S")
+        if status == "running" and not meta.get("started_at"):
+            meta["started_at"] = now
+        if status in {"done", "failed"}:
+            meta["finished_at"] = now
+        item.setData(Qt.UserRole + 1, meta)
+        self._refresh_form_row(item)
+        self._refresh_queue_positions()
+
+    def _refresh_queue_positions(self):
+        counts = {"queued": 0, "running": 0, "done": 0, "failed": 0}
+        total = self.form_list.count()
+        for i in range(total):
+            item = self.form_list.item(i)
+            meta = item.data(Qt.UserRole + 1) or {}
+            meta["position"] = i + 1
+            status = meta.get("status", "queued")
+            counts[status] = counts.get(status, 0) + 1
+            item.setData(Qt.UserRole + 1, meta)
+            self._refresh_form_row(item)
+        if hasattr(self, "form_queue_summary"):
+            self.form_queue_summary.setText(
+                f"{total} forms | {counts.get('queued', 0)} queued | {counts.get('running', 0)} running | "
+                f"{counts.get('done', 0)} done | {counts.get('failed', 0)} failed"
+            )
+        if hasattr(self, "in_queue_label"):
+            self.in_queue_label.setText(f"In Queue: {counts.get('queued', 0)}")
 
     def remove_form(self):
         selected_items = self.form_list.selectedItems()
@@ -830,6 +1077,7 @@ class FormManager(QMainWindow):
                 del self.forms_data[url]
             self.form_list.takeItem(self.form_list.row(item))
         self.save_forms()
+        self._refresh_queue_positions()
 
     def clear_all_forms(self, confirm=False):
         if confirm:
@@ -839,12 +1087,14 @@ class FormManager(QMainWindow):
         self.form_list.clear()
         self.forms_data.clear()
         self.save_forms()
+        self._refresh_queue_positions()
 
     def clear_finished_forms_silently(self):
         i = 0
         while i < self.form_list.count():
             item = self.form_list.item(i)
-            if item.text().startswith("✅ "):
+            meta = item.data(Qt.UserRole + 1) or {}
+            if meta.get("status") == "done":
                 self.form_list.takeItem(i)
                 url = item.data(Qt.UserRole)
                 if url in self.forms_data:
@@ -852,6 +1102,7 @@ class FormManager(QMainWindow):
             else:
                 i += 1
         self.save_forms()
+        self._refresh_queue_positions()
 
     def open_manual_add_dialog(self):
         dialog = AutoAddDialog(self, mode='manual')
@@ -862,43 +1113,43 @@ class FormManager(QMainWindow):
         dialog.exec_()
 
     def open_quick_grade_dialog(self):
-        """Open a dialog to add a folder/form URL and grade immediately without checking submissions"""
+        """Open a dialog to add folder/form URLs and grade immediately without checking submissions."""
         from PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel
-        
+
         dialog = QDialog(self)
-        dialog.setWindowTitle("Grade Folder/Form Now")
-        dialog.setGeometry(100, 100, 500, 150)
-        
+        dialog.setWindowTitle("Grade Sources Now")
+        dialog.setGeometry(100, 100, 620, 260)
+
         layout = QVBoxLayout()
-        
-        label = QLabel("Enter a Google Drive folder URL or Google Form URL to grade immediately:")
+
+        label = QLabel("Paste Google Form URLs or Drive folder URLs to grade immediately:")
         layout.addWidget(label)
-        
-        input_field = QLineEdit()
-        input_field.setPlaceholderText("Paste folder URL or form URL here...")
+
+        input_field = QTextEdit()
+        input_field.setPlaceholderText("One URL per line, or separate URLs with commas...")
+        input_field.setFixedHeight(110)
         layout.addWidget(input_field)
-        
+
         button_layout = QHBoxLayout()
         ok_button = QPushButton("Grade")
         cancel_button = QPushButton("Cancel")
-        
+
         ok_button.clicked.connect(dialog.accept)
         cancel_button.clicked.connect(dialog.reject)
-        
+
         button_layout.addWidget(ok_button)
         button_layout.addWidget(cancel_button)
         layout.addLayout(button_layout)
-        
+
         dialog.setLayout(layout)
-        
+
         if dialog.exec_() == QDialog.Accepted:
-            url = input_field.text().strip()
-            if not url:
-                QMessageBox.warning(self, "Empty Input", "Please enter a URL")
+            sources = input_field.toPlainText().strip()
+            if not sources:
+                QMessageBox.warning(self, "Empty Input", "Please enter at least one URL")
                 return
-            
-            # Grade immediately without checking last submissions
-            self.grade_url_immediately(url)
+
+            self.grade_url_immediately(sources)
 
     def update_evaluator(self, text):
         if "Semantic Pipeline" in text:
@@ -973,6 +1224,36 @@ class FormManager(QMainWindow):
     def grade_url_immediately(self, url):
         """Grade a folder or form URL immediately without checking last submissions"""
         try:
+            forms = find_all_forms_in_sources(
+                url,
+                progress_callback=lambda msg: self.append_debug(f"[GRADE NOW] {msg}")
+            )
+
+            if not forms:
+                QMessageBox.warning(self, "No Forms Found", "Could not find any accessible forms at that URL")
+                return
+
+            new_added = 0
+            for form_data in forms:
+                form_url = form_data.get("url")
+                form_title = form_data.get("title", "Untitled")
+                if not form_url:
+                    continue
+
+                if form_url not in self.forms_data:
+                    self._add_form_to_queue(form_url, form_title, source="Grade Now")
+                    new_added += 1
+
+            self.append_debug(
+                f"✅ Grade Now: Found {len(forms)} form(s), added {new_added} new form(s) to queue"
+            )
+
+            self.update_in_queue_label()
+            self.save_forms()
+            self.grading_mode = "Whole Form"
+            self.run_grader()
+            return
+
             from datetime import datetime, timezone, timedelta
             
             # Check if it's a direct form URL or a folder URL
@@ -983,12 +1264,7 @@ class FormManager(QMainWindow):
                 
                 # Add directly without searching
                 if form_url not in self.forms_data:
-                    self.forms_data[form_url] = "Form"
-                    display_text = f"Form — {form_url}"
-                    item = QListWidgetItem(f"⏳ {display_text}")
-                    item.setData(Qt.UserRole, form_url)
-                    item.setForeground(QColor("#0d6efd"))
-                    self.form_list.addItem(item)
+                    self._add_form_to_queue(form_url, "Form", source="Direct URL")
                 
                 self.append_debug(f"✅ Added form: {form_id}")
                 
@@ -1017,12 +1293,7 @@ class FormManager(QMainWindow):
                     form_title = form_data.get("title", "Untitled")
                     
                     if form_url not in self.forms_data:
-                        self.forms_data[form_url] = form_title
-                        display_text = f"{form_title} — {form_url}"
-                        item = QListWidgetItem(f"⏳ {display_text}")
-                        item.setData(Qt.UserRole, form_url)
-                        item.setForeground(QColor("#0d6efd"))
-                        self.form_list.addItem(item)
+                        self._add_form_to_queue(form_url, form_title, source="Folder Search")
                 
                 self.append_debug(f"✅ Found {len(folder_ids)} forms in folder")
             
@@ -1040,18 +1311,18 @@ class FormManager(QMainWindow):
             self.append_debug(f"❌ Error: {str(e)}")
 
     def grade_all_forms_in_all_folders(self):
-        """Find and grade all forms from all predefined folders, ignoring date windows."""
+        """Find and grade all forms from all predefined folders/forms, ignoring date windows."""
         try:
             folders = load_predefined_folders()
             if not folders:
                 QMessageBox.warning(
                     self,
-                    "No Predefined Folders",
-                    "Add folders in Auto Find first, then use Grade All Folders.",
+                    "No Predefined Sources",
+                    "Add folders or form URLs in Auto Find first, then use Grade All.",
                 )
                 return
 
-            self.append_debug(f"📚 Grade All: Searching all forms in {len(folders)} folder(s)")
+            self.append_debug(f"📚 Grade All: Searching all forms in {len(folders)} source(s)")
             from_dt = datetime(1970, 1, 1, tzinfo=timezone.utc)
             to_dt = datetime.now(timezone.utc) + timedelta(days=1)
 
@@ -1066,7 +1337,7 @@ class FormManager(QMainWindow):
                 QMessageBox.information(
                     self,
                     "No Forms Found",
-                    "No accessible forms with responses were found in your predefined folders.",
+                    "No accessible forms with responses were found in your predefined folders/forms.",
                 )
                 return
 
@@ -1075,12 +1346,7 @@ class FormManager(QMainWindow):
                 form_url = form.get("url")
                 form_title = form.get("title", "Untitled")
                 if form_url and form_url not in self.forms_data:
-                    self.forms_data[form_url] = form_title
-                    display_text = f"{form_title} — {form_url}"
-                    item = QListWidgetItem(f"⏳ {display_text}")
-                    item.setData(Qt.UserRole, form_url)
-                    item.setForeground(QColor("#0d6efd"))
-                    self.form_list.addItem(item)
+                    self._add_form_to_queue(form_url, form_title, source="Grade All")
                     new_added += 1
 
             self.save_forms()
@@ -1097,7 +1363,13 @@ class FormManager(QMainWindow):
             self.append_debug(f"❌ Grade All failed: {str(e)}")
 
     def update_in_queue_label(self):
-        self.in_queue_label.setText(f"⏳ In Queue: {self.form_list.count()}")
+        queued = 0
+        for i in range(self.form_list.count()):
+            meta = self.form_list.item(i).data(Qt.UserRole + 1) or {}
+            if meta.get("status", "queued") == "queued":
+                queued += 1
+        self.in_queue_label.setText(f"In Queue: {queued}")
+        self._refresh_queue_positions()
 
     def _get_next_run_time(self):
         """Calculate the next run time based on schedule settings"""
@@ -1254,13 +1526,7 @@ class FormManager(QMainWindow):
                 last_str = last.astimezone(BANGKOK_TZ).strftime("%Y-%m-%d %H:%M:%S ICT")
             else:
                 last_str = "None"
-            display_text = f"{title} (Last submission: {last_str}) — {url}"
-
-            item = QListWidgetItem(f"⏳ {display_text}")
-            item.setData(Qt.UserRole, url)
-            item.setForeground(QColor("#0d6efd"))
-            self.form_list.addItem(item)
-            self.forms_data[url] = title
+            self._add_form_to_queue(url, title, source="Auto Find", last_submission=last_str)
             new_added += 1
 
         if found_urls:
@@ -1441,6 +1707,16 @@ class FormManager(QMainWindow):
         self.debug_output.clear()
         self.debug_lines = []
         self.finished_forms = []
+        for i in range(self.form_list.count()):
+            item = self.form_list.item(i)
+            meta = item.data(Qt.UserRole + 1) or {}
+            meta["status"] = "queued"
+            meta["started_at"] = None
+            meta["finished_at"] = None
+            meta["detail"] = "Waiting for its turn"
+            item.setData(Qt.UserRole + 1, meta)
+            self._refresh_form_row(item)
+        self._refresh_queue_positions()
         wp_enabled = False
         try:
             with open("config.json", "r", encoding="utf-8") as f:
@@ -1458,7 +1734,7 @@ class FormManager(QMainWindow):
         self.grader_thread.progress.connect(self.update_progress)
         self.grader_thread.overall_progress.connect(self.update_overall_progress)
         self.grader_thread.debug_message.connect(self.append_debug)
-        self.grader_thread.current_form.connect(lambda url: self.current_label.setText(f"🟡 Processing: {url.split('/')[-2][:10]}..."))
+        self.grader_thread.current_form.connect(self.update_current_form)
         self.grader_thread.finished_form.connect(self.update_finished_form)
         self.grader_thread.start()
 
@@ -1468,24 +1744,34 @@ class FormManager(QMainWindow):
     def update_overall_progress(self, cur, tot):
         if not tot:
             return
-        self.in_queue_label.setText(f"⏳ In Queue: {tot - cur}")
+        self.in_queue_label.setText(f"In Queue: {max(0, tot - cur)}")
+
+    def update_current_form(self, url):
+        item = self._find_form_item_by_url(url)
+        title = "Current form"
+        if item:
+            meta = item.data(Qt.UserRole + 1) or {}
+            title = meta.get("title", title)
+            self._set_form_status(
+                item,
+                "running",
+                "Grading now: fetching responses, evaluating answers, and applying updates",
+            )
+            self.form_list.scrollToItem(item)
+        self.current_label.setText(f"Processing: {title[:48]}")
 
     def update_finished_form(self, form_id):
         self.finished_forms.append(form_id)
         now_str = datetime.now().strftime("%H:%M:%S")
-        
-        for i in range(self.form_list.count()):
-            item = self.form_list.item(i)
-            url = item.data(Qt.UserRole)
-            if url and self.extract_form_id(url) == form_id:
-                current_text = item.text().replace("⏳ ", "")
-                title = current_text.split(" — ")[0] if " — " in current_text else "Unknown Form"
-                item.setText(f"✅ {current_text}")
-                item.setForeground(QColor("#198754"))
-                self.append_debug(f"<font color='green'>[AUTO {now_str}] ✅ Completed: {title}</font>")
-                break
-        
-        self.finished_label.setText(f"✅ Finished: {len(self.finished_forms)}")
+        item = self._find_form_item_by_id(form_id)
+        title = "Unknown Form"
+        if item:
+            meta = item.data(Qt.UserRole + 1) or {}
+            title = meta.get("title", title)
+            self._set_form_status(item, "done", "Finished and saved grading updates")
+        self.append_debug(f"<font color='green'>[AUTO {now_str}] Completed: {title}</font>")
+        self.finished_label.setText(f"Finished: {len(self.finished_forms)}")
+
     def is_timing_line(self, message):
         return "Timing " in message
 
@@ -1551,6 +1837,7 @@ class FormManager(QMainWindow):
         q_pending = self._extract_metric_int(payload, "pending")
         q_det = self._extract_metric_int(payload, "q_det")
         q_ai = self._extract_metric_int(payload, "q_ai")
+        q_ai_actual = self._extract_metric_int(payload, "q_ai_actual")
         q_result = self._extract_metric_int(payload, "q_result")
         done = None
         total = None
@@ -1571,14 +1858,15 @@ class FormManager(QMainWindow):
         p = "-" if q_fetch is None else str(q_fetch)
         pb = "-" if q_pending is None else str(q_pending)
         d = "-" if q_det is None else str(q_det)
-        a = "-" if q_ai is None else str(q_ai)
+        q_ai_display = q_ai_actual if q_ai_actual is not None else q_ai
+        a = "-" if q_ai_display is None else str(q_ai_display)
         r = "-" if q_result is None else str(q_result)
 
         self.log_tabs.setTabText(1, f"Producer (q: {p}, buf: {pb})")
         self.log_tabs.setTabText(2, f"Det Workers (q: {d})")
         self.log_tabs.setTabText(3, f"AI Workers (q: {a})")
         self.log_tabs.setTabText(4, f"Aggregator (q: {r})")
-        self._update_pipeline_state(q_fetch, q_pending, q_det, q_ai, q_result, done, total)
+        self._update_pipeline_state(q_fetch, q_pending, q_det, q_ai_display, q_result, done, total)
 
     def _update_pipeline_state(self, q_fetch, q_pending, q_det, q_ai, q_result, done, total):
         state = "Unknown"
@@ -1636,14 +1924,18 @@ class FormManager(QMainWindow):
         
         if not success:
             self.run_state_label.setText("Run State: Failed")
+            for i in range(self.form_list.count()):
+                item = self.form_list.item(i)
+                meta = item.data(Qt.UserRole + 1) or {}
+                if meta.get("status") == "running":
+                    self._set_form_status(item, "failed", msg or "Grading process failed")
             self.append_debug(f"<font color='red'>[AUTO {now_str}] ❌ Grading failed: {msg}</font>")
         else:
+            self.run_state_label.setText("Run State: Completed")
             self.append_debug(f"<font color='green'>[AUTO {now_str}] ✅ Grading completed successfully!</font>")
             self.append_debug("<b><font color='green'>ALL FORMS FINISHED. Grading run complete.</font></b>")
             if not self.auto_mode:
-                cleared_count = self.form_list.count()
-                self.clear_all_forms(confirm=False)
-                self.append_debug(f"<font color='gray'>[GRADER] Cleared {cleared_count} forms from queue</font>")
+                self.append_debug("<font color='gray'>[GRADER] Completed forms remain visible for review. Use Clear All when ready.</font>")
 
         if self.auto_mode:
             # Clear finished forms
@@ -1664,7 +1956,8 @@ class FormManager(QMainWindow):
             i = 0
             while i < self.form_list.count():
                 item = self.form_list.item(i)
-                if item.text().startswith("✅ "):
+                meta = item.data(Qt.UserRole + 1) or {}
+                if meta.get("status") == "done":
                     self.form_list.takeItem(i)
                     url = item.data(Qt.UserRole)
                     if url in self.forms_data:
@@ -1676,6 +1969,7 @@ class FormManager(QMainWindow):
             if forms_cleared > 0:
                 self.append_debug(f"<font color='gray'>[AUTO] 🗑️ Cleared {forms_cleared} finished forms from queue</font>")
                 self.save_forms()
+                self._refresh_queue_positions()
             
             remaining_forms = self.form_list.count()
             finished_count = len(self.finished_forms)

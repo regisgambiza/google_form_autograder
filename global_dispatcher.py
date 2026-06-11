@@ -86,7 +86,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
     forms_total = len(form_urls)
     metrics_lock = threading.Lock()
     counters = {"fetch": 0, "det": 0, "ai": 0, "apply": 0}
-    progress = {"expected_tasks": 0, "completed": 0, "last_progress_ts": time.time(), "pending_buffer": 0}
+    progress = {"expected_tasks": 0, "completed": 0, "last_progress_ts": time.time(), "pending_buffer": 0, "ai_backlog": 0}
     queue_progress = {"last_any_work_ts": time.time(), "last_snapshot": (0, 0, 0, 0)}
     ai_progress = {"last_ai_done_ts": time.time()}
     task_builder_metrics = {"built": 0, "enqueued": 0, "last_emit": time.time()}
@@ -130,6 +130,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
             last_emit = float(task_builder_metrics["last_emit"])
             pending = int(progress.get("pending_buffer", 0))
             expected = int(progress.get("expected_tasks", 0))
+            ai_backlog = int(progress.get("ai_backlog", 0))
         dt = max(0.001, now - last_emit)
         if (not force) and dt < 1.0:
             return
@@ -145,6 +146,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
             "q_fetch": fetch_out.qsize(),
             "q_det": det_q.qsize(),
             "q_ai": ai_q.qsize(),
+            "q_ai_actual": ai_backlog,
             "q_result": result_q.qsize(),
             "wm_low": det_q_low_wm,
             "wm_high": det_q_high_wm,
@@ -382,6 +384,18 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
             failed.set()
             stop.set()
 
+    def enqueue_ai_task(t: Task):
+        # Count logical AI backlog separately from the bounded queue buffer so
+        # metrics do not plateau at ai_q.maxsize when the AI worker falls behind.
+        with metrics_lock:
+            progress["ai_backlog"] += 1
+        try:
+            ai_q.put(t)
+        except Exception:
+            with metrics_lock:
+                progress["ai_backlog"] = max(0, progress["ai_backlog"] - 1)
+            raise
+
     def det_worker():
         log("INFO", "[Worker: Deterministic] START det_worker")
         while not stop.is_set():
@@ -408,11 +422,11 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                     with metrics_lock:
                         counters["det"] += 1
                 else:
-                    ai_q.put(t)
+                    enqueue_ai_task(t)
             except Exception as exx:
                 log("WARNING", f"[DISPATCH] deterministic worker failed: {exx}")
                 try:
-                    ai_q.put(t)
+                    enqueue_ai_task(t)
                 except Exception:
                     pass
 
@@ -454,6 +468,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                 with metrics_lock:
                     counters["ai"] += 1
                     ai_progress["last_ai_done_ts"] = time.time()
+                    progress["ai_backlog"] = max(0, progress["ai_backlog"] - 1)
             except Exception:
                 pass
 
@@ -495,16 +510,16 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                 with metrics_lock:
                     f = counters["fetch"]; d = counters["det"]; a = counters["ai"]; ap = counters["apply"]
                     counters["fetch"] = counters["det"] = counters["ai"] = counters["apply"] = 0
-                    exp = progress["expected_tasks"]; comp = progress["completed"]; lp = progress["last_progress_ts"]; pb = progress["pending_buffer"]
+                    exp = progress["expected_tasks"]; comp = progress["completed"]; lp = progress["last_progress_ts"]; pb = progress["pending_buffer"]; ai_backlog = progress["ai_backlog"]
                 log(
                     "INFO",
                     f"[DISPATCH METRICS] fetch/s={f/dt:.2f} det/s={d/dt:.2f} ai/s={a/dt:.2f} apply/s={ap/dt:.2f} "
-                    f"q_fetch={fetch_out.qsize()} q_det={det_q.qsize()} q_ai={ai_q.qsize()} q_result={result_q.qsize()} "
+                    f"q_fetch={fetch_out.qsize()} q_det={det_q.qsize()} q_ai={ai_q.qsize()} q_ai_actual={ai_backlog} q_result={result_q.qsize()} "
                     f"pending={pb} wm={det_q_low_wm}/{det_q_high_wm} done={comp}/{exp}",
                 )
                 log("INFO", f"[Worker: Producer] heartbeat q_fetch={fetch_out.qsize()} pending={pb}")
                 log("INFO", f"[Worker: Deterministic] heartbeat q_det={det_q.qsize()} det_s={d/dt:.2f}")
-                log("INFO", f"[Worker: AI] heartbeat q_ai={ai_q.qsize()} ai_s={a/dt:.2f}")
+                log("INFO", f"[Worker: AI] heartbeat q_ai_actual={ai_backlog} q_ai_buffer={ai_q.qsize()} ai_s={a/dt:.2f}")
                 log("INFO", f"[Worker: Aggregator] heartbeat q_result={result_q.qsize()} done={comp}/{exp}")
                 snapshot = (fetch_out.qsize(), det_q.qsize(), ai_q.qsize(), result_q.qsize())
                 with metrics_lock:
@@ -549,6 +564,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                         with metrics_lock:
                             ai_progress["last_ai_done_ts"] = time.time()
                             counters["ai"] += drained
+                            progress["ai_backlog"] = max(0, progress["ai_backlog"] - drained)
                         log("ERROR", f"[DISPATCH] AI stall fail-safe activated: drained {drained} queued AI tasks")
             except Exception as ex:
                 log("ERROR", f"[Worker: Metrics] reporter loop exception: {ex}")
