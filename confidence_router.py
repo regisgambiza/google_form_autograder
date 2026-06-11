@@ -30,10 +30,10 @@ def _extract_json(raw: str) -> dict:
 def invoke_reasoning_fallback(answer: str, question: str, rubric: Dict[str, object], judge_scores: Dict[str, float], model: Optional[str] = None) -> Tuple[str, float, str]:
     """Run reasoning fallback and strip hidden chain-of-thought tags with timeout protection."""
     start = time.perf_counter()
-    log("INFO", f"START reasoning_fallback (model=gemma3:12b)")
     cfg = load_config()
     model = model or cfg.get("reasoning_model")
     timeout_seconds = cfg.get("max_latency_per_answer_seconds", 30)
+    log("INFO", f"START reasoning_fallback (model={model})")
     prompt = (
         f"Question: {question}\n"
         f"Answer: {answer}\n"
@@ -62,7 +62,7 @@ def invoke_reasoning_fallback(answer: str, question: str, rubric: Dict[str, obje
                 predict_key="fallback_num_predict",
                 default_predict=512,
             )
-            raw = ollama.chat(model=model, messages=[{"role": "user", "content": prompt}], options=options, timeout=timeout_seconds)["message"]["content"]
+            raw = ollama.chat(model=model, messages=[{"role": "user", "content": prompt}], options=options)["message"]["content"]
             result_queue.put(("success", raw))
         except Exception as e:
             exception_queue.put(e)
