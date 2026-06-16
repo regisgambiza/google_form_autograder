@@ -273,6 +273,15 @@ class AutoAddDialog(QDialog):
             text = f"{title} (Last submission: {last_str}) — {url}"
 
             if url not in parent.forms_data:
+                if hasattr(parent, "_add_form_to_queue"):
+                    parent._add_form_to_queue(
+                        url,
+                        title,
+                        source="Auto Find",
+                        last_submission=last_str,
+                    )
+                    added = True
+                    continue
                 parent.forms_data[url] = title
                 item = QListWidgetItem(f"⏳ {text}")
                 item.setData(Qt.UserRole, url)
@@ -282,6 +291,8 @@ class AutoAddDialog(QDialog):
                 added = True
 
         parent.save_forms()
+        if hasattr(parent, "_refresh_queue_positions"):
+            parent._refresh_queue_positions()
 
         if self.mode == 'auto':
             # Store settings in parent

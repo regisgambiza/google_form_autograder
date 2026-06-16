@@ -19,6 +19,36 @@ from global_prefetch import prefetch_all_forms
 from global_dispatcher import run_global_dispatcher
 from ai_judges import prewarm_judge_runtime
 
+_GRADER_LOCK_FH = None
+
+
+def acquire_grader_lock():
+    """Prevent overlapping grader processes from corrupting queues/logs/caches."""
+    global _GRADER_LOCK_FH
+    os.makedirs("logs", exist_ok=True)
+    lock_path = os.path.abspath(os.path.join("logs", "grader.lock"))
+    fh = open(lock_path, "a+", encoding="utf-8")
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        print("ERROR: Another grader process is already running. Stop it before starting a new run.", flush=True)
+        fh.close()
+        sys.exit(2)
+
+    fh.seek(0)
+    fh.truncate()
+    fh.write(str(os.getpid()))
+    fh.flush()
+    _GRADER_LOCK_FH = fh
+
 
 def write_heartbeat(hang_stage: str = "unknown"):
     try:
@@ -137,6 +167,7 @@ def _prepare_form(service, idx: int, total_forms: int, form_url: str, grade_rece
 
 
 def main():
+    acquire_grader_lock()
     log("INFO", "=== Google Form Autograder Started ===")
     log("INFO", f"Execution Mode: {config.get('execution_mode', 'Balanced')}")
     prewarm_judge_runtime()

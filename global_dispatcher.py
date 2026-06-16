@@ -396,6 +396,54 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                 progress["ai_backlog"] = max(0, progress["ai_backlog"] - 1)
             raise
 
+    def evaluate_answer_bounded(t: Task) -> EvaluationResult:
+        hard_timeout_s = max(
+            float(cfg.get("max_latency_per_answer_seconds", 45.0)) + 45.0,
+            float(cfg.get("answer_hard_timeout_seconds", 120.0)),
+        )
+        result_holder: "queue.Queue[tuple[str, object]]" = queue.Queue(maxsize=1)
+
+        def _runner():
+            try:
+                result_holder.put((
+                    "ok",
+                    evaluate_answer(t.answer, t.expected, str(t.question.get("title", ""))),
+                ))
+            except Exception as ex:
+                result_holder.put(("error", ex))
+
+        worker = threading.Thread(target=_runner, name="evaluate-answer", daemon=True)
+        worker.start()
+        worker.join(timeout=hard_timeout_s)
+        if worker.is_alive():
+            log(
+                "ERROR",
+                f"[DISPATCH] answer hard timeout after {hard_timeout_s:.1f}s "
+                f"form_id={t.form_id} question_id={t.question.get('questionId')} answer_idx={t.answer_idx}",
+            )
+            return EvaluationResult(
+                answer=t.answer,
+                decision="NO",
+                final_score=0.0,
+                semantic_score=0.0,
+                concept_score=0.0,
+                factual_score=0.0,
+                misconception_detected=False,
+                misconception_description="answer_hard_timeout",
+                missing_concepts=[],
+                accepted_concepts=[],
+                model_agreement=0.0,
+                confidence=0.0,
+                fast_path_used=False,
+                latency_ms=hard_timeout_s * 1000.0,
+                stage_reached="answer_hard_timeout",
+            )
+
+        status, payload = result_holder.get()
+        if status == "ok":
+            return payload
+        raise payload
+
     def det_worker():
         log("INFO", "[Worker: Deterministic] START det_worker")
         while not stop.is_set():
@@ -443,7 +491,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
 
             started = time.perf_counter()
             try:
-                r = evaluate_answer(t.answer, t.expected, str(t.question.get("title", "")))
+                r = evaluate_answer_bounded(t)
             except Exception as exx:
                 log("ERROR", f"[DISPATCH] ai worker error: {exx}")
                 r = EvaluationResult(

@@ -122,7 +122,8 @@ def get_or_generate_rubric(question: str, expected: Union[str, List[str]], quest
                 return QUESTION_RUBRIC_CACHE[qkey]
     
         start = time.perf_counter()
-        log("INFO", f"START rubric_generate (model=gemma3:12b, question_id={question_id})")
+        cfg = load_config()
+        log("INFO", f"START rubric_generate (model={cfg.get('rubric_model', 'default')}, question_id={question_id})")
 
         # Generate new rubric
         exp_text = _expected_text(expected)

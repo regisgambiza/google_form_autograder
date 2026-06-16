@@ -100,7 +100,7 @@ def parse_folder_identifier(identifier):
     return [f['id'] for f in folders]
 
 
-def get_form_title(form_id, progress_callback=None):
+def get_form_title(form_id, progress_callback=None, fallback_title="Untitled"):
     forms_service = get_service()
     try:
         form = _execute_with_retries(
@@ -108,10 +108,10 @@ def get_form_title(form_id, progress_callback=None):
             context=f"Forms metadata get for {form_id}",
             progress_callback=progress_callback,
         )
-        return form.get("info", {}).get("title") or form.get("title") or "Untitled"
+        return form.get("info", {}).get("title") or form.get("title") or fallback_title
     except Exception as e:
         log("WARNING", f"Could not fetch title for form {form_id}: {e}")
-        return "Untitled"
+        return fallback_title
 
 
 def get_last_submission_time(form_id, from_dt=None, progress_callback=None):
@@ -207,13 +207,14 @@ def find_forms_in_folder(folder_id, from_dt, to_dt, visited=None, progress_callb
 
     for form in forms:
         form_id = form['id']
-        title = form.get('name', 'Untitled')
         
         # Skip if we've already processed this form
         if form_id in seen_forms:
-            log("DEBUG", f"Skipping duplicate form check: {title} (already checked)")
+            log("DEBUG", f"Skipping duplicate form check: {form_id} (already checked)")
             continue
         seen_forms.add(form_id)
+        drive_title = form.get('name', 'Untitled')
+        title = get_form_title(form_id, progress_callback=progress_callback, fallback_title=drive_title)
 
         if progress_callback:
             progress_callback(f"Checking form: {title}")
@@ -284,7 +285,11 @@ def find_all_forms_in_folder(folder_id, visited=None, progress_callback=None, se
         seen_forms.add(form_id)
         matching.append({
             "url": normalize_form_url(form_id),
-            "title": form.get('name', 'Untitled'),
+            "title": get_form_title(
+                form_id,
+                progress_callback=progress_callback,
+                fallback_title=form.get('name', 'Untitled'),
+            ),
             "last_submission": None,
         })
 
@@ -330,7 +335,7 @@ def find_all_forms_in_sources(sources, progress_callback=None):
             progress_callback(f"Adding form URL {form_id}")
         all_forms.append({
             "url": normalize_form_url(form_id),
-            "title": "Form",
+            "title": get_form_title(form_id, progress_callback=progress_callback),
             "last_submission": None,
         })
 

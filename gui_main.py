@@ -426,6 +426,9 @@ class FormManager(QMainWindow):
         self.form_list.setObjectName("FormQueueList")
         self.form_list.setSpacing(6)
         self.form_list.setUniformItemSizes(False)
+        self.form_list.setWordWrap(True)
+        self.form_list.setTextElideMode(Qt.ElideRight)
+        self.form_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         left_layout.addWidget(self.form_list)
 
         left_widget = QWidget()
@@ -1026,7 +1029,25 @@ class FormManager(QMainWindow):
         meta = item.data(Qt.UserRole + 1) or {}
         widget = self.form_list.itemWidget(item)
         if not widget:
-            return
+            old_meta = meta
+            url = meta.get("url") or item.data(Qt.UserRole) or ""
+            title = meta.get("title") or self.forms_data.get(url) or self._title_from_legacy_item(item, url)
+            meta = self._form_meta(
+                url,
+                title,
+                status=old_meta.get("status", "queued"),
+                position=old_meta.get("position"),
+                source=old_meta.get("source", "Queue"),
+                last_submission=old_meta.get("last_submission"),
+            )
+            meta["started_at"] = old_meta.get("started_at")
+            meta["finished_at"] = old_meta.get("finished_at")
+            meta["detail"] = old_meta.get("detail", "Waiting for its turn")
+            item.setData(Qt.UserRole, url)
+            item.setData(Qt.UserRole + 1, meta)
+            item.setText("")
+            widget = self._make_form_row_widget(meta)
+            self.form_list.setItemWidget(item, widget)
         status = meta.get("status", "queued")
         widget.setProperty("status", status)
         widget.style().unpolish(widget)
@@ -1041,11 +1062,40 @@ class FormManager(QMainWindow):
         widget._url_label.setText(self._short_url(meta.get("url", "")))
         item.setSizeHint(QSize(0, max(104, widget.sizeHint().height())))
 
+    def _title_from_legacy_item(self, item, url):
+        text = (item.text() or "").strip()
+        if text and not text[0].isalnum():
+            text = text[1:].strip()
+        if " (Last submission:" in text:
+            text = text.split(" (Last submission:", 1)[0].strip()
+        elif "http" in text:
+            text = text[:text.find("http")].strip(" -")
+        return text or self.forms_data.get(url) or "Untitled"
+
+    def _is_placeholder_form_title(self, title):
+        return str(title or "").strip().lower() in {"", "form", "untitled"}
+
     def _add_form_to_queue(self, url, title, source="Queue", last_submission=None, position=None):
         if not url:
             return None
         if url in self.forms_data:
-            return self._find_form_item_by_url(url)
+            item = self._find_form_item_by_url(url)
+            incoming_title = title or "Untitled"
+            if item:
+                meta = item.data(Qt.UserRole + 1) or {}
+                current_title = meta.get("title") or self.forms_data.get(url)
+                if not self._is_placeholder_form_title(incoming_title) and incoming_title != current_title:
+                    meta["title"] = incoming_title
+                    self.forms_data[url] = incoming_title
+                if source:
+                    meta["source"] = source
+                if last_submission:
+                    meta["last_submission"] = last_submission
+                item.setData(Qt.UserRole + 1, meta)
+                self._refresh_form_row(item)
+            elif not self._is_placeholder_form_title(incoming_title):
+                self.forms_data[url] = incoming_title
+            return item
         self.forms_data[url] = title or "Untitled"
         meta = self._form_meta(
             url,
@@ -1057,6 +1107,7 @@ class FormManager(QMainWindow):
         item = QListWidgetItem()
         item.setData(Qt.UserRole, url)
         item.setData(Qt.UserRole + 1, meta)
+        item.setText("")
         widget = self._make_form_row_widget(meta)
         item.setSizeHint(QSize(0, 104))
         self.form_list.addItem(item)
@@ -1705,7 +1756,8 @@ class FormManager(QMainWindow):
                 "$p='" + project_path + "'; "
                 f"$self={current_pid}; "
                 "Get-CimInstance Win32_Process | "
-                "Where-Object {($_.Name -in @('python.exe','pythonw.exe')) -and $_.ProcessId -ne $self -and $_.CommandLine -like \"*$p*\"} | "
+                "Where-Object {($_.Name -in @('python.exe','pythonw.exe')) -and $_.ProcessId -ne $self -and "
+                "($_.CommandLine -like \"*$p*\" -or $_.CommandLine -match '(^|[\\\\/\\s\"''])(main\\.py)([\"''\\s]|$)')} | "
                 "ForEach-Object { try { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop } catch {} }"
             )
             subprocess.run(["powershell", "-NoProfile", "-Command", ps_script], check=False)

@@ -6,7 +6,7 @@ import threading
 import queue
 from typing import Dict, Optional
 
-import ollama
+import requests
 
 from evaluator_config import load_config, sha256_text
 from logger import log
@@ -48,6 +48,40 @@ SYSTEM_PROMPT = (
     "IMPORTANT: Start your response with '{' and end with '}'. Nothing else."
 )
 REQUIRED_KEYS = ["required_concepts", "optional_concepts", "acceptable_paraphrases", "critical_errors", "strict_keywords", "misconceptions", "grading_notes"]
+
+
+def _ollama_chat_url() -> str:
+    return os.environ.get("OLLAMA_CHAT_URL", "http://127.0.0.1:11434/api/chat")
+
+
+def _find_balanced_json_object(clean: str) -> Optional[str]:
+    start = clean.find("{")
+    if start < 0:
+        return None
+
+    depth = 0
+    in_string = False
+    escaped = False
+    for idx in range(start, len(clean)):
+        ch = clean[idx]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return clean[start:idx + 1]
+    return None
 
 
 def _extract_json_object(raw: str) -> Dict[str, object]:
@@ -112,8 +146,8 @@ def _extract_json_object(raw: str) -> Dict[str, object]:
         except json.JSONDecodeError as e:
             log("DEBUG", f"JSON parse after prefix failed: {e}")
 
-    # LAST RESORT: Use regex to find balanced braces that look like JSON
-    # This handles cases where braces are embedded in text
+    # LAST RESORT: scan for a balanced JSON object without regex backtracking.
+    # Regex-based balanced-brace extraction can hang on malformed/truncated LLM JSON.
     brace_stack = 0
     start_idx = -1
     for i, ch in enumerate(clean):
@@ -130,13 +164,12 @@ def _extract_json_object(raw: str) -> Dict[str, object]:
                 except json.JSONDecodeError:
                     pass
 
-    # Try to find a JSON-like pattern with balanced braces
-    m = re.search(r'\{(?:[^{}]*(?:\{[^{}]*\}[^{}]*)*)*\}', clean, flags=re.DOTALL)
-    if m:
+    candidate = _find_balanced_json_object(clean)
+    if candidate:
         try:
-            return json.loads(m.group(0))
+            return json.loads(candidate)
         except json.JSONDecodeError as e:
-            log("DEBUG", f"Balanced brace extraction failed: {e}")
+            log("DEBUG", f"Balanced scan extraction failed: {e}")
 
     # If we still can't extract, provide detailed error message
     log("ERROR", f"Failed to extract JSON from response")
@@ -190,34 +223,40 @@ def generate_rubric(question: str, expected: str, model: Optional[str] = None) -
     start = time.perf_counter()
     log("INFO", f"START rubric_generate (model={model})")
 
-    # Use thread with timeout to prevent hanging on Ollama call
+    timeout_seconds = max(5, int(cfg.get("rubric_timeout_seconds", 60)))
+    connect_timeout_seconds = max(2, int(cfg.get("rubric_connect_timeout_seconds", 10)))
+
+    # Use a thread plus HTTP timeouts so a stuck Ollama call cannot pin the grader.
     result_queue = queue.Queue()
     exception_queue = queue.Queue()
     
     def call_ollama():
         try:
-            # num_gpu=-1 offloads all layers to GPU for optimal performance
-            r = ollama.chat(
-                model=model,
-                options=rubric_options,
-                format=rubric_format,  # Structured output
-                messages=[
+            payload = {
+                "model": model,
+                "options": rubric_options,
+                "format": rubric_format,
+                "stream": False,
+                "messages": [
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": f"Question: {question}\nExpected: {expected}"},
                 ],
+            }
+            resp = requests.post(
+                _ollama_chat_url(),
+                json=payload,
+                timeout=(connect_timeout_seconds, timeout_seconds),
             )
+            resp.raise_for_status()
+            r = resp.json()
             result_queue.put(("success", r))
         except Exception as e:
             exception_queue.put(e)
             result_queue.put(("exception", None))
     
-    # 60 second timeout for rubric generation
     thread = threading.Thread(target=call_ollama, daemon=True)
     thread.start()
     
-    # Use a polling approach to avoid blocking indefinitely
-    # Check every 0.1 seconds if thread is done, with a 60 second timeout
-    timeout_seconds = 60
     poll_interval = 0.1
     elapsed = 0
     
@@ -251,10 +290,15 @@ def generate_rubric(question: str, expected: str, model: Optional[str] = None) -
     if isinstance(raw_content, dict):
         data = raw_content
     else:
-        data = _extract_json_object(raw_content)
+        try:
+            data = _extract_json_object(raw_content)
+        except Exception as ex:
+            log("WARNING", f"Rubric JSON extraction failed; using fallback: {ex}")
+            data = fallback
 
     if not isinstance(data, dict):
-        raise ValueError("Extracted rubric is not a JSON object")
+        log("WARNING", "Extracted rubric is not a JSON object; using fallback")
+        data = fallback
     # Unpack nested rubrics if the model wrapped it (e.g. {"rubric": {...}})
     if len(data) == 1 and list(data.keys())[0].lower() in {"rubric", "gradingrubric", "grading_rubric"}:
         inner = list(data.values())[0]
