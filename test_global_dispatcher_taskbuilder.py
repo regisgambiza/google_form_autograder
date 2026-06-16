@@ -99,6 +99,7 @@ def test_task_builder_supplies_work_without_starving(monkeypatch):
             "producer_det_queue_high_watermark": 420,
             "producer_det_queue_low_watermark": 180,
             "numeric_tolerance": 0.01,
+            "enable_form_context": False,
         },
     )
 

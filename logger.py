@@ -14,6 +14,8 @@ _DIAG_TEXT_PATH = "logs/runtime_detailed.log"
 _DIAG_JSON_PATH = "logs/runtime_detailed.jsonl"
 _CONSOLE_MIN_LEVEL = "INFO"
 _CONSOLE_ENABLED = True
+_CONSOLE_STAGE_BANNERS = True
+_CONSOLE_COLOR_ENABLED = True
 _LEVEL_ORDER = {
     "DEBUG": 10,
     "INFO": 20,
@@ -25,7 +27,7 @@ _LEVEL_ORDER = {
 
 def _init_diagnostics():
     global _DIAG_INIT, _DIAG_TEXT_FH, _DIAG_JSON_FH, _DIAG_TEXT_PATH, _DIAG_JSON_PATH
-    global _CONSOLE_MIN_LEVEL, _CONSOLE_ENABLED
+    global _CONSOLE_MIN_LEVEL, _CONSOLE_ENABLED, _CONSOLE_STAGE_BANNERS, _CONSOLE_COLOR_ENABLED
     if _DIAG_INIT:
         return
     _DIAG_INIT = True
@@ -38,6 +40,8 @@ def _init_diagnostics():
         _DIAG_JSON_PATH = str(cfg.get("detailed_log_json_path", _DIAG_JSON_PATH))
         _CONSOLE_MIN_LEVEL = str(cfg.get("console_log_min_level", _CONSOLE_MIN_LEVEL)).upper()
         _CONSOLE_ENABLED = bool(cfg.get("console_log_enabled", True))
+        _CONSOLE_STAGE_BANNERS = bool(cfg.get("console_stage_banners", True))
+        _CONSOLE_COLOR_ENABLED = bool(cfg.get("console_color_enabled", True))
     except Exception:
         pass
     try:
@@ -120,5 +124,45 @@ def log(level, message):
             print(log_message, flush=True)
         except Exception:
             pass
+    except Exception:
+        pass
+
+
+def stage_banner(title, subtitle="", color="cyan"):
+    """Print a high-visibility console/log section marker."""
+    _init_diagnostics()
+    if not _CONSOLE_STAGE_BANNERS:
+        log("INFO", f"[STAGE] {title}" + (f" | {subtitle}" if subtitle else ""))
+        return
+
+    title_text = str(title).upper()
+    subtitle_text = str(subtitle or "")
+    width = max(88, len(title_text) + 12, len(subtitle_text) + 12)
+    line = "=" * width
+    body = f"===== {title_text} =====".center(width)
+    sub = subtitle_text.center(width) if subtitle_text else ""
+
+    ansi = {
+        "cyan": "\033[96m",
+        "green": "\033[92m",
+        "yellow": "\033[93m",
+        "red": "\033[91m",
+        "magenta": "\033[95m",
+        "blue": "\033[94m",
+        "reset": "\033[0m",
+    }
+    prefix = ansi.get(str(color), ansi["cyan"]) if (_CONSOLE_COLOR_ENABLED and sys.stdout.isatty()) else ""
+    suffix = ansi["reset"] if prefix else ""
+
+    # Persist a plain marker in logs.
+    log("INFO", f"[STAGE] {title_text}" + (f" | {subtitle_text}" if subtitle_text else ""))
+    if not _CONSOLE_ENABLED:
+        return
+    try:
+        print(prefix + line + suffix, flush=True)
+        print(prefix + body + suffix, flush=True)
+        if sub:
+            print(prefix + sub + suffix, flush=True)
+        print(prefix + line + suffix, flush=True)
     except Exception:
         pass

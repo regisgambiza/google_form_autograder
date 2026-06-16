@@ -6,6 +6,7 @@ from typing import Dict, List
 
 from logger import log
 from form_utils import get_form_structure
+from form_context_builder import apply_question_context, build_form_context, get_effective_expected
 from response_utils import get_responses
 from auth import get_service
 
@@ -56,6 +57,21 @@ def _fetch_single_form(idx: int, total: int, form_url: str, grade_recent_only: b
     # Fetch all responses once per form to avoid quota blowups.
     all_responses = _fetch_all_form_responses_with_backoff(service, form_id)
 
+    expected_by_item_id: Dict[str, List[str]] = {}
+    try:
+        for item in form_data.get("items", []):
+            if "questionItem" not in item:
+                continue
+            item_id = item.get("itemId")
+            grading = item["questionItem"]["question"].get("grading", {})
+            answers = grading.get("correctAnswers", {}).get("answers", [])
+            expected_by_item_id[item_id] = [a["value"] for a in answers if "value" in a]
+    except Exception:
+        expected_by_item_id = {}
+
+    form_context = build_form_context(form_id, form_title, form_data, form_structure, expected_by_item_id)
+    form_structure = apply_question_context(form_structure, form_context)
+
     out_questions: List[PrefetchedQuestion] = []
     for q in form_structure:
         responses = _extract_answers_for_question(
@@ -63,16 +79,7 @@ def _fetch_single_form(idx: int, total: int, form_url: str, grade_recent_only: b
             question_id=q["questionId"],
             grade_recent_only=grade_recent_only,
         )
-        expected = []
-        try:
-            for item in form_data.get("items", []):
-                if item.get("itemId") == q["itemId"] and "questionItem" in item:
-                    grading = item["questionItem"]["question"].get("grading", {})
-                    answers = grading.get("correctAnswers", {}).get("answers", [])
-                    expected = [a["value"] for a in answers if "value" in a]
-                    break
-        except Exception:
-            pass
+        expected = get_effective_expected(q, expected_by_item_id.get(q["itemId"], []))
         if q["type"] in text_types:
             out_questions.append(PrefetchedQuestion(question=q, responses=responses, expected=expected))
 

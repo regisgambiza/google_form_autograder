@@ -13,7 +13,15 @@ from deterministic_checks import run_deterministic_checks
 from evaluation_pipeline import EvaluationResult, evaluate_answer
 from evaluator_config import load_config
 from feedback import generate_form_feedback
-from logger import log
+from form_context_builder import (
+    apply_question_context,
+    build_form_context,
+    get_effective_expected,
+    get_question_context,
+    should_block_answer_updates,
+)
+from form_utils import get_form_structure
+from logger import log, stage_banner
 from response_utils import save_grading_time
 from updater import update_correct_answers
 
@@ -97,6 +105,8 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
 
     def announce_stage(stage_no: int, title: str, status: str):
         line = "=" * 90
+        color = "green" if status.upper() == "DONE" else "cyan"
+        stage_banner(f"Stage {stage_no}: {title}", status, color=color)
         log("INFO", line)
         log("INFO", f"[STAGE {stage_no}] {status}: {title}")
         log("INFO", line)
@@ -230,6 +240,11 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
         )
         title = form.get("info", {}).get("title", f"Form_{form_id}")
         structure = _extract_structure_from_form(form)
+        if not structure:
+            try:
+                structure = get_form_structure(service, form_id)
+            except Exception as ex:
+                log("WARNING", f"[DISPATCH] fallback get_form_structure failed for {form_id}: {ex}")
         responses = []
         page = None
         while True:
@@ -343,9 +358,14 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                 except Exception:
                     expected_by_item_id = {}
 
+                if bool(cfg.get("enable_form_context", True)):
+                    form_context = build_form_context(form_id, title, form_data, structure, expected_by_item_id)
+                    structure = apply_question_context(structure, form_context)
+                item["structure"] = structure
+
                 for q in structure:
                     qid = q.get("questionId")
-                    expected = expected_by_item_id.get(q.get("itemId"), [])
+                    expected = get_effective_expected(q, expected_by_item_id.get(q.get("itemId"), []))
                     answers = answers_by_qid.get(qid, [])
                     forms_results[i]["counts"][qid] = len(answers)
                     for ai, ans in enumerate(answers):
@@ -407,7 +427,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
             try:
                 result_holder.put((
                     "ok",
-                    evaluate_answer(t.answer, t.expected, str(t.question.get("title", ""))),
+                    evaluate_answer(t.answer, t.expected, get_question_context(t.question)),
                 ))
             except Exception as ex:
                 result_holder.put(("error", ex))
@@ -484,6 +504,13 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
             try:
                 t = ai_q.get(timeout=1)
             except queue.Empty:
+                with metrics_lock:
+                    expected = int(progress.get("expected_tasks", 0))
+                    completed = int(progress.get("completed", 0))
+                    backlog = int(progress.get("ai_backlog", 0))
+                if expected > 0 and completed >= expected and backlog <= 0:
+                    log("INFO", "[Worker: AI] DONE ai_worker (all work complete)")
+                    return
                 continue
             if t is None:
                 log("INFO", "[Worker: AI] DONE ai_worker")
@@ -584,36 +611,17 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                     idle_for = time.time() - queue_progress["last_any_work_ts"]
                 if exp > 0 and idle_for > max(20.0, stall_timeout_s / 2):
                     log("WARNING", f"[DISPATCH] queue movement stalled for {idle_for:.1f}s (done={comp}/{exp})")
-                # AI deadlock fail-safe: if AI queue has backlog but no AI completions for too long,
-                # drain queued tasks as timeout results so the whole run cannot freeze indefinitely.
+                # AI stall reporting only. Do not drain queued work here: doing so can remove
+                # shutdown sentinels and can mark valid queued work as failed while the first
+                # slow rubric/jury call is still running.
                 with metrics_lock:
                     ai_idle_for = time.time() - ai_progress["last_ai_done_ts"]
                 if ai_q.qsize() > 0 and ai_idle_for > ai_stall_timeout_s:
-                    drained = 0
-                    while True:
-                        try:
-                            t = ai_q.get_nowait()
-                        except queue.Empty:
-                            break
-                        if t is None:
-                            continue
-                        r = EvaluationResult(
-                            answer=t.answer, decision="NO", final_score=0.0, semantic_score=0.0, concept_score=0.0,
-                            factual_score=0.0, misconception_detected=False, misconception_description="ai_stall_timeout",
-                            missing_concepts=[], accepted_concepts=[], model_agreement=0.0, confidence=0.0,
-                            fast_path_used=False, latency_ms=ai_stall_timeout_s * 1000, stage_reached="ai_stall_timeout"
-                        )
-                        try:
-                            result_q.put((t, r), timeout=1)
-                            drained += 1
-                        except Exception:
-                            break
-                    if drained > 0:
-                        with metrics_lock:
-                            ai_progress["last_ai_done_ts"] = time.time()
-                            counters["ai"] += drained
-                            progress["ai_backlog"] = max(0, progress["ai_backlog"] - drained)
-                        log("ERROR", f"[DISPATCH] AI stall fail-safe activated: drained {drained} queued AI tasks")
+                    log(
+                        "WARNING",
+                        f"[DISPATCH] AI queue has waited {ai_idle_for:.1f}s without a completed AI result "
+                        f"(q_ai={ai_q.qsize()} q_ai_actual={ai_backlog}); active answer timeout remains responsible for fallback",
+                    )
             except Exception as ex:
                 log("ERROR", f"[Worker: Metrics] reporter loop exception: {ex}")
                 # Keep reporter alive even after transient errors.
@@ -683,6 +691,14 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
             qid = q["questionId"]
             accepted = [a for a in data["question_answers"].get(qid, []) if a]
             all_questions.append({"question": q, "responses": [], "correct_answers": accepted})
+            if should_block_answer_updates(q):
+                validation = q.get("expected_validation") or {}
+                log(
+                    "WARNING",
+                    f"[EXPECTED VALIDATOR] blocking updates for Q{q.get('index')} "
+                    f"{q.get('title')} reason={validation.get('reason', '')}",
+                )
+                continue
             if accepted and q["type"] in {"SHORT_ANSWER", "LONG_ANSWER"}:
                 update_correct_answers(service, form_id, q["itemId"], accepted, q["index"])
         if generate_report:

@@ -4,6 +4,7 @@ from typing import Dict, List, Optional
 
 from evaluation_pipeline import evaluate_answers as semantic_evaluate_answers
 from evaluator_config import load_config
+from form_context_builder import get_question_context
 from logger import log
 from ollama_diagnostics import log_ollama_gpu_diagnostics_once
 from worker_pipeline import evaluate_answers_worker_pipeline
@@ -67,7 +68,7 @@ def evaluate_answers(question: Dict[str, object], answers: List[str], expected: 
     log("INFO", "[SEMANTIC PIPELINE ACTIVE] ai_evaluator_semantic")
     log_ollama_gpu_diagnostics_once()
     expected_values = expected or []
-    qtext = str(question.get("title", "Untitled Question"))
+    qtext = get_question_context(question)
     cfg = load_config()
     if bool(cfg.get("enable_pipeline_workers", False)):
         results = evaluate_answers_worker_pipeline(answers, expected_values, qtext)

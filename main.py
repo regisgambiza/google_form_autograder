@@ -10,6 +10,12 @@ from typing import Dict, List
 
 from auth import get_service
 from feedback import generate_form_feedback
+from form_context_builder import (
+    apply_question_context,
+    build_form_context,
+    get_effective_expected,
+    should_block_answer_updates,
+)
 from form_utils import get_form_structure
 from hang_diagnostics import start_hang_diagnostics
 from logger import log
@@ -132,20 +138,26 @@ def _prepare_form(service, idx: int, total_forms: int, form_url: str, grade_rece
         form_data = {"items": []}
         form_title = f"Form_{form_id}"
 
+    expected_by_item_id: Dict[str, List[str]] = {}
+    try:
+        for item in form_data.get("items", []):
+            if "questionItem" not in item:
+                continue
+            item_id = item.get("itemId")
+            grading = item["questionItem"]["question"].get("grading", {})
+            answers = grading.get("correctAnswers", {}).get("answers", [])
+            expected_by_item_id[item_id] = [a["value"] for a in answers if "value" in a]
+    except Exception:
+        expected_by_item_id = {}
+
+    form_context = build_form_context(form_id, form_title, form_data, form_structure, expected_by_item_id)
+    form_structure = apply_question_context(form_structure, form_context)
+
     all_questions = []
     for q in form_structure:
         responses = get_responses(service, form_id, q["questionId"], grade_recent_only=grade_recent_only)
 
-        correct_answers_fetched = []
-        try:
-            for item in form_data.get("items", []):
-                if item.get("itemId") == q["itemId"] and "questionItem" in item:
-                    grading = item["questionItem"]["question"].get("grading", {})
-                    answers = grading.get("correctAnswers", {}).get("answers", [])
-                    correct_answers_fetched = [a["value"] for a in answers if "value" in a]
-                    break
-        except Exception:
-            pass
+        correct_answers_fetched = get_effective_expected(q, expected_by_item_id.get(q["itemId"], []))
 
         if q["type"] in text_types:
             evaluated = evaluate_answers(q, responses, expected=correct_answers_fetched or None)
@@ -268,6 +280,14 @@ def main():
                     print(f"FormProgress: {processed_responses}/{total_responses}")
                     if processed_responses % 10 == 0:
                         write_heartbeat("answer_evaluation")
+                    if should_block_answer_updates(q):
+                        validation = q.get("expected_validation") or {}
+                        log(
+                            "WARNING",
+                            f"[EXPECTED VALIDATOR] blocking updates for Q{q.get('index')} "
+                            f"{q.get('title')} reason={validation.get('reason', '')}",
+                        )
+                        continue
                     if correct and q["type"] in text_types:
                         dups = update_correct_answers(service, form_id, q["itemId"], correct, q["index"])
                         if dups:
@@ -366,6 +386,14 @@ def main():
                 print(f"FormProgress: {processed_responses}/{total_responses}")
                 if processed_responses % 10 == 0:
                     write_heartbeat("answer_evaluation")
+                if should_block_answer_updates(q):
+                    validation = q.get("expected_validation") or {}
+                    log(
+                        "WARNING",
+                        f"[EXPECTED VALIDATOR] blocking updates for Q{q.get('index')} "
+                        f"{q.get('title')} reason={validation.get('reason', '')}",
+                    )
+                    continue
                 if correct and q["type"] in text_types:
                     dups = update_correct_answers(service, form_id, q["itemId"], correct, q["index"])
                     if dups:
