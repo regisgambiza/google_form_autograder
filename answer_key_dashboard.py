@@ -30,6 +30,7 @@ from answer_key_manager import (
 )
 from answer_key_policy import identity_key
 from auth import get_service
+from app_theme import apply_widget_theme
 from form_searcher import find_all_forms_in_sources
 from updater import update_correct_answers
 
@@ -55,21 +56,6 @@ class AnswerKeyDashboard(QDialog):
         self.findings: List[HealthFinding] = []
         self.active_finding: Optional[HealthFinding] = None
         self.backup_path = None
-
-        self.setStyleSheet("""
-            QDialog { background: #f4f6f8; }
-            QFrame#Panel { background: white; border: 1px solid #d7e0ea; border-radius: 6px; }
-            QLabel#Title { font-size: 18px; font-weight: 700; color: #1f2937; }
-            QLabel#Section { font-size: 15px; font-weight: 700; color: #1f2937; }
-            QLabel#Status { color: #40546a; padding: 6px 0; }
-            QPushButton { min-height: 34px; padding: 0 14px; }
-            QPushButton#Primary { background: #1769aa; color: white; border: 0; border-radius: 5px; font-weight: 700; }
-            QPushButton#Primary:hover { background: #12578d; }
-            QPushButton#Secondary { background: white; color: #263747; border: 1px solid #b8c5d1; border-radius: 5px; }
-            QListWidget, QLineEdit, QComboBox { background: white; border: 1px solid #c8d2dc; border-radius: 4px; padding: 5px; }
-            QListWidget::item { min-height: 32px; padding: 4px; }
-            QListWidget::item:selected { background: #dcecff; color: #15324b; }
-        """)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(18, 18, 18, 18)
@@ -172,6 +158,7 @@ class AnswerKeyDashboard(QDialog):
         footer.addWidget(close_button)
         root.addLayout(footer)
         self._set_detail_enabled(False)
+        apply_widget_theme(self)
 
     def _form_changed(self):
         self.service = None

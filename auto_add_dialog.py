@@ -270,7 +270,7 @@ class AutoAddDialog(QDialog):
             title = form['title']
             last = form.get('last_submission')
             last_str = last.strftime("%Y-%m-%d %H:%M:%S") if last else "None"
-            text = f"{title} (Last submission: {last_str}) — {url}"
+            text = f"{title} (Last submission: {last_str}) - {url}"
 
             if url not in parent.forms_data:
                 if hasattr(parent, "_add_form_to_queue"):
@@ -283,7 +283,7 @@ class AutoAddDialog(QDialog):
                     added = True
                     continue
                 parent.forms_data[url] = title
-                item = QListWidgetItem(f"⏳ {text}")
+                item = QListWidgetItem(text)
                 item.setData(Qt.UserRole, url)
                 from PyQt5.QtGui import QColor
                 item.setForeground(QColor("#0d6efd"))

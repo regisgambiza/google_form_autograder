@@ -32,6 +32,7 @@ import ollama
 from evaluator_config import DEFAULT_CONFIG
 from scheduler import scheduler as auto_scheduler
 from answer_key_dashboard import AnswerKeyDashboard
+from app_theme import apply_application_theme, apply_widget_theme
 
 BANGKOK_TZ = timezone(timedelta(hours=7))
 
@@ -395,9 +396,9 @@ class FormManager(QMainWindow):
         top_layout = QVBoxLayout()
 
         status_row = QHBoxLayout()
-        self.current_label = QLabel("🟡 Processing: -")
-        self.finished_label = QLabel("✅ Finished: 0")
-        self.in_queue_label = QLabel("⏳ In Queue: 0")
+        self.current_label = QLabel("Processing: -")
+        self.finished_label = QLabel("Finished: 0")
+        self.in_queue_label = QLabel("In Queue: 0")
         self.run_state_label = QLabel("Run State: Idle")
         self.pipeline_state_label = QLabel("Pipeline State: Idle")
 
@@ -473,33 +474,33 @@ class FormManager(QMainWindow):
         main_layout.addWidget(splitter, 1)
 
         # BOTTOM CONTROLS
-        bottom_layout = QHBoxLayout()
+        bottom_layout = QVBoxLayout()
 
         # ACTION BUTTONS
         actions_layout = QHBoxLayout()
 
-        auto_add_button = QPushButton("🔍 Auto Find")
+        auto_add_button = QPushButton("Auto Find")
         auto_add_button.clicked.connect(self.open_manual_add_dialog)
-        auto_run_button = QPushButton("▶ Auto Run")
+        auto_run_button = QPushButton("Auto Run")
         auto_run_button.clicked.connect(self.open_auto_run_dialog)
-        grade_now_button = QPushButton("⚡ Grade Sources Now")
+        grade_now_button = QPushButton("Grade Sources Now")
         grade_now_button.clicked.connect(self.open_quick_grade_dialog)
-        grade_all_button = QPushButton("📚 Grade All Sources")
+        grade_all_button = QPushButton("Grade All Sources")
         grade_all_button.clicked.connect(self.grade_all_forms_in_all_folders)
-        self.run_button = QPushButton("🚀 Run Now")
+        self.run_button = QPushButton("Run Now")
         self.run_button.clicked.connect(self.run_grader)
         answer_keys_button = QPushButton("Answer Keys")
         answer_keys_button.clicked.connect(self.open_answer_key_dashboard)
 
-        remove_button = QPushButton("❌ Remove")
+        remove_button = QPushButton("Remove")
         remove_button.clicked.connect(self.remove_form)
         remove_button.setObjectName("Secondary")
 
-        clear_all_button = QPushButton("🗑️ Clear All")
+        clear_all_button = QPushButton("Clear All")
         clear_all_button.clicked.connect(lambda: self.clear_all_forms(confirm=True))
         clear_all_button.setObjectName("Secondary")
 
-        self.stop_button = QPushButton("⏹ Stop")
+        self.stop_button = QPushButton("Stop")
         self.stop_button.clicked.connect(self.stop_grading)
         self.stop_button.setObjectName("Danger")
         self.stop_button.hide()
@@ -518,33 +519,38 @@ class FormManager(QMainWindow):
         actions_layout.addWidget(grade_all_button)
         actions_layout.addWidget(self.run_button)
         actions_layout.addWidget(answer_keys_button)
-        actions_layout.addWidget(remove_button)
-        actions_layout.addWidget(clear_all_button)
-        actions_layout.addWidget(self.stop_button)
-        actions_layout.addWidget(minimize_button)
-        actions_layout.addWidget(exit_button)
-
         bottom_layout.addLayout(actions_layout)
 
-        settings_button = QPushButton("⚙ Settings")
+        management_layout = QHBoxLayout()
+        management_layout.addWidget(remove_button)
+        management_layout.addWidget(clear_all_button)
+        management_layout.addWidget(self.stop_button)
+        management_layout.addStretch()
+
+        settings_button = QPushButton("Settings")
         settings_button.clicked.connect(self.open_settings_dialog)
         settings_button.setObjectName("Secondary")
-        bottom_layout.addStretch()
-        bottom_layout.addWidget(settings_button)
+        management_layout.addWidget(settings_button)
+        management_layout.addWidget(minimize_button)
+        management_layout.addWidget(exit_button)
+        bottom_layout.addLayout(management_layout)
         main_layout.addLayout(bottom_layout)
 
         self.load_forms()
         self.load_config()
         self.update_in_queue_label()
         self._setup_system_tray()
+        apply_widget_theme(self)
 
     def _setup_system_tray(self):
         if not QSystemTrayIcon.isSystemTrayAvailable():
             return
         tray_menu = QMenu(self)
         show_action = QAction("Show", self)
+        show_action.setIcon(self.style().standardIcon(QStyle.SP_ComputerIcon))
         show_action.triggered.connect(self.restore_from_tray)
         exit_action = QAction("Exit", self)
+        exit_action.setIcon(self.style().standardIcon(QStyle.SP_DialogCloseButton))
         exit_action.triggered.connect(self.exit_app)
         tray_menu.addAction(show_action)
         tray_menu.addSeparator()
@@ -2133,6 +2139,7 @@ class FormManager(QMainWindow):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    apply_application_theme(app)
     palette = QPalette()
     palette.setColor(QPalette.Window, QColor(244, 246, 248))
     palette.setColor(QPalette.WindowText, Qt.black)
