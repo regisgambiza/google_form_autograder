@@ -366,6 +366,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                 for q in structure:
                     qid = q.get("questionId")
                     expected = get_effective_expected(q, expected_by_item_id.get(q.get("itemId"), []))
+                    q["trusted_expected"] = expected[:1]
                     answers = answers_by_qid.get(qid, [])
                     forms_results[i]["counts"][qid] = len(answers)
                     for ai, ans in enumerate(answers):
@@ -690,6 +691,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
         for q in structure:
             qid = q["questionId"]
             accepted = [a for a in data["question_answers"].get(qid, []) if a]
+            trusted_expected = q.get("trusted_expected", get_effective_expected(q, [])[:1])
             all_questions.append({"question": q, "responses": [], "correct_answers": accepted})
             if should_block_answer_updates(q):
                 validation = q.get("expected_validation") or {}
@@ -700,7 +702,9 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                 )
                 continue
             if accepted and q["type"] in {"SHORT_ANSWER", "LONG_ANSWER"}:
-                update_correct_answers(service, form_id, q["itemId"], accepted, q["index"])
+                update_correct_answers(
+                    service, form_id, q["itemId"], accepted, q["index"], trusted_expected
+                )
         if generate_report:
             generate_form_feedback(form_id, title, all_questions)
         save_grading_time(form_id, datetime.now(timezone.utc))

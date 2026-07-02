@@ -1,6 +1,17 @@
+import copy
+
+from answer_key_policy import prepare_answer_key
+from evaluator_config import load_config
 from logger import log
 
-def update_correct_answers(service, form_id, question_id, correct_answers, question_index):
+def update_correct_answers(
+    service,
+    form_id,
+    question_id,
+    correct_answers,
+    question_index,
+    trusted_expected=None,
+):
     log("DEBUG", f"Entering update_correct_answers for QID {question_id} "
                  f"with correct_answers={correct_answers}, index={question_index}")
     
@@ -49,35 +60,38 @@ def update_correct_answers(service, form_id, question_id, correct_answers, quest
             
         # Fetch existing correct answers
         question = target_item["questionItem"]["question"]
+        existing_grading = copy.deepcopy(question.get("grading", {}))
         log("DEBUG", f"Question object: {question}")
         existing_answers = []
         if "grading" in question and "correctAnswers" in question["grading"]:
             existing_answers = [ans["value"] for ans in question["grading"]["correctAnswers"].get("answers", [])]
         log("INFO", f"Existing correct answers for QID {question_id}: {existing_answers}")
         
-        # Check for duplicates
-        new_answers = []
-        for ans in correct_answers:
-            if ans in existing_answers:
-                duplicates.append(ans)
-            else:
-                new_answers.append(ans)
+        cfg = load_config()
+        plan = prepare_answer_key(
+            existing_answers,
+            correct_answers,
+            trusted_expected or [],
+            max_variants=int(cfg.get("answer_key_max_variants", 5)),
+        )
+        duplicates = plan.duplicates
+        updated_answers = plan.answers
+        if plan.rejected:
+            log(
+                "WARNING",
+                f"Rejected {len(plan.rejected)} unverified answer-key candidates for "
+                f"QID {question_id}: {plan.rejected}",
+            )
+        log("INFO", f"Filtered {len(duplicates)} duplicate answer-key candidates: {duplicates}")
 
-        # DEBUG log with full duplicates list
-        log("DEBUG", f"Duplicates {len(duplicates)} {duplicates}")
-
-        log("INFO", f"{len(duplicates)} duplicates found: {duplicates}")
-        log("INFO", f"Duplicate answers filtered out: {duplicates}")
-        log("INFO", "removing duplicates")
-        
-        if not new_answers:
-            log("INFO", f"All provided answers for QID {question_id} are already in correct answers. "
-                        f"Skipping update after duplicate removal.")
+        if not trusted_expected:
+            log("WARNING", f"No trusted teacher answer for QID {question_id}; answer-key update blocked.")
             return duplicates
-        
-        updated_answers = existing_answers + new_answers
-        log("INFO", f"now submitting {len(new_answers)} unique answers")
-        log("DEBUG", f"New answers to add: {new_answers}, Combined answers: {updated_answers}")
+        if not plan.changed:
+            log("INFO", f"Answer key for QID {question_id} is already clean; skipping update.")
+            return duplicates
+        log("INFO", f"Submitting {len(updated_answers)} verified answer-key variants")
+        log("DEBUG", f"Final verified answers: {updated_answers}")
             
     except Exception as e:
         log("ERROR", f"Failed during validation for QID {question_id}: {str(e)} "
@@ -86,6 +100,10 @@ def update_correct_answers(service, form_id, question_id, correct_answers, quest
     
     # Prepare update request
     log("DEBUG", f"Preparing update request for QID {question_id}")
+    updated_grading = existing_grading
+    updated_grading["correctAnswers"] = {
+        "answers": [{"value": ans} for ans in updated_answers]
+    }
     update_request = {
         "requests": [
             {
@@ -94,13 +112,8 @@ def update_correct_answers(service, form_id, question_id, correct_answers, quest
                         "itemId": question_id,
                         "questionItem": {
                             "question": {
-                                "questionId": question_id,
-                                "grading": {
-                                    "correctAnswers": {
-                                        "answers": [{"value": ans} for ans in updated_answers]
-                                    },
-                                    "pointValue": 1,
-                                }
+                                "questionId": question.get("questionId", question_id),
+                                "grading": updated_grading,
                             }
                         },
                     },
@@ -116,7 +129,7 @@ def update_correct_answers(service, form_id, question_id, correct_answers, quest
     try:
         log("DEBUG", f"Executing batch update for form ID {form_id}")
         service.forms().batchUpdate(formId=form_id, body=update_request).execute()
-        log("INFO", f"Updated QID {question_id} successfully with {len(new_answers)} new answers.")
+        log("INFO", f"Updated QID {question_id} successfully with {len(updated_answers)} verified answers.")
     except Exception as e:
         log("ERROR", f"Failed to update QID {question_id}: {str(e)}")
         raise

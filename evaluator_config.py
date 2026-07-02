@@ -39,6 +39,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "use_validated_expected_for_grading": True,
     "auto_replace_invalid_expected": False,
     "invalid_expected_blocks_updates": True,
+    "answer_key_max_variants": 5,
     "numeric_tolerance": 0.01,
     "max_latency_per_answer_seconds": 30,
     "enable_reflection": False,

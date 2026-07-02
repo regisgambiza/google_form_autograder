@@ -164,7 +164,12 @@ def _prepare_form(service, idx: int, total_forms: int, form_url: str, grade_rece
         else:
             evaluated = correct_answers_fetched
 
-        all_questions.append({"question": q, "responses": responses, "correct_answers": evaluated})
+        all_questions.append({
+            "question": q,
+            "responses": responses,
+            "correct_answers": evaluated,
+            "trusted_expected": correct_answers_fetched[:1],
+        })
 
     all_questions.sort(key=lambda x: x["question"]["index"])
     log("INFO", f"[HYBRID PREP] DONE {idx}/{total_forms} form_id={form_id}")
@@ -289,7 +294,9 @@ def main():
                         )
                         continue
                     if correct and q["type"] in text_types:
-                        dups = update_correct_answers(service, form_id, q["itemId"], correct, q["index"])
+                        dups = update_correct_answers(
+                            service, form_id, q["itemId"], correct, q["index"], pq.expected[:1]
+                        )
                         if dups:
                             duplicates_found.extend(dups)
 
@@ -395,7 +402,14 @@ def main():
                     )
                     continue
                 if correct and q["type"] in text_types:
-                    dups = update_correct_answers(service, form_id, q["itemId"], correct, q["index"])
+                    dups = update_correct_answers(
+                        service,
+                        form_id,
+                        q["itemId"],
+                        correct,
+                        q["index"],
+                        q_data.get("trusted_expected", []),
+                    )
                     if dups:
                         duplicates_found.extend(dups)
 

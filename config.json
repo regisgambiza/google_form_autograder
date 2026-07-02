@@ -41,6 +41,7 @@
     "use_validated_expected_for_grading": true,
     "auto_replace_invalid_expected": false,
     "invalid_expected_blocks_updates": true,
+    "answer_key_max_variants": 5,
     "enable_pipeline_workers": true,
     "deterministic_worker_count": 4,
     "ai_worker_count": 1,
