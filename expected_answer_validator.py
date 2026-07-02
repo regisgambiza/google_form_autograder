@@ -21,7 +21,7 @@ VALIDATION_PROMPT = (
     "valid, confidence, suggested_answers, reason."
 )
 
-VALIDATION_CACHE_VERSION = "v3"
+VALIDATION_CACHE_VERSION = "v4-first-teacher-answer"
 
 
 def _ollama_chat_url() -> str:
@@ -50,6 +50,45 @@ def _extract_json(content: str) -> Dict:
         except json.JSONDecodeError:
             pass
     return {}
+
+
+def _text_to_validation(content: str) -> Dict:
+    text = _clean(content).lower()
+    if not text:
+        return {}
+    invalid_markers = (
+        "invalid",
+        "incorrect",
+        "not correct",
+        "does not match",
+        "wrong",
+    )
+    valid_markers = (
+        "valid",
+        "correct",
+        "matches",
+        "reasonable",
+    )
+    if any(marker in text for marker in invalid_markers):
+        return {
+            "valid": False,
+            "confidence": 0.5,
+            "suggested_answers": [],
+            "reason": _clean(content),
+        }
+    if any(marker in text for marker in valid_markers):
+        return {
+            "valid": True,
+            "confidence": 0.5,
+            "suggested_answers": [],
+            "reason": _clean(content),
+        }
+    return {
+        "valid": True,
+        "confidence": 0.0,
+        "suggested_answers": [],
+        "reason": _clean(content),
+    }
 
 
 def _normalize_validation(data: Dict, model: str, expected: List[str]) -> Dict:
@@ -114,13 +153,19 @@ def _call_validator(model: str, question_context: str, expected: List[str], time
     content = resp.json().get("message", {}).get("content", "")
     data = _extract_json(content)
     if not data:
-        raise ValueError("validator returned no JSON")
+        data = _text_to_validation(content)
+    if not data:
+        raise ValueError("validator returned no usable response")
     return _normalize_validation(data, model, expected)
 
 
 def validate_expected_answer(question_context: str, expected: Optional[List[str]]) -> Dict:
     cfg = load_config()
-    expected_values = [str(x) for x in (expected or []) if _clean(x)]
+    # Google Forms keeps the teacher's original answer first. Later entries may
+    # have been added by this app, so only the first answer should be treated as
+    # the teacher-provided answer during initial correctness validation.
+    first_expected = list(expected or [])[:1]
+    expected_values = [str(first_expected[0])] if first_expected and _clean(first_expected[0]) else []
     if not bool(cfg.get("validate_expected_answers", False)):
         return {"validation_status": "disabled", "valid": True, "original_expected": expected_values}
     if not expected_values:
@@ -139,12 +184,14 @@ def validate_expected_answer(question_context: str, expected: Optional[List[str]
         str(cfg.get("expected_answer_validator_model", "deepseek-r1:8b")),
         str(cfg.get("expected_answer_validator_fallback_model", "qwen3:8b")),
     ]
-    timeout = max(5, int(cfg.get("expected_answer_validator_timeout_seconds", 90)))
+    primary_timeout = max(5, int(cfg.get("expected_answer_validator_timeout_seconds", 90)))
+    fallback_timeout = max(primary_timeout, int(cfg.get("expected_answer_validator_fallback_timeout_seconds", primary_timeout)))
     connect_timeout = max(2, int(cfg.get("expected_answer_validator_connect_timeout_seconds", 10)))
     errors = []
 
-    for model in [m for i, m in enumerate(models) if m and m not in models[:i]]:
+    for idx, model in enumerate([m for i, m in enumerate(models) if m and m not in models[:i]]):
         try:
+            timeout = primary_timeout if idx == 0 else fallback_timeout
             out = _call_validator(model, question_context, expected_values, timeout, connect_timeout)
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(out, f, indent=2, ensure_ascii=True)

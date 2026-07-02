@@ -297,7 +297,8 @@ def build_form_context(
         pos = q_index_by_id.get(qid, 0)
         nearby = structure[max(0, pos - 2):pos] + structure[pos + 1:pos + 3]
         expected = expected_by_item_id.get(q.get("itemId"), [])
-        enriched = _compose_question_context(form_title, section, q, nearby, expected)
+        teacher_expected = expected[:1]
+        enriched = _compose_question_context(form_title, section, q, nearby, teacher_expected)
         try:
             from expected_answer_validator import validate_expected_answer
 
@@ -305,10 +306,10 @@ def build_form_context(
                 log(
                     "INFO",
                     f"[EXPECTED VALIDATOR] checking Q{q.get('index')} "
-                    f"{q.get('title')} expected={expected}",
+                    f"{q.get('title')} teacher_expected={teacher_expected}",
                 )
                 _write_heartbeat(f"expected_answer_validation:{q.get('title')}")
-            validation = validate_expected_answer(enriched, expected)
+            validation = validate_expected_answer(enriched, teacher_expected)
             _write_heartbeat(f"expected_answer_validation_done:{q.get('title')}")
             if validation.get("validation_status") == "ok":
                 log(

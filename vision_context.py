@@ -90,11 +90,13 @@ def analyze_image_bytes(image_bytes: bytes, prompt: Optional[str] = None) -> Dic
         str(cfg.get("vision_fallback_model", "minicpm-v4.5")),
     ]
     connect_timeout = max(2, int(cfg.get("vision_connect_timeout_seconds", 10)))
-    timeout = max(5, int(cfg.get("vision_timeout_seconds", 90)))
+    primary_timeout = max(5, int(cfg.get("vision_timeout_seconds", 90)))
+    fallback_timeout = max(primary_timeout, int(cfg.get("vision_fallback_timeout_seconds", primary_timeout)))
     errors = []
 
-    for model in [m for i, m in enumerate(models) if m and m not in models[:i]]:
+    for idx, model in enumerate([m for i, m in enumerate(models) if m and m not in models[:i]]):
         try:
+            timeout = primary_timeout if idx == 0 else fallback_timeout
             context = _call_ollama_vision(model, image_b64, prompt or VISION_PROMPT, connect_timeout, timeout)
             out = {
                 "vision_status": "ok",
