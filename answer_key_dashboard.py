@@ -6,6 +6,7 @@ from PyQt5.QtWidgets import (
     QDialog,
     QFrame,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -29,6 +30,7 @@ from answer_key_manager import (
 )
 from answer_key_policy import identity_key
 from auth import get_service
+from form_searcher import find_all_forms_in_sources
 from updater import update_correct_answers
 
 
@@ -84,6 +86,11 @@ class AnswerKeyDashboard(QDialog):
             self.form_combo.addItem(form_title or url, url)
         self.form_combo.currentIndexChanged.connect(self._form_changed)
         header.addWidget(self.form_combo)
+        self.add_source_button = QPushButton("Add Form or Folder")
+        self.add_source_button.setObjectName("Secondary")
+        self.add_source_button.setIcon(self.style().standardIcon(QStyle.SP_FileDialogNewFolder))
+        self.add_source_button.clicked.connect(self.add_source)
+        header.addWidget(self.add_source_button)
         root.addLayout(header)
 
         quick = QFrame()
@@ -184,6 +191,58 @@ class AnswerKeyDashboard(QDialog):
             raise ValueError("Add a form to the queue first.")
         self.form_id = _form_id(url)
         self.service = self.service or get_service()
+
+    def add_source(self):
+        text, accepted = QInputDialog.getMultiLineText(
+            self,
+            "Add Form or Folder",
+            "Google Form or Drive folder URL",
+        )
+        if not accepted or not text.strip():
+            return
+        try:
+            self.add_source_button.setEnabled(False)
+            self.status.setText("Finding forms...")
+            forms = find_all_forms_in_sources(
+                text,
+                progress_callback=lambda message: self.status.setText(message),
+            )
+            if not forms:
+                self.status.setText("No accessible forms found")
+                return
+            first_result_index = None
+            added = 0
+            parent = self.parent()
+            for form in forms:
+                url = form.get("url")
+                title = form.get("title") or "Untitled"
+                if not url:
+                    continue
+                existing_index = self.form_combo.findData(url)
+                if existing_index >= 0:
+                    if first_result_index is None:
+                        first_result_index = existing_index
+                    continue
+                self.forms_data[url] = title
+                self.form_combo.addItem(title, url)
+                if first_result_index is None:
+                    first_result_index = self.form_combo.count() - 1
+                added += 1
+                if parent and hasattr(parent, "_add_form_to_queue"):
+                    parent._add_form_to_queue(url, title, source="Answer Keys")
+            if parent and hasattr(parent, "save_forms") and added:
+                parent.save_forms()
+            if first_result_index is not None:
+                self.form_combo.setCurrentIndex(first_result_index)
+            self.status.setText(
+                f"Added {added} form{'s' if added != 1 else ''}"
+                if added else "Form already available"
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Could not add source", str(exc))
+            self.status.setText("Could not add form or folder")
+        finally:
+            self.add_source_button.setEnabled(True)
 
     def clean_duplicates(self):
         try:
