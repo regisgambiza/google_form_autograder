@@ -16,6 +16,7 @@ def test_main_window_uses_approved_workspace_layout():
     window = FormManager()
     buttons = {button.text(): button for button in window.findChildren(QPushButton)}
     assert {"Add Sources", "Run Grading", "Answer Keys"}.issubset(buttons)
+    assert {buttons[name].width() for name in ("Add Sources", "Run Grading", "Answer Keys")} == {145}
     splitter = window.findChild(QSplitter, "WorkspaceSplitter")
     assert splitter is not None
     assert splitter.count() == 2
