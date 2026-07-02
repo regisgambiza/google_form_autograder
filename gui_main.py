@@ -449,6 +449,13 @@ class FormManager(QMainWindow):
         add_sources_button.setFixedWidth(145)
         add_sources_button.clicked.connect(self.open_manual_add_dialog)
         command_layout.addWidget(add_sources_button)
+        scan_source_button = QPushButton("Scan Source")
+        scan_source_button.setFixedWidth(145)
+        scan_source_button.setObjectName("Secondary")
+        scan_source_button.setIcon(self.style().standardIcon(QStyle.SP_FileDialogContentsView))
+        scan_source_button.setProperty("noAutoIcon", True)
+        scan_source_button.clicked.connect(self.open_quick_grade_dialog)
+        command_layout.addWidget(scan_source_button)
         self.run_button = QPushButton("Run Grading")
         self.run_button.setFixedWidth(145)
         self.run_button.setObjectName("Secondary")
@@ -1488,12 +1495,12 @@ class FormManager(QMainWindow):
         from PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel
 
         dialog = QDialog(self)
-        dialog.setWindowTitle("Grade Sources Now")
+        dialog.setWindowTitle("Scan Source")
         dialog.setGeometry(100, 100, 620, 260)
 
         layout = QVBoxLayout()
 
-        label = QLabel("Paste Google Form URLs or Drive folder URLs to grade immediately:")
+        label = QLabel("Google Form or Drive folder URLs")
         layout.addWidget(label)
 
         input_field = QTextEdit()
@@ -1502,7 +1509,7 @@ class FormManager(QMainWindow):
         layout.addWidget(input_field)
 
         button_layout = QHBoxLayout()
-        ok_button = QPushButton("Grade")
+        ok_button = QPushButton("Scan and Grade")
         cancel_button = QPushButton("Cancel")
 
         ok_button.clicked.connect(dialog.accept)

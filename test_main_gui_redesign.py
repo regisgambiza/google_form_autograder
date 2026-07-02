@@ -15,8 +15,9 @@ apply_application_theme(APP)
 def test_main_window_uses_approved_workspace_layout():
     window = FormManager()
     buttons = {button.text(): button for button in window.findChildren(QPushButton)}
-    assert {"Add Sources", "Run Grading", "Answer Keys"}.issubset(buttons)
-    assert {buttons[name].width() for name in ("Add Sources", "Run Grading", "Answer Keys")} == {145}
+    assert {"Add Sources", "Scan Source", "Run Grading", "Answer Keys"}.issubset(buttons)
+    assert {buttons[name].width() for name in ("Add Sources", "Scan Source", "Run Grading", "Answer Keys")} == {145}
+    assert not buttons["Scan Source"].icon().isNull()
     assert buttons["Run Grading"].objectName() == "Secondary"
     assert not buttons["Run Grading"].icon().isNull()
     splitter = window.findChild(QSplitter, "WorkspaceSplitter")
