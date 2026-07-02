@@ -8,7 +8,8 @@ from PyQt5.QtWidgets import (
 )
 
 from answer_key_manager import (
-    HealthFinding, backup_form_grading, list_backups, resolve_reviews, restore_backup, scan_form_data,
+    HealthFinding, backup_form_grading, list_backups, remove_form_duplicates,
+    resolve_reviews, restore_backup, scan_form_data,
 )
 from answer_key_policy import prepare_answer_key
 from auth import get_service
@@ -46,6 +47,9 @@ class AnswerKeyDashboard(QDialog):
         self.scan_button = QPushButton("Scan")
         self.scan_button.clicked.connect(self.scan)
         toolbar.addWidget(self.scan_button)
+        self.deduplicate_button = QPushButton("Remove Duplicates")
+        self.deduplicate_button.clicked.connect(self.remove_duplicates)
+        toolbar.addWidget(self.deduplicate_button)
         layout.addLayout(toolbar)
 
         self.summary = QLabel("Choose a queued form and scan its answer keys.")
@@ -115,6 +119,28 @@ class AnswerKeyDashboard(QDialog):
             changed += int(finding.current_answers != finding.proposed_answers)
             review += int(finding.route == "review")
         self.summary.setText(f"{len(self.findings)} text questions | {changed} proposed changes | {review} require review")
+
+    def remove_duplicates(self):
+        url = self.form_combo.currentData()
+        if not url:
+            QMessageBox.warning(self, "No form", "Add a form to the queue first.")
+            return
+        try:
+            self.form_id = _form_id(url)
+            self.service = self.service or get_service()
+            result = remove_form_duplicates(self.service, self.form_id)
+            if result["removed"]:
+                QMessageBox.information(
+                    self,
+                    "Duplicates removed",
+                    f"Removed {result['removed']} duplicate answers from "
+                    f"{result['changed_questions']} questions.\nBackup: {result['backup']}",
+                )
+            else:
+                QMessageBox.information(self, "No duplicates", "This form has no duplicate answer entries.")
+            self.scan()
+        except Exception as exc:
+            QMessageBox.critical(self, "Deduplication failed", str(exc))
 
     def _readonly(self, row: int, column: int, text: str):
         item = QTableWidgetItem(text)

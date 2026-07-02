@@ -120,3 +120,27 @@ def test_review_decisions_are_persistent(tmp_path, monkeypatch):
     assert manager.load_pending_reviews("f") == {}
     saved = json.loads(path.read_text(encoding="utf-8"))
     assert saved["items"][0]["status"] == "rejected"
+
+
+def test_one_click_dedup_preserves_distinct_answers_and_points(tmp_path, monkeypatch):
+    monkeypatch.setattr(manager, "BACKUP_DIR", tmp_path / "backups")
+    form = {
+        "info": {"title": "Quiz"},
+        "items": [_item(["-13", "-13", "-  13", "- 13", "13"], points=4)],
+    }
+    service = _Service(form)
+    result = manager.remove_form_duplicates(service, "form-1")
+    assert result["removed"] == 2
+    assert result["changed_questions"] == 1
+    request = service.api.updates[0][1]["requests"][0]["updateItem"]
+    grading = request["item"]["questionItem"]["question"]["grading"]
+    assert grading["pointValue"] == 4
+    assert [a["value"] for a in grading["correctAnswers"]["answers"]] == ["-13", "- 13", "13"]
+
+
+def test_one_click_dedup_dry_run_has_no_side_effects():
+    form = {"info": {"title": "Quiz"}, "items": [_item(["9", "9", "8"])]}
+    service = _Service(form)
+    result = manager.remove_form_duplicates(service, "form-1", dry_run=True)
+    assert result["removed"] == 1
+    assert service.api.updates == []

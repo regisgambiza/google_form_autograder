@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
-from answer_key_policy import clean_display, prepare_answer_key, safely_equivalent
+from answer_key_policy import clean_display, identity_key, prepare_answer_key, safely_equivalent
 
 
 BACKUP_DIR = Path("backups") / "answer_keys"
@@ -215,6 +215,66 @@ def restore_backup(service, backup_path: os.PathLike, dry_run: bool = False) -> 
     if requests and not dry_run:
         service.forms().batchUpdate(formId=payload["form_id"], body={"requests": requests}).execute()
     return {"form_id": payload["form_id"], "request_count": len(requests), "dry_run": dry_run}
+
+
+def remove_form_duplicates(service, form_id: str, dry_run: bool = False) -> Dict:
+    """Remove duplicate answer strings without judging correctness."""
+    form = service.forms().get(formId=form_id).execute()
+    requests = []
+    removed = 0
+    changed_questions = 0
+    for index, item in enumerate(form.get("items", [])):
+        question = item.get("questionItem", {}).get("question", {})
+        if "textQuestion" not in question:
+            continue
+        grading = question.get("grading", {})
+        current = _answers(question)
+        if not current:
+            continue
+        unique = []
+        seen = set()
+        for raw in current:
+            value = clean_display(raw)
+            key = identity_key(value)
+            if key in seen:
+                removed += 1
+                continue
+            seen.add(key)
+            unique.append(value)
+        if len(unique) == len(current):
+            continue
+        changed_questions += 1
+        updated_grading = json.loads(json.dumps(grading))
+        updated_grading["correctAnswers"] = {"answers": [{"value": value} for value in unique]}
+        requests.append(
+            {
+                "updateItem": {
+                    "item": {
+                        "itemId": item.get("itemId"),
+                        "questionItem": {
+                            "question": {
+                                "questionId": question.get("questionId"),
+                                "grading": updated_grading,
+                            }
+                        },
+                    },
+                    "location": {"index": index},
+                    "updateMask": "questionItem.question.grading",
+                }
+            }
+        )
+    backup = None
+    if requests and not dry_run:
+        backup = backup_form_grading(service, form_id, reason="before one-click deduplication")
+        service.forms().batchUpdate(formId=form_id, body={"requests": requests}).execute()
+    return {
+        "form_id": form_id,
+        "removed": removed,
+        "changed_questions": changed_questions,
+        "request_count": len(requests),
+        "dry_run": dry_run,
+        "backup": str(backup) if backup else None,
+    }
 
 
 def enqueue_review(record: Dict) -> None:
