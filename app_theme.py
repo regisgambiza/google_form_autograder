@@ -27,6 +27,61 @@ QLabel#Status {
     color: #40546a;
     padding: 5px 0;
 }
+QFrame#AppHeader {
+    background: #ffffff;
+    border-bottom: 1px solid #cbd6df;
+}
+QLabel#AppBrand { color: #1d2a36; font-size: 17px; font-weight: 700; }
+QLabel#Muted { color: #637485; font-size: 12px; }
+QLabel#RunStateDot {
+    background: #16845b;
+    border-radius: 4px;
+}
+QFrame#CommandBar {
+    background: #f5f8fa;
+    border-bottom: 1px solid #cbd6df;
+}
+QPushButton#IconButton {
+    min-width: 34px;
+    max-width: 36px;
+    min-height: 34px;
+    padding: 0;
+    background: white;
+    color: #405466;
+    border: 1px solid #cbd6df;
+}
+QPushButton#IconButton::menu-indicator { image: none; width: 0; }
+QFrame#QueuePane { background: #f1f5f8; border-right: 1px solid #cbd6df; }
+QFrame#DetailPane { background: #ffffff; }
+QLabel#DetailTitle { color: #1d2a36; font-size: 21px; font-weight: 700; }
+QLabel#DetailBadge {
+    background: #e6edf3;
+    color: #405466;
+    border-radius: 4px;
+    padding: 6px 9px;
+    font-size: 11px;
+    font-weight: 700;
+}
+QLabel#DetailBadge[status="running"] { background: #fff3d8; color: #7b4b00; }
+QLabel#DetailBadge[status="done"] { background: #e5f5ed; color: #126341; }
+QLabel#DetailBadge[status="failed"] { background: #ffebe8; color: #8f1c13; }
+QFrame#Metric { background: white; border-bottom: 1px solid #cbd6df; }
+QLabel#MetricValue { color: #1d2a36; font-size: 20px; font-weight: 700; }
+QFrame#PipelineRow { background: white; border-bottom: 1px solid #d9e1e7; }
+QFrame#TerminalFrame { background: #172028; border-top: 1px solid #0d151b; }
+QPushButton#TerminalToggle, QPushButton#TerminalAction {
+    background: transparent;
+    color: #d7e2e9;
+    border: 0;
+    min-height: 30px;
+    padding: 0 7px;
+}
+QPushButton#TerminalToggle { font-weight: 700; }
+QPushButton#TerminalToggle:hover, QPushButton#TerminalAction:hover { background: #263541; }
+QLabel#TerminalMuted, QFrame#TerminalFrame QCheckBox { color: #92a5b2; }
+QFrame#TerminalFrame QTabWidget::pane { background: #172028; border: 0; }
+QFrame#TerminalFrame QTabBar::tab { background: #202d37; color: #9eb0bc; border-color: #30414e; }
+QFrame#TerminalFrame QTabBar::tab:selected { background: #172028; color: white; }
 QFrame#Panel, QGroupBox {
     background: #ffffff;
     border: 1px solid #d7e0ea;
@@ -163,9 +218,11 @@ def _plain_button_text(text: str) -> str:
 
 
 def apply_button_icon(button: QPushButton) -> None:
-    text = _plain_button_text(button.text())
+    text = button.text() if button.property("preserveText") else _plain_button_text(button.text())
     if text and text != button.text():
         button.setText(text)
+    if button.property("noAutoIcon"):
+        return
     lowered = text.casefold()
     for terms, icon_id in _ICON_RULES:
         if any(term in lowered for term in terms):

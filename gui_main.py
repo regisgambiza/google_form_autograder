@@ -8,7 +8,7 @@ from PyQt5.QtWidgets import (
     QPushButton, QLineEdit, QListWidget, QListWidgetItem, QMessageBox,
     QTextEdit, QLabel, QComboBox, QCheckBox,
     QProgressDialog, QSplitter, QSpinBox, QDialog, QFormLayout, QTabWidget,
-    QSystemTrayIcon, QMenu, QAction, QStyle, QFrame
+    QSystemTrayIcon, QMenu, QAction, QStyle, QFrame, QProgressBar
 )
 
 from PyQt5.QtCore import Qt, QDate, QTimer, QSize
@@ -386,71 +386,289 @@ class FormManager(QMainWindow):
             }
         """)
 
-        # Central widget
         central_widget = QWidget()
+        central_widget.setObjectName("AppShell")
         self.setCentralWidget(central_widget)
         main_layout = QVBoxLayout(central_widget)
-        main_layout.setSpacing(12)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
 
-        # TOP STATUS
-        top_layout = QVBoxLayout()
+        header = QFrame()
+        header.setObjectName("AppHeader")
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(18, 9, 14, 9)
+        brand_layout = QVBoxLayout()
+        brand_layout.setSpacing(1)
+        brand_title = QLabel("Google Form Autograder")
+        brand_title.setObjectName("AppBrand")
+        brand_subtitle = QLabel("Mathematics workspace")
+        brand_subtitle.setObjectName("Muted")
+        brand_layout.addWidget(brand_title)
+        brand_layout.addWidget(brand_subtitle)
+        header_layout.addLayout(brand_layout)
+        header_layout.addStretch()
 
-        status_row = QHBoxLayout()
         self.current_label = QLabel("Processing: -")
         self.finished_label = QLabel("Finished: 0")
         self.in_queue_label = QLabel("In Queue: 0")
-        self.run_state_label = QLabel("Run State: Idle")
         self.pipeline_state_label = QLabel("Pipeline State: Idle")
+        for hidden_label in (self.current_label, self.finished_label, self.in_queue_label, self.pipeline_state_label):
+            hidden_label.hide()
+        self.run_state_dot = QLabel()
+        self.run_state_dot.setObjectName("RunStateDot")
+        self.run_state_dot.setFixedSize(9, 9)
+        self.run_state_label = QLabel("Ready")
+        self.run_state_label.setObjectName("Muted")
+        header_layout.addWidget(self.run_state_dot)
+        header_layout.addWidget(self.run_state_label)
 
-        status_row.addWidget(self.current_label)
-        status_row.addStretch()
-        status_row.addWidget(self.pipeline_state_label)
-        status_row.addWidget(self.run_state_label)
-        status_row.addWidget(self.finished_label)
-        status_row.addWidget(self.in_queue_label)
-        top_layout.addLayout(status_row)
+        terminal_top_button = QPushButton(">_")
+        terminal_top_button.setObjectName("IconButton")
+        terminal_top_button.setToolTip("Show terminal")
+        terminal_top_button.setFixedSize(36, 36)
+        terminal_top_button.setProperty("preserveText", True)
+        terminal_top_button.setProperty("noAutoIcon", True)
+        terminal_top_button.clicked.connect(lambda: self.set_terminal_state("open"))
+        header_layout.addWidget(terminal_top_button)
+        settings_button = QPushButton()
+        settings_button.setObjectName("IconButton")
+        settings_button.setIcon(self.style().standardIcon(QStyle.SP_FileDialogDetailedView))
+        settings_button.setToolTip("Settings")
+        settings_button.setFixedSize(36, 36)
+        settings_button.clicked.connect(self.open_settings_dialog)
+        header_layout.addWidget(settings_button)
+        main_layout.addWidget(header)
 
-        main_layout.addLayout(top_layout)
+        command_bar = QFrame()
+        command_bar.setObjectName("CommandBar")
+        command_layout = QHBoxLayout(command_bar)
+        command_layout.setContentsMargins(14, 7, 14, 7)
+        command_layout.setSpacing(8)
+        add_sources_button = QPushButton("Add Sources")
+        add_sources_button.setObjectName("Secondary")
+        add_sources_button.setMaximumWidth(145)
+        add_sources_button.clicked.connect(self.open_manual_add_dialog)
+        command_layout.addWidget(add_sources_button)
+        self.run_button = QPushButton("Run Grading")
+        self.run_button.setMaximumWidth(145)
+        self.run_button.clicked.connect(self.run_grader)
+        command_layout.addWidget(self.run_button)
+        self.stop_button = QPushButton("Stop Grading")
+        self.stop_button.setObjectName("Danger")
+        self.stop_button.setMaximumWidth(150)
+        self.stop_button.clicked.connect(self.stop_grading)
+        self.stop_button.hide()
+        command_layout.addWidget(self.stop_button)
+        answer_keys_button = QPushButton("Answer Keys")
+        answer_keys_button.setObjectName("Secondary")
+        answer_keys_button.setMaximumWidth(135)
+        answer_keys_button.clicked.connect(self.open_answer_key_dashboard)
+        command_layout.addWidget(answer_keys_button)
+        command_layout.addStretch()
+        self.command_summary = QLabel("0 forms")
+        self.command_summary.setObjectName("Muted")
+        command_layout.addWidget(self.command_summary)
 
-        # CENTER SPLITTER
-        splitter = QSplitter(Qt.Horizontal)
+        more_button = QPushButton("...")
+        more_button.setObjectName("IconButton")
+        more_button.setFixedSize(36, 36)
+        more_button.setToolTip("More actions")
+        more_menu = QMenu(more_button)
+        auto_run_action = more_menu.addAction("Schedule Automatic Runs")
+        auto_run_action.triggered.connect(self.open_auto_run_dialog)
+        grade_all_action = more_menu.addAction("Grade All Queued Forms")
+        grade_all_action.triggered.connect(self.grade_all_forms_in_all_folders)
+        more_menu.addSeparator()
+        remove_action = more_menu.addAction("Remove Selected Form")
+        remove_action.triggered.connect(self.remove_form)
+        clear_action = more_menu.addAction("Clear Completed Forms")
+        clear_action.triggered.connect(self.clear_finished_forms_silently)
+        more_menu.addSeparator()
+        exit_action = more_menu.addAction("Exit")
+        exit_action.triggered.connect(self.exit_app)
+        more_button.setMenu(more_menu)
+        command_layout.addWidget(more_button)
+        main_layout.addWidget(command_bar)
 
-        # LEFT: FORM LIST
-        left_layout = QVBoxLayout()
-        left_label = QLabel("Forms to Grade")
-        left_label.setObjectName("Header")
-        left_layout.addWidget(left_label)
-        self.form_queue_summary = QLabel("Queue idle")
-        self.form_queue_summary.setStyleSheet("color:#5b6775; font-size:12px;")
-        left_layout.addWidget(self.form_queue_summary)
-
+        workspace = QSplitter(Qt.Horizontal)
+        workspace.setObjectName("WorkspaceSplitter")
+        queue_widget = QFrame()
+        queue_widget.setObjectName("QueuePane")
+        queue_layout = QVBoxLayout(queue_widget)
+        queue_layout.setContentsMargins(14, 12, 10, 10)
+        queue_header = QHBoxLayout()
+        queue_title = QLabel("Forms")
+        queue_title.setObjectName("Section")
+        self.form_queue_summary = QLabel("0 in queue")
+        self.form_queue_summary.setObjectName("Muted")
+        queue_header.addWidget(queue_title)
+        queue_header.addStretch()
+        queue_header.addWidget(self.form_queue_summary)
+        queue_layout.addLayout(queue_header)
+        queue_filters = QHBoxLayout()
+        self.form_search_input = QLineEdit()
+        self.form_search_input.setPlaceholderText("Search forms")
+        self.form_search_input.textChanged.connect(self._filter_form_queue)
+        self.form_filter_combo = QComboBox()
+        self.form_filter_combo.addItems(["All", "Running", "Queued", "Done", "Failed"])
+        self.form_filter_combo.currentTextChanged.connect(self._filter_form_queue)
+        queue_filters.addWidget(self.form_search_input, 1)
+        queue_filters.addWidget(self.form_filter_combo)
+        queue_layout.addLayout(queue_filters)
         self.form_list = QListWidget()
         self.form_list.setObjectName("FormQueueList")
-        self.form_list.setSpacing(6)
+        self.form_list.setSpacing(4)
         self.form_list.setUniformItemSizes(False)
         self.form_list.setWordWrap(True)
         self.form_list.setTextElideMode(Qt.ElideRight)
         self.form_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        left_layout.addWidget(self.form_list)
+        self.form_list.currentItemChanged.connect(self._on_form_selection_changed)
+        queue_layout.addWidget(self.form_list, 1)
+        workspace.addWidget(queue_widget)
 
-        left_widget = QWidget()
-        left_widget.setLayout(left_layout)
-        splitter.addWidget(left_widget)
+        detail_widget = QFrame()
+        detail_widget.setObjectName("DetailPane")
+        detail_layout = QVBoxLayout(detail_widget)
+        detail_layout.setContentsMargins(26, 22, 26, 16)
+        detail_header = QHBoxLayout()
+        detail_titles = QVBoxLayout()
+        self.detail_title = QLabel("Select a form")
+        self.detail_title.setObjectName("DetailTitle")
+        self.detail_meta = QLabel("No form selected")
+        self.detail_meta.setObjectName("Muted")
+        detail_titles.addWidget(self.detail_title)
+        detail_titles.addWidget(self.detail_meta)
+        detail_header.addLayout(detail_titles)
+        detail_header.addStretch()
+        self.detail_badge = QLabel("IDLE")
+        self.detail_badge.setObjectName("DetailBadge")
+        self.detail_badge.setProperty("status", "queued")
+        detail_header.addWidget(self.detail_badge)
+        detail_layout.addLayout(detail_header)
 
-        # RIGHT: DEBUG OUTPUT
-        right_layout = QVBoxLayout()
-        right_label = QLabel("Debug Output")
-        right_label.setObjectName("Header")
-        right_layout.addWidget(right_label)
+        progress_header = QHBoxLayout()
+        self.detail_progress_text = QLabel("Waiting to start")
+        self.detail_progress_text.setObjectName("Muted")
+        self.detail_progress_value = QLabel("0%")
+        self.detail_progress_value.setStyleSheet("font-weight:700;")
+        progress_header.addWidget(self.detail_progress_text)
+        progress_header.addStretch()
+        progress_header.addWidget(self.detail_progress_value)
+        detail_layout.addSpacing(20)
+        detail_layout.addLayout(progress_header)
+        self.detail_progress = QProgressBar()
+        self.detail_progress.setRange(0, 100)
+        self.detail_progress.setValue(0)
+        self.detail_progress.setTextVisible(False)
+        detail_layout.addWidget(self.detail_progress)
 
-        timing_filter_row = QHBoxLayout()
-        timing_filter_label = QLabel("Filter:")
-        self.timing_only_checkbox = QCheckBox("Timing Only")
+        metrics_row = QHBoxLayout()
+        self.metric_responses = QLabel("0 / 0")
+        self.metric_accepted = QLabel("-")
+        self.metric_review = QLabel("-")
+        self.metric_elapsed = QLabel("00:00")
+        for metric_name, metric_value in (
+            ("Responses", self.metric_responses),
+            ("Auto accepted", self.metric_accepted),
+            ("Needs review", self.metric_review),
+            ("Elapsed", self.metric_elapsed),
+        ):
+            metric = QFrame()
+            metric.setObjectName("Metric")
+            metric_layout = QVBoxLayout(metric)
+            metric_layout.setContentsMargins(12, 12, 12, 12)
+            label = QLabel(metric_name)
+            label.setObjectName("Muted")
+            metric_value.setObjectName("MetricValue")
+            metric_layout.addWidget(label)
+            metric_layout.addWidget(metric_value)
+            metrics_row.addWidget(metric, 1)
+        detail_layout.addLayout(metrics_row)
+
+        pipeline_heading = QHBoxLayout()
+        pipeline_title = QLabel("Current pipeline")
+        pipeline_title.setObjectName("Section")
+        self.pipeline_updated = QLabel("Ready")
+        self.pipeline_updated.setObjectName("Muted")
+        pipeline_heading.addWidget(pipeline_title)
+        pipeline_heading.addStretch()
+        pipeline_heading.addWidget(self.pipeline_updated)
+        detail_layout.addSpacing(10)
+        detail_layout.addLayout(pipeline_heading)
+        self.pipeline_rows = {}
+
+        def add_stage(key, icon, name, description, state):
+            row = QFrame()
+            row.setObjectName("PipelineRow")
+            layout = QHBoxLayout(row)
+            layout.setContentsMargins(4, 9, 4, 9)
+            icon_label = QLabel(icon)
+            icon_label.setFixedWidth(22)
+            name_label = QLabel(name)
+            name_label.setStyleSheet("font-weight:700;")
+            detail_label = QLabel(description)
+            detail_label.setObjectName("Muted")
+            state_label = QLabel(state)
+            state_label.setObjectName("Muted")
+            layout.addWidget(icon_label)
+            layout.addWidget(name_label, 1)
+            layout.addWidget(detail_label, 2)
+            layout.addWidget(state_label)
+            detail_layout.addWidget(row)
+            self.pipeline_rows[key] = (icon_label, detail_label, state_label)
+
+        add_stage("load", "○", "Load form", "Questions and responses", "Waiting")
+        add_stage("validate", "○", "Validate answer keys", "Canonical answers and context", "Waiting")
+        add_stage("evaluate", "○", "Evaluate responses", "Deterministic and semantic checks", "Waiting")
+        add_stage("apply", "○", "Apply grades", "Save grading updates", "Waiting")
+        detail_layout.addStretch()
+        workspace.addWidget(detail_widget)
+        workspace.setSizes([340, 900])
+        workspace.setStretchFactor(0, 0)
+        workspace.setStretchFactor(1, 1)
+        main_layout.addWidget(workspace, 1)
+
+        self.terminal_frame = QFrame()
+        self.terminal_frame.setObjectName("TerminalFrame")
+        terminal_layout = QVBoxLayout(self.terminal_frame)
+        terminal_layout.setContentsMargins(0, 0, 0, 0)
+        terminal_layout.setSpacing(0)
+        terminal_bar = QHBoxLayout()
+        terminal_bar.setContentsMargins(12, 0, 10, 0)
+        self.terminal_toggle_button = QPushButton("Terminal")
+        self.terminal_toggle_button.setObjectName("TerminalToggle")
+        self.terminal_toggle_button.setMaximumWidth(120)
+        self.terminal_toggle_button.setProperty("noAutoIcon", True)
+        self.terminal_toggle_button.clicked.connect(self.toggle_terminal)
+        terminal_bar.addWidget(self.terminal_toggle_button)
+        terminal_status = QLabel("Aggregator - live")
+        terminal_status.setObjectName("TerminalMuted")
+        terminal_bar.addWidget(terminal_status)
+        terminal_bar.addStretch()
+        self.timing_only_checkbox = QCheckBox("Timing only")
         self.timing_only_checkbox.stateChanged.connect(self.on_timing_filter_changed)
-        timing_filter_row.addWidget(timing_filter_label)
-        timing_filter_row.addWidget(self.timing_only_checkbox)
-        timing_filter_row.addStretch()
-        right_layout.addLayout(timing_filter_row)
+        terminal_bar.addWidget(self.timing_only_checkbox)
+        clear_terminal_button = QPushButton("Clear")
+        clear_terminal_button.setObjectName("TerminalAction")
+        clear_terminal_button.setMaximumWidth(70)
+        clear_terminal_button.setProperty("noAutoIcon", True)
+        clear_terminal_button.clicked.connect(self.clear_logs)
+        terminal_bar.addWidget(clear_terminal_button)
+        expand_terminal_button = QPushButton("□")
+        expand_terminal_button.setObjectName("TerminalAction")
+        expand_terminal_button.setFixedSize(32, 32)
+        expand_terminal_button.setProperty("noAutoIcon", True)
+        expand_terminal_button.setToolTip("Expand terminal")
+        expand_terminal_button.clicked.connect(self.expand_terminal)
+        terminal_bar.addWidget(expand_terminal_button)
+        hide_terminal_button = QPushButton("×")
+        hide_terminal_button.setObjectName("TerminalAction")
+        hide_terminal_button.setFixedSize(32, 32)
+        hide_terminal_button.setProperty("noAutoIcon", True)
+        hide_terminal_button.setToolTip("Hide terminal")
+        hide_terminal_button.clicked.connect(lambda: self.set_terminal_state("collapsed"))
+        terminal_bar.addWidget(hide_terminal_button)
+        terminal_layout.addLayout(terminal_bar)
 
         self.log_tabs = QTabWidget()
         self.debug_output = self._make_log_textedit()
@@ -464,83 +682,114 @@ class FormManager(QMainWindow):
         self.log_tabs.addTab(self.ai_output, "AI Workers")
         self.log_tabs.addTab(self.agg_output, "Aggregator")
         self._reset_worker_tab_titles()
-        right_layout.addWidget(self.log_tabs)
-
-        right_widget = QWidget()
-        right_widget.setLayout(right_layout)
-        splitter.addWidget(right_widget)
-
-        splitter.setSizes([600, 450])
-        main_layout.addWidget(splitter, 1)
-
-        # BOTTOM CONTROLS
-        bottom_layout = QVBoxLayout()
-
-        # ACTION BUTTONS
-        actions_layout = QHBoxLayout()
-
-        auto_add_button = QPushButton("Auto Find")
-        auto_add_button.clicked.connect(self.open_manual_add_dialog)
-        auto_run_button = QPushButton("Auto Run")
-        auto_run_button.clicked.connect(self.open_auto_run_dialog)
-        grade_now_button = QPushButton("Grade Sources Now")
-        grade_now_button.clicked.connect(self.open_quick_grade_dialog)
-        grade_all_button = QPushButton("Grade All Sources")
-        grade_all_button.clicked.connect(self.grade_all_forms_in_all_folders)
-        self.run_button = QPushButton("Run Now")
-        self.run_button.clicked.connect(self.run_grader)
-        answer_keys_button = QPushButton("Answer Keys")
-        answer_keys_button.clicked.connect(self.open_answer_key_dashboard)
-
-        remove_button = QPushButton("Remove")
-        remove_button.clicked.connect(self.remove_form)
-        remove_button.setObjectName("Secondary")
-
-        clear_all_button = QPushButton("Clear All")
-        clear_all_button.clicked.connect(lambda: self.clear_all_forms(confirm=True))
-        clear_all_button.setObjectName("Secondary")
-
-        self.stop_button = QPushButton("Stop")
-        self.stop_button.clicked.connect(self.stop_grading)
-        self.stop_button.setObjectName("Danger")
-        self.stop_button.hide()
-
-        minimize_button = QPushButton("Minimize")
-        minimize_button.clicked.connect(self.minimize_app)
-        minimize_button.setObjectName("Secondary")
-
-        exit_button = QPushButton("Exit")
-        exit_button.clicked.connect(self.exit_app)
-        exit_button.setObjectName("Danger")
-
-        actions_layout.addWidget(auto_add_button)
-        actions_layout.addWidget(auto_run_button)
-        actions_layout.addWidget(grade_now_button)
-        actions_layout.addWidget(grade_all_button)
-        actions_layout.addWidget(self.run_button)
-        actions_layout.addWidget(answer_keys_button)
-        bottom_layout.addLayout(actions_layout)
-
-        management_layout = QHBoxLayout()
-        management_layout.addWidget(remove_button)
-        management_layout.addWidget(clear_all_button)
-        management_layout.addWidget(self.stop_button)
-        management_layout.addStretch()
-
-        settings_button = QPushButton("Settings")
-        settings_button.clicked.connect(self.open_settings_dialog)
-        settings_button.setObjectName("Secondary")
-        management_layout.addWidget(settings_button)
-        management_layout.addWidget(minimize_button)
-        management_layout.addWidget(exit_button)
-        bottom_layout.addLayout(management_layout)
-        main_layout.addLayout(bottom_layout)
+        terminal_layout.addWidget(self.log_tabs, 1)
+        self.terminal_state = "collapsed"
+        main_layout.addWidget(self.terminal_frame)
+        self.set_terminal_state("collapsed")
 
         self.load_forms()
         self.load_config()
         self.update_in_queue_label()
+        if self.form_list.count():
+            self.form_list.setCurrentRow(0)
         self._setup_system_tray()
         apply_widget_theme(self)
+
+    def _filter_form_queue(self, *_args):
+        query = self.form_search_input.text().strip().lower() if hasattr(self, "form_search_input") else ""
+        selected_status = self.form_filter_combo.currentText().strip().lower() if hasattr(self, "form_filter_combo") else "all"
+        for index in range(self.form_list.count()):
+            item = self.form_list.item(index)
+            meta = item.data(Qt.UserRole + 1) or {}
+            title = str(meta.get("title", "")).lower()
+            status = str(meta.get("status", "queued")).lower()
+            status_matches = selected_status == "all" or status == selected_status
+            item.setHidden(query not in title or not status_matches)
+
+    def _on_form_selection_changed(self, current, _previous=None):
+        if not current:
+            self.detail_title.setText("Select a form")
+            self.detail_meta.setText("No form selected")
+            self.detail_badge.setText("IDLE")
+            return
+        meta = current.data(Qt.UserRole + 1) or {}
+        status = str(meta.get("status", "queued"))
+        self.detail_title.setText(meta.get("title") or "Untitled")
+        self.detail_meta.setText(
+            f"{meta.get('source', 'Queue')} · {self.grading_mode}"
+        )
+        self.detail_badge.setText(status.upper())
+        self.detail_badge.setProperty("status", status)
+        self.detail_badge.style().unpolish(self.detail_badge)
+        self.detail_badge.style().polish(self.detail_badge)
+        detail = meta.get("detail") or "Waiting to start"
+        self.detail_progress_text.setText(detail)
+        if status == "done":
+            progress = 100
+        elif status == "running":
+            progress = max(1, self.detail_progress.value())
+        else:
+            progress = 0
+        self.detail_progress.setValue(progress)
+        self.detail_progress_value.setText(f"{progress}%")
+        self.pipeline_updated.setText(meta.get("finished_at") or meta.get("started_at") or "Ready")
+        self._update_pipeline_rows_for_status(status)
+
+    def _update_pipeline_rows_for_status(self, status):
+        order = ["load", "validate", "evaluate", "apply"]
+        if status == "done":
+            completed = 4
+        elif status == "running":
+            completed = 2
+        elif status == "failed":
+            completed = 2
+        else:
+            completed = 0
+        for position, key in enumerate(order):
+            icon, _detail, state = self.pipeline_rows[key]
+            if position < completed:
+                icon.setText("✓")
+                icon.setStyleSheet("color:#16845b; font-weight:700;")
+                state.setText("Done")
+            elif position == completed and status == "running":
+                icon.setText("●")
+                icon.setStyleSheet("color:#b36b00;")
+                state.setText("Running")
+            elif status == "failed" and position == completed:
+                icon.setText("!")
+                icon.setStyleSheet("color:#b42318; font-weight:700;")
+                state.setText("Failed")
+            else:
+                icon.setText("○")
+                icon.setStyleSheet("")
+                state.setText("Waiting")
+
+    def set_terminal_state(self, state):
+        self.terminal_state = state
+        if state == "collapsed":
+            self.log_tabs.hide()
+            self.terminal_frame.setFixedHeight(38)
+            self.terminal_toggle_button.setText("Terminal ▲")
+        elif state == "expanded":
+            self.log_tabs.show()
+            self.terminal_frame.setFixedHeight(max(280, int(self.height() * 0.46)))
+            self.terminal_toggle_button.setText("Terminal ▼")
+        else:
+            self.terminal_state = "open"
+            self.log_tabs.show()
+            self.terminal_frame.setFixedHeight(230)
+            self.terminal_toggle_button.setText("Terminal ▼")
+
+    def toggle_terminal(self):
+        self.set_terminal_state("collapsed" if self.terminal_state != "collapsed" else "open")
+
+    def expand_terminal(self):
+        self.set_terminal_state("open" if self.terminal_state == "expanded" else "expanded")
+
+    def clear_logs(self):
+        self.debug_lines = []
+        for output in (self.debug_output, self.producer_output, self.det_output, self.ai_output, self.agg_output):
+            output.clear()
 
     def _setup_system_tray(self):
         if not QSystemTrayIcon.isSystemTrayAvailable():
@@ -1168,12 +1417,21 @@ class FormManager(QMainWindow):
             item.setData(Qt.UserRole + 1, meta)
             self._refresh_form_row(item)
         if hasattr(self, "form_queue_summary"):
-            self.form_queue_summary.setText(
-                f"{total} forms | {counts.get('queued', 0)} queued | {counts.get('running', 0)} running | "
-                f"{counts.get('done', 0)} done | {counts.get('failed', 0)} failed"
+            active = counts.get("queued", 0) + counts.get("running", 0)
+            self.form_queue_summary.setText(f"{active} in queue")
+            self.form_queue_summary.setToolTip(
+                f"{counts.get('queued', 0)} queued · {counts.get('running', 0)} running · "
+                f"{counts.get('done', 0)} done · {counts.get('failed', 0)} failed"
             )
+        if hasattr(self, "command_summary"):
+            self.command_summary.setText(f"{total} form{'s' if total != 1 else ''} · {counts.get('done', 0)} completed")
         if hasattr(self, "in_queue_label"):
             self.in_queue_label.setText(f"In Queue: {counts.get('queued', 0)}")
+        if hasattr(self, "form_filter_combo"):
+            self._filter_form_queue()
+        current = self.form_list.currentItem()
+        if current:
+            self._on_form_selection_changed(current)
 
     def remove_form(self):
         selected_items = self.form_list.selectedItems()
@@ -1759,7 +2017,7 @@ class FormManager(QMainWindow):
 
         self.is_searching = False
         self.is_grading = False
-        self.run_state_label.setText("Run State: Stopped")
+        self.run_state_label.setText("Stopped")
 
     def _terminate_project_python_processes(self):
         """Terminate python.exe/pythonw.exe instances started from this project path."""
@@ -1812,7 +2070,7 @@ class FormManager(QMainWindow):
             return
 
         self.is_grading = True
-        self.run_state_label.setText("Run State: Running")
+        self.run_state_label.setText("Running")
         self.run_button.setEnabled(False)
         self.stop_button.show()
         self.debug_output.clear()
@@ -1850,12 +2108,19 @@ class FormManager(QMainWindow):
         self.grader_thread.start()
 
     def update_progress(self, cur, tot):
-        pass
+        if not tot:
+            return
+        percent = max(0, min(100, int((cur / tot) * 100)))
+        self.detail_progress.setValue(percent)
+        self.detail_progress_value.setText(f"{percent}%")
+        self.metric_responses.setText(f"{cur} / {tot}")
+        self.detail_progress_text.setText("Evaluating learner answers")
 
     def update_overall_progress(self, cur, tot):
         if not tot:
             return
         self.in_queue_label.setText(f"In Queue: {max(0, tot - cur)}")
+        self.command_summary.setText(f"{tot} forms · {cur} completed")
 
     def update_current_form(self, url):
         item = self._find_form_item_by_url(url)
@@ -1869,7 +2134,10 @@ class FormManager(QMainWindow):
                 "Grading now: fetching responses, evaluating answers, and applying updates",
             )
             self.form_list.scrollToItem(item)
+            self.form_list.setCurrentItem(item)
         self.current_label.setText(f"Processing: {title[:48]}")
+        self.run_state_label.setText("Running")
+        self.pipeline_updated.setText("Updated just now")
 
     def update_finished_form(self, form_id):
         self.finished_forms.append(form_id)
@@ -2001,6 +2269,8 @@ class FormManager(QMainWindow):
         else:
             state = "Balanced"
         self.pipeline_state_label.setText(f"Pipeline State: {state}")
+        if hasattr(self, "pipeline_updated"):
+            self.pipeline_updated.setText(state)
 
     def append_debug(self, message):
         self.debug_lines.append(message)
@@ -2034,7 +2304,7 @@ class FormManager(QMainWindow):
         now_str = datetime.now().strftime("%H:%M:%S")
         
         if not success:
-            self.run_state_label.setText("Run State: Failed")
+            self.run_state_label.setText("Failed")
             for i in range(self.form_list.count()):
                 item = self.form_list.item(i)
                 meta = item.data(Qt.UserRole + 1) or {}
@@ -2042,7 +2312,7 @@ class FormManager(QMainWindow):
                     self._set_form_status(item, "failed", msg or "Grading process failed")
             self.append_debug(f"<font color='red'>[AUTO {now_str}] ❌ Grading failed: {msg}</font>")
         else:
-            self.run_state_label.setText("Run State: Completed")
+            self.run_state_label.setText("Completed")
             self.append_debug(f"<font color='green'>[AUTO {now_str}] ✅ Grading completed successfully!</font>")
             self.append_debug("<b><font color='green'>ALL FORMS FINISHED. Grading run complete.</font></b>")
             if not self.auto_mode:
