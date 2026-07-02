@@ -31,6 +31,7 @@ from class_loader_thread import ClassLoaderThread
 import ollama
 from evaluator_config import DEFAULT_CONFIG
 from scheduler import scheduler as auto_scheduler
+from answer_key_dashboard import AnswerKeyDashboard
 
 BANGKOK_TZ = timezone(timedelta(hours=7))
 
@@ -487,6 +488,8 @@ class FormManager(QMainWindow):
         grade_all_button.clicked.connect(self.grade_all_forms_in_all_folders)
         self.run_button = QPushButton("🚀 Run Now")
         self.run_button.clicked.connect(self.run_grader)
+        answer_keys_button = QPushButton("Answer Keys")
+        answer_keys_button.clicked.connect(self.open_answer_key_dashboard)
 
         remove_button = QPushButton("❌ Remove")
         remove_button.clicked.connect(self.remove_form)
@@ -514,6 +517,7 @@ class FormManager(QMainWindow):
         actions_layout.addWidget(grade_now_button)
         actions_layout.addWidget(grade_all_button)
         actions_layout.addWidget(self.run_button)
+        actions_layout.addWidget(answer_keys_button)
         actions_layout.addWidget(remove_button)
         actions_layout.addWidget(clear_all_button)
         actions_layout.addWidget(self.stop_button)
@@ -1202,6 +1206,10 @@ class FormManager(QMainWindow):
 
     def open_manual_add_dialog(self):
         dialog = AutoAddDialog(self, mode='manual')
+        dialog.exec_()
+
+    def open_answer_key_dashboard(self):
+        dialog = AnswerKeyDashboard(dict(self.forms_data), self)
         dialog.exec_()
 
     def open_auto_run_dialog(self):

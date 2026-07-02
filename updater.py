@@ -1,8 +1,23 @@
 import copy
+import threading
 
-from answer_key_policy import prepare_answer_key
+from answer_key_manager import backup_form_grading, enqueue_review
+from answer_key_policy import clean_display, equivalence_confidence, identity_key, prepare_answer_key
 from evaluator_config import load_config
 from logger import log
+
+
+_BACKUP_LOCK = threading.Lock()
+_BACKED_UP_FORMS = set()
+
+
+def _ensure_form_backup(service, form_id, reason):
+    with _BACKUP_LOCK:
+        if form_id in _BACKED_UP_FORMS:
+            return None
+        path = backup_form_grading(service, form_id, reason=reason)
+        _BACKED_UP_FORMS.add(form_id)
+        return path
 
 def update_correct_answers(
     service,
@@ -11,6 +26,9 @@ def update_correct_answers(
     correct_answers,
     question_index,
     trusted_expected=None,
+    dry_run=None,
+    create_backup=True,
+    manual_approval=False,
 ):
     log("DEBUG", f"Entering update_correct_answers for QID {question_id} "
                  f"with correct_answers={correct_answers}, index={question_index}")
@@ -68,6 +86,8 @@ def update_correct_answers(
         log("INFO", f"Existing correct answers for QID {question_id}: {existing_answers}")
         
         cfg = load_config()
+        if dry_run is None:
+            dry_run = bool(cfg.get("answer_key_dry_run", False))
         plan = prepare_answer_key(
             existing_answers,
             correct_answers,
@@ -75,20 +95,65 @@ def update_correct_answers(
             max_variants=int(cfg.get("answer_key_max_variants", 5)),
         )
         duplicates = plan.duplicates
-        updated_answers = plan.answers
-        if plan.rejected:
+        canonical = clean_display((trusted_expected or [""])[0]).split("|", 1)[0].strip()
+        if manual_approval and canonical:
+            approved = [canonical] + [clean_display(value) for value in correct_answers]
+            updated_answers = []
+            approved_keys = set()
+            for value in approved:
+                key = identity_key(value)
+                if value and key not in approved_keys:
+                    updated_answers.append(value)
+                    approved_keys.add(key)
+            changed = updated_answers != [clean_display(value) for value in existing_answers]
+        else:
+            updated_answers = list(plan.answers)
+            changed = None
+        uncertain_existing = [
+            clean_display(value)
+            for value in existing_answers
+            if not manual_approval and canonical and equivalence_confidence(value, canonical) == 0.60
+        ]
+        updated_keys = {identity_key(value) for value in updated_answers}
+        for value in uncertain_existing:
+            if identity_key(value) not in updated_keys:
+                updated_answers.append(value)
+                updated_keys.add(identity_key(value))
+        if changed is None:
+            changed = updated_answers != [clean_display(value) for value in existing_answers]
+        if plan.rejected and not manual_approval:
             log(
                 "WARNING",
                 f"Rejected {len(plan.rejected)} unverified answer-key candidates for "
                 f"QID {question_id}: {plan.rejected}",
             )
+            if trusted_expected:
+                enqueue_review({
+                    "form_id": form_id,
+                    "item_id": question_id,
+                    "question_id": question.get("questionId", question_id),
+                    "canonical": trusted_expected[0],
+                    "candidates": plan.rejected,
+                    "confidence": 0.60,
+                    "route": "review",
+                })
         log("INFO", f"Filtered {len(duplicates)} duplicate answer-key candidates: {duplicates}")
 
         if not trusted_expected:
             log("WARNING", f"No trusted teacher answer for QID {question_id}; answer-key update blocked.")
             return duplicates
-        if not plan.changed:
+        auto_threshold = float(cfg.get("answer_key_auto_apply_confidence", 0.95))
+        if auto_threshold > 1.0:
+            log("INFO", f"Answer-key automation disabled by confidence threshold for QID {question_id}.")
+            return duplicates
+        if not changed:
             log("INFO", f"Answer key for QID {question_id} is already clean; skipping update.")
+            return duplicates
+        if dry_run:
+            log(
+                "INFO",
+                f"DRY RUN QID {question_id}: {existing_answers} -> {updated_answers}; no update sent.",
+            )
             return duplicates
         log("INFO", f"Submitting {len(updated_answers)} verified answer-key variants")
         log("DEBUG", f"Final verified answers: {updated_answers}")
@@ -127,6 +192,10 @@ def update_correct_answers(
     }
     
     try:
+        if create_backup:
+            backup_path = _ensure_form_backup(service, form_id, reason=f"before update {question_id}")
+            if backup_path:
+                log("INFO", f"Answer-key backup saved: {backup_path}")
         log("DEBUG", f"Executing batch update for form ID {form_id}")
         service.forms().batchUpdate(formId=form_id, body=update_request).execute()
         log("INFO", f"Updated QID {question_id} successfully with {len(updated_answers)} verified answers.")

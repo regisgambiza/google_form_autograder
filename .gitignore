@@ -21,6 +21,9 @@ logs/
 *.log
 *.jsonl
 .grading_timestamps.json
+/backups/
+/answer_key_review_queue.json
+/hang_log.json
 
 # Build/package outputs
 build/

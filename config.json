@@ -42,6 +42,8 @@
     "auto_replace_invalid_expected": false,
     "invalid_expected_blocks_updates": true,
     "answer_key_max_variants": 5,
+    "answer_key_dry_run": false,
+    "answer_key_auto_apply_confidence": 0.95,
     "enable_pipeline_workers": true,
     "deterministic_worker_count": 4,
     "ai_worker_count": 1,

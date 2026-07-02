@@ -59,6 +59,7 @@ class _Service:
 
 def test_update_payload_is_clean_safe_and_idempotent(monkeypatch):
     monkeypatch.setattr(updater, "log", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(updater, "enqueue_review", lambda *_args, **_kwargs: None)
     service = _Service(["-13", "-13", "13"])
 
     updater.update_correct_answers(
@@ -68,6 +69,7 @@ def test_update_payload_is_clean_safe_and_idempotent(monkeypatch):
         ["-13", "-13", "-  13", "12.999", "a plausible AI answer"],
         0,
         ["-13"],
+        create_backup=False,
     )
 
     assert service.api.answers == ["-13", "- 13"]
@@ -76,18 +78,119 @@ def test_update_payload_is_clean_safe_and_idempotent(monkeypatch):
     assert submitted_grading["pointValue"] == 3
 
     updater.update_correct_answers(
-        service, "form-1", "item-1", ["-13", "- 13"], 0, ["-13"]
+        service, "form-1", "item-1", ["-13", "- 13"], 0, ["-13"], create_backup=False
     )
     assert len(service.api.requests) == 1
 
 
 def test_update_is_blocked_without_trusted_teacher_answer(monkeypatch):
     monkeypatch.setattr(updater, "log", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(updater, "enqueue_review", lambda *_args, **_kwargs: None)
     service = _Service(["possibly wrong"])
 
     updater.update_correct_answers(
-        service, "form-1", "item-1", ["new answer"], 0, []
+        service, "form-1", "item-1", ["new answer"], 0, [], create_backup=False
     )
 
     assert service.api.answers == ["possibly wrong"]
     assert service.api.requests == []
+
+
+def test_dry_run_reports_plan_without_backup_or_update(monkeypatch):
+    monkeypatch.setattr(updater, "log", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(updater, "enqueue_review", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        updater,
+        "backup_form_grading",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("backup should not run")),
+    )
+    service = _Service(["-13", "-13", "13"])
+
+    updater.update_correct_answers(
+        service, "form-1", "item-1", ["-13"], 0, ["-13"], dry_run=True
+    )
+
+    assert service.api.answers == ["-13", "-13", "13"]
+    assert service.api.requests == []
+
+
+def test_real_update_creates_backup_first(monkeypatch):
+    monkeypatch.setattr(updater, "log", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(updater, "enqueue_review", lambda *_args, **_kwargs: None)
+    events = []
+    updater._BACKED_UP_FORMS.clear()
+    monkeypatch.setattr(updater, "backup_form_grading", lambda *_args, **_kwargs: events.append("backup"))
+    service = _Service(["-13", "-13"])
+    original_batch = service.api.batchUpdate
+
+    def batch(formId, body):
+        events.append("update")
+        return original_batch(formId, body)
+
+    service.api.batchUpdate = batch
+    updater.update_correct_answers(service, "form-1", "item-1", ["-13"], 0, ["-13"])
+    assert events == ["backup", "update"]
+
+
+def test_only_one_pristine_backup_is_created_per_form_run(monkeypatch):
+    monkeypatch.setattr(updater, "log", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(updater, "enqueue_review", lambda *_args, **_kwargs: None)
+    updater._BACKED_UP_FORMS.clear()
+    backups = []
+    monkeypatch.setattr(updater, "backup_form_grading", lambda *_args, **_kwargs: backups.append("saved"))
+    service = _Service(["-13", "-13"])
+
+    updater.update_correct_answers(service, "form-2", "item-1", ["-13"], 0, ["-13"])
+    service.api.answers = ["-13", "-13"]
+    updater.update_correct_answers(service, "form-2", "item-1", ["-13"], 0, ["-13"])
+
+    assert backups == ["saved"]
+
+
+def test_uncertain_existing_text_is_preserved_for_review(monkeypatch):
+    monkeypatch.setattr(updater, "log", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(updater, "enqueue_review", lambda *_args, **_kwargs: None)
+    service = _Service(["photosynthesis", "plants use sunlight to make food", "photosynthesis"])
+
+    updater.update_correct_answers(
+        service,
+        "form-3",
+        "item-1",
+        ["photosynthesis"],
+        0,
+        ["photosynthesis"],
+        create_backup=False,
+    )
+
+    assert service.api.answers == ["photosynthesis", "plants use sunlight to make food"]
+
+
+def test_manual_approval_can_remove_uncertain_existing_text(monkeypatch):
+    monkeypatch.setattr(updater, "log", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(updater, "enqueue_review", lambda *_args, **_kwargs: None)
+    service = _Service(["photosynthesis", "plants use sunlight to make food"])
+
+    updater.update_correct_answers(
+        service,
+        "form-4",
+        "item-1",
+        ["photosynthesis"],
+        0,
+        ["photosynthesis"],
+        create_backup=False,
+        manual_approval=True,
+    )
+
+    assert service.api.answers == ["photosynthesis"]
+
+
+def test_manual_approval_can_add_uncertain_candidate(monkeypatch):
+    monkeypatch.setattr(updater, "log", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(updater, "enqueue_review", lambda *_args, **_kwargs: None)
+    service = _Service(["photosynthesis"])
+    updater.update_correct_answers(
+        service, "form-5", "item-1",
+        ["photosynthesis", "plants use sunlight to make food"], 0,
+        ["photosynthesis"], create_backup=False, manual_approval=True,
+    )
+    assert service.api.answers == ["photosynthesis", "plants use sunlight to make food"]

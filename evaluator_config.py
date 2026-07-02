@@ -40,6 +40,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "auto_replace_invalid_expected": False,
     "invalid_expected_blocks_updates": True,
     "answer_key_max_variants": 5,
+    "answer_key_dry_run": False,
+    "answer_key_auto_apply_confidence": 0.95,
     "numeric_tolerance": 0.01,
     "max_latency_per_answer_seconds": 30,
     "enable_reflection": False,

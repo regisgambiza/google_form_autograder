@@ -1,4 +1,4 @@
-from answer_key_policy import prepare_answer_key, safely_equivalent
+from answer_key_policy import equivalence_confidence, prepare_answer_key, safely_equivalent
 
 
 def test_deduplicates_same_batch_and_is_idempotent():
@@ -22,6 +22,8 @@ def test_numeric_equivalence_is_exact_not_tolerant():
     assert safely_equivalent("- 13.0", "-13")
     assert not safely_equivalent("-12.999", "-13")
     assert not safely_equivalent("13", "-13")
+    assert equivalence_confidence("13", "-13") == 0.0
+    assert equivalence_confidence("negative thirteen", "-13") == 0.60
 
 
 def test_ai_semantic_match_cannot_mutate_key():

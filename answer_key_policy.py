@@ -57,6 +57,17 @@ def safely_equivalent(candidate: object, canonical: object) -> bool:
     )
 
 
+def equivalence_confidence(candidate: object, canonical: object) -> float:
+    """Return 1.0 for proof, 0.0 for numeric contradiction, or 0.6 for review."""
+    if safely_equivalent(candidate, canonical):
+        return 1.0
+    candidate_number = _numeric_value(candidate)
+    canonical_number = _numeric_value(canonical)
+    if candidate_number is not None and canonical_number is not None:
+        return 0.0
+    return 0.60
+
+
 @dataclass(frozen=True)
 class AnswerKeyPlan:
     answers: List[str]
