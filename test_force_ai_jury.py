@@ -15,7 +15,7 @@ def test_exact_answer_still_reaches_full_ai_jury_when_forced(monkeypatch):
         "max_concurrent_jury_answers": 1,
         "adaptive_math_jury": {
             "enabled": True,
-            "primary_roles": ["semantic_judge", "factual_judge"],
+            "primary_roles": ["semantic_judge", "factual_judge", "concept_judge"],
             "adjudicator_role": "strict_judge",
             "minimum_primary_confidence": 0.9,
         },
@@ -24,6 +24,7 @@ def test_exact_answer_still_reaches_full_ai_jury_when_forced(monkeypatch):
             "strict_judge": "gpt-oss:latest",
             "factual_judge": "gemma3:12b",
             "semantic_judge": "llama3.1:8b",
+            "concept_judge": "llama3.1:8b",
         },
         "persist_result_cache": False,
     }
@@ -45,6 +46,7 @@ def test_exact_answer_still_reaches_full_ai_jury_when_forced(monkeypatch):
         return [
             {"role": "semantic_judge", "decision": "YES", "confidence": 0.99, "reason_short": "correct"},
             {"role": "factual_judge", "decision": "YES", "confidence": 0.99, "reason_short": "verified"},
+            {"role": "concept_judge", "decision": "YES", "confidence": 0.99, "reason_short": "complete"},
         ]
 
     monkeypatch.setattr(pipeline, "run_judges", judges)

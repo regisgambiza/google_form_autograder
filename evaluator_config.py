@@ -75,14 +75,14 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "accuracy_policy": {
         "enabled": True,
         "minimum_judge_confidence": 0.90,
-        "required_accept_roles": ["semantic_judge", "factual_judge", "strict_judge"],
+        "required_accept_roles": ["semantic_judge", "factual_judge", "concept_judge", "strict_judge"],
         "require_distinct_models": True,
         "embeddings_can_accept": False,
         "ambiguous_outcome": "REVIEW",
     },
     "adaptive_math_jury": {
         "enabled": True,
-        "primary_roles": ["semantic_judge", "factual_judge"],
+        "primary_roles": ["semantic_judge", "factual_judge", "concept_judge"],
         "adjudicator_role": "strict_judge",
         "minimum_primary_confidence": 0.90,
         "ambiguity_markers": ["ambiguous", "uncertain", "unclear", "insufficient", "depends"],
@@ -105,7 +105,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "execution_mode": "Maximum accuracy: independent unanimous jury + review",
     "active_judge_roles": [
-        "semantic_judge", "factual_judge", "strict_judge",
+        "semantic_judge", "factual_judge", "concept_judge", "strict_judge",
     ],
     "judge_prewarm_enabled": True,
     "judge_prewarm_timeout_seconds": 20,

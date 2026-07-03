@@ -12,10 +12,21 @@ from evaluator_config import load_config, sha256_text
 from logger import log
 from ollama_options import build_ollama_options
 
+RUBRIC_CONTRACT_VERSION = "v2-question-contract"
+
 # JSON schema for structured rubric output
 rubric_format = {
     "type": "object",
     "properties": {
+        "question_type": {"type": "string"},
+        "required_result": {"type": "string"},
+        "required_working": {"type": "boolean"},
+        "required_explanation": {"type": "boolean"},
+        "required_units": {"type": "array", "items": {"type": "string"}},
+        "rounding_rule": {"type": "string"},
+        "acceptance_rules": {"type": "array", "items": {"type": "string"}},
+        "rejection_rules": {"type": "array", "items": {"type": "string"}},
+        "partial_answer_policy": {"type": "string"},
         "required_concepts": {"type": "array", "items": {"type": "string"}},
         "optional_concepts": {"type": "array", "items": {"type": "string"}},
         "acceptable_paraphrases": {"type": "array", "items": {"type": "string"}},
@@ -24,12 +35,12 @@ rubric_format = {
         "misconceptions": {"type": "array", "items": {"type": "string"}},
         "grading_notes": {"type": "string"}
     },
-    "required": ["required_concepts", "optional_concepts", "acceptable_paraphrases", "critical_errors", "strict_keywords", "misconceptions", "grading_notes"]
+    "required": ["question_type", "required_result", "required_working", "required_explanation", "required_units", "rounding_rule", "acceptance_rules", "rejection_rules", "partial_answer_policy", "required_concepts", "optional_concepts", "acceptable_paraphrases", "critical_errors", "strict_keywords", "misconceptions", "grading_notes"]
 }
 
 SYSTEM_PROMPT = (
     "You are an expert curriculum designer and teacher. Given a question and its correct answer, "
-    "produce a structured grading rubric. Be generous with acceptable paraphrases - students may use "
+    "produce a question-specific grading contract. Be generous with acceptable paraphrases - students may use "
     "different words but still be correct. List common misconceptions that would indicate the student "
     "does NOT understand the concept.\n\n"
     "CRITICAL: Your response MUST be ONLY valid JSON. No explanations, no markdown code blocks, no text before or after.\n"
@@ -37,6 +48,15 @@ SYSTEM_PROMPT = (
     "Do NOT add any explanations or comments. Do NOT use markdown formatting.\n\n"
     "Return ONLY this JSON format:\n"
     '{\n'
+    '  "question_type": "numeric, algebraic, explanation, list, true_false, definition, date, or other",\n'
+    '  "required_result": "the result or conclusion required for full credit",\n'
+    '  "required_working": false,\n'
+    '  "required_explanation": false,\n'
+    '  "required_units": ["units explicitly required by the question"],\n'
+    '  "rounding_rule": "required precision or empty string",\n'
+    '  "acceptance_rules": ["objective conditions sufficient for full credit"],\n'
+    '  "rejection_rules": ["objective conditions that make the answer incorrect"],\n'
+    '  "partial_answer_policy": "what an incomplete answer is missing",\n'
     '  "required_concepts": ["list of core concepts the answer must contain"],\n'
     '  "optional_concepts": ["list of bonus concepts that strengthen the answer"],\n'
     '  "acceptable_paraphrases": ["list of alternative phrasings that are acceptable"],\n'
@@ -47,7 +67,7 @@ SYSTEM_PROMPT = (
     '}\n\n'
     "IMPORTANT: Start your response with '{' and end with '}'. Nothing else."
 )
-REQUIRED_KEYS = ["required_concepts", "optional_concepts", "acceptable_paraphrases", "critical_errors", "strict_keywords", "misconceptions", "grading_notes"]
+REQUIRED_KEYS = list(rubric_format["required"])
 
 
 def _ollama_chat_url() -> str:
@@ -181,6 +201,15 @@ def _extract_json_object(raw: str) -> Dict[str, object]:
 
 def _make_fallback(expected: str) -> Dict[str, object]:
     return {
+        "question_type": "other",
+        "required_result": expected,
+        "required_working": False,
+        "required_explanation": False,
+        "required_units": [],
+        "rounding_rule": "",
+        "acceptance_rules": [f"Answer must correctly satisfy: {expected}"],
+        "rejection_rules": ["Answer contradicts the teacher answer"],
+        "partial_answer_policy": "Route incomplete or ambiguous answers to review",
         "required_concepts": [expected],
         "optional_concepts": [],
         "acceptable_paraphrases": [expected],
@@ -194,11 +223,8 @@ def _make_fallback(expected: str) -> Dict[str, object]:
 def _fill_rubric_defaults(data: Dict[str, object], expected: str) -> Dict[str, object]:
     defaults = _make_fallback(expected)
     for key in REQUIRED_KEYS:
-        if key not in data or not isinstance(data[key], (list, str)):
-            if key == "grading_notes":
-                data[key] = str(data.get(key, defaults[key]))
-            else:
-                data[key] = defaults[key]
+        if key not in data or not isinstance(data[key], type(defaults[key])):
+            data[key] = defaults[key]
     return data
 
 
@@ -212,7 +238,7 @@ def generate_rubric(question: str, expected: str, model: Optional[str] = None) -
         default_predict=512,
     )
     os.makedirs("cache/rubrics", exist_ok=True)
-    key = sha256_text(question + "||" + expected)
+    key = sha256_text(RUBRIC_CONTRACT_VERSION + "||" + question + "||" + expected)
     path = os.path.join("cache/rubrics", f"{key}.json")
     if os.path.exists(path):
         with open(path, "r", encoding="utf-8") as f:

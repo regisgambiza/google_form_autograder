@@ -52,14 +52,14 @@
     "accuracy_policy": {
         "enabled": true,
         "minimum_judge_confidence": 0.9,
-        "required_accept_roles": ["semantic_judge", "factual_judge", "strict_judge"],
+        "required_accept_roles": ["semantic_judge", "factual_judge", "concept_judge", "strict_judge"],
         "require_distinct_models": true,
         "embeddings_can_accept": false,
         "ambiguous_outcome": "REVIEW"
     },
     "adaptive_math_jury": {
         "enabled": true,
-        "primary_roles": ["semantic_judge", "factual_judge"],
+        "primary_roles": ["semantic_judge", "factual_judge", "concept_judge"],
         "adjudicator_role": "strict_judge",
         "minimum_primary_confidence": 0.9,
         "ambiguity_markers": ["ambiguous", "uncertain", "unclear", "insufficient", "depends"]
@@ -171,6 +171,7 @@
     "active_judge_roles": [
         "semantic_judge",
         "factual_judge",
+        "concept_judge",
         "strict_judge"
     ]
 }

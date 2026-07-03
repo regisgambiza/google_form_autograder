@@ -5,11 +5,24 @@ Similarity is useful for routing, but never constitutes proof of correctness.
 from typing import Dict, List, Sequence, Tuple
 
 
-REQUIRED_ACCEPT_ROLES = ("semantic_judge", "factual_judge", "strict_judge")
+REQUIRED_ACCEPT_ROLES = ("semantic_judge", "factual_judge", "concept_judge", "strict_judge")
 
 
 def judge_role(result: Dict[str, object]) -> str:
     return str(result.get("role", result.get("judge_role", ""))).strip()
+
+
+def _role_models_are_independent(roles: Sequence[str], jury_models: Dict[str, str]) -> bool:
+    """Allow only the intentional blind Llama semantic/completeness role reuse."""
+    groups: Dict[str, List[str]] = {}
+    for role in roles:
+        groups.setdefault(str(jury_models.get(role, "")).strip().casefold(), []).append(role)
+    if "" in groups:
+        return False
+    return all(
+        len(group_roles) == 1 or set(group_roles) <= {"semantic_judge", "concept_judge"}
+        for group_roles in groups.values()
+    )
 
 
 def conservative_jury_decision(
@@ -49,8 +62,7 @@ def conservative_jury_decision(
     if min(confidences) < min_confidence:
         return "REVIEW", min(confidences), "insufficient_judge_confidence", evidence
 
-    models = [str(jury_models.get(role, "")).strip().casefold() for role in required_roles]
-    if require_distinct_models and len(set(models)) != len(models):
+    if require_distinct_models and not _role_models_are_independent(required_roles, jury_models):
         evidence["independence_failure"] = "required roles share a model"
         return "REVIEW", min(confidences), "judges_not_independent", evidence
     return "YES", min(confidences), "unanimous_independent_jury", evidence
@@ -60,7 +72,7 @@ def adaptive_math_jury_decision(
     judges: Sequence[Dict[str, object]],
     jury_models: Dict[str, str],
     min_confidence: float = 0.90,
-    primary_roles: Sequence[str] = ("semantic_judge", "factual_judge"),
+    primary_roles: Sequence[str] = ("semantic_judge", "factual_judge", "concept_judge"),
     adjudicator_role: str = "strict_judge",
     require_distinct_models: bool = True,
 ) -> Tuple[str, float, str, Dict[str, object]]:
@@ -86,9 +98,12 @@ def adaptive_math_jury_decision(
         decisions = [str(j.get("decision")).upper() for j in primary]
         confidences = [float(j.get("confidence", 0.0) or 0.0) for j in primary]
         models = [str(jury_models.get(role, "")).casefold() for role in primary_roles]
-        independent = len(set(models)) == len(models)
-        if len(set(decisions)) == 1 and min(confidences) >= min_confidence and (independent or not require_distinct_models):
-            return decisions[0], min(confidences), "two_judge_agreement", evidence
+        evidence_clean = all(not j.get("requirements_missing") and not j.get("contradictions") for j in primary)
+        # Roles may share one physical model when they use blind, specialized
+        # prompts. Still require at least two distinct primary model families.
+        independent = _role_models_are_independent(primary_roles, jury_models)
+        if evidence_clean and len(set(decisions)) == 1 and min(confidences) >= min_confidence and (independent or not require_distinct_models):
+            return decisions[0], min(confidences), "primary_unanimous_agreement", evidence
 
     adjudicator = by_role.get(adjudicator_role)
     if not adjudicator or str(adjudicator.get("decision", "")).upper() not in {"YES", "NO"}:
@@ -97,9 +112,13 @@ def adaptive_math_jury_decision(
     if adjudicator_conf < min_confidence:
         return "REVIEW", adjudicator_conf, "adjudicator_low_confidence", evidence
     if require_distinct_models:
-        used_roles = [role for role in list(primary_roles) + [adjudicator_role] if role in by_role]
-        models = [str(jury_models.get(role, "")).casefold() for role in used_roles]
-        if len(set(models)) != len(models):
+        primary_models = {str(jury_models.get(role, "")).casefold() for role in primary_roles}
+        adjudicator_model = str(jury_models.get(adjudicator_role, "")).casefold()
+        if not _role_models_are_independent(primary_roles, jury_models) or adjudicator_model in primary_models:
             return "REVIEW", adjudicator_conf, "judges_not_independent", evidence
     decision = str(adjudicator.get("decision")).upper()
-    return decision, adjudicator_conf, "adjudicator_decision", evidence
+    if decision == "YES":
+        # A disputed/low-confidence positive is useful evidence, but it is not
+        # independent primary agreement and therefore requires teacher review.
+        return "REVIEW", adjudicator_conf, "adjudicator_positive_requires_teacher_review", evidence
+    return "NO", adjudicator_conf, "adjudicator_rejection", evidence

@@ -28,14 +28,15 @@ def test_every_answer_is_forced_through_ai_jury():
     assert cfg["force_ai_jury_for_all_answers"] is True
 
 
-def test_jury_uses_llama_evaluator_gemma_verifier_and_gpt_adjudicator():
+def test_jury_uses_three_blind_roles_and_gpt_adjudicator():
     cfg = json.loads(Path("config.json").read_text(encoding="utf-8"))
     adaptive = cfg["adaptive_math_jury"]
     assert adaptive["enabled"] is True
-    assert adaptive["primary_roles"] == ["semantic_judge", "factual_judge"]
+    assert adaptive["primary_roles"] == ["semantic_judge", "factual_judge", "concept_judge"]
     assert adaptive["adjudicator_role"] == "strict_judge"
     assert cfg["jury_models"][adaptive["primary_roles"][0]] == "llama3.1:8b"
     assert cfg["jury_models"][adaptive["primary_roles"][1]] == "gemma3:12b"
+    assert cfg["jury_models"][adaptive["primary_roles"][2]] == "llama3.1:8b"
     assert cfg["jury_models"][adaptive["adjudicator_role"]] == "gpt-oss:latest"
 
 

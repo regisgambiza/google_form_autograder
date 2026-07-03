@@ -46,10 +46,10 @@ EXECUTION_MODE_PRESETS = {
         "max_concurrent_jury_answers": 1,
         "enable_async_judges": False,
         "sync_judge_parallelism": 1,
-        "active_judge_roles": ["semantic_judge", "factual_judge", "strict_judge"],
+        "active_judge_roles": ["semantic_judge", "factual_judge", "concept_judge", "strict_judge"],
         "adaptive_math_jury": {
             "enabled": True,
-            "primary_roles": ["semantic_judge", "factual_judge"],
+            "primary_roles": ["semantic_judge", "factual_judge", "concept_judge"],
             "adjudicator_role": "strict_judge",
             "minimum_primary_confidence": 0.90,
             "ambiguity_markers": ["ambiguous", "uncertain", "unclear", "insufficient", "depends"],
@@ -58,7 +58,7 @@ EXECUTION_MODE_PRESETS = {
         "accuracy_policy": {
             "enabled": True,
             "minimum_judge_confidence": 0.90,
-            "required_accept_roles": ["semantic_judge", "factual_judge", "strict_judge"],
+            "required_accept_roles": ["semantic_judge", "factual_judge", "concept_judge", "strict_judge"],
             "require_distinct_models": True,
             "embeddings_can_accept": False,
             "ambiguous_outcome": "REVIEW",
@@ -1057,15 +1057,16 @@ class FormManager(QMainWindow):
             adaptive = preset.get("adaptive_math_jury", cfg.get("adaptive_math_jury", {}))
             primary_roles = list(adaptive.get("primary_roles", [])) if adaptive.get("enabled", False) else []
             adjudicator_role = str(adaptive.get("adjudicator_role", ""))
-            visible_jury_roles = {"semantic_judge", "factual_judge", "strict_judge"}
+            visible_jury_roles = {"semantic_judge", "factual_judge", "concept_judge", "strict_judge"}
             total_roles = len(visible_jury_roles)
             status_text = (
                 f"{len(active_roles & visible_jury_roles)} active jury roles."
             )
-            if len(primary_roles) >= 2 and adjudicator_role:
+            if len(primary_roles) >= 3 and adjudicator_role:
                 status_text += (
                     f" Flow: {jury_combos[primary_roles[0]].currentText()} evaluates; "
                     f"{jury_combos[primary_roles[1]].currentText()} verifies; "
+                    f"{jury_combos[primary_roles[2]].currentText()} challenges completeness; "
                     f"{jury_combos[adjudicator_role].currentText()} adjudicates when needed."
                 )
             jury_status_label.setText(status_text)
@@ -1073,7 +1074,12 @@ class FormManager(QMainWindow):
                 active = role in active_roles
                 assignment = ""
                 if role in primary_roles:
-                    assignment = "primary evaluator" if role == primary_roles[0] else "independent verifier"
+                    position = primary_roles.index(role)
+                    assignment = (
+                        "meaning evaluator" if position == 0 else
+                        "independent verifier" if position == 1 else
+                        "completeness challenge"
+                    )
                 elif role == adjudicator_role:
                     assignment = "conditional adjudicator"
                 label.setText(
@@ -1151,7 +1157,7 @@ class FormManager(QMainWindow):
         form.addRow("Model Choices:", model_status_label)
         # Only the three roles used by the active grading workflow belong in the everyday UI.
         for role, combo in jury_combos.items():
-            if role in {"semantic_judge", "factual_judge", "strict_judge"}:
+            if role in {"semantic_judge", "factual_judge", "concept_judge", "strict_judge"}:
                 form.addRow(jury_role_labels[role], combo)
         form.addRow("Jury Roles:", jury_status_label)
         form.addRow("", report_checkbox)
@@ -1170,8 +1176,8 @@ class FormManager(QMainWindow):
         force_ai_checkbox = QCheckBox("Send every answer through the full AI jury", dialog)
         force_ai_checkbox.setChecked(bool(cfg.get("force_ai_jury_for_all_answers", True)))
         force_ai_checkbox.setToolTip(
-            "Llama evaluates and Gemma verifies every answer. GPT-OSS adjudicates disagreements, "
-            "ambiguity, or low confidence. Deterministic checks become evidence only."
+            "Llama evaluates meaning, Gemma verifies facts/mathematics, and a blind Llama role "
+            "challenges rubric completeness. GPT-OSS adjudicates disagreements, ambiguity, or low confidence."
         )
         form.addRow("AI Evaluation:", force_ai_checkbox)
 
@@ -1254,7 +1260,7 @@ class FormManager(QMainWindow):
             accuracy_policy.update({
                 "enabled": True,
                 "minimum_judge_confidence": float(minimum_judge_confidence_spin.value()),
-                "required_accept_roles": ["semantic_judge", "factual_judge", "strict_judge"],
+                "required_accept_roles": ["semantic_judge", "factual_judge", "concept_judge", "strict_judge"],
                 "require_distinct_models": distinct_models_checkbox.isChecked(),
                 "embeddings_can_accept": False,
                 "ambiguous_outcome": "REVIEW",

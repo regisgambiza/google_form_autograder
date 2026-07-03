@@ -49,3 +49,41 @@ def test_open_explanations_and_lists_route_to_semantic_jury():
 def test_blank_and_copied_question_are_rejected():
     assert check("", "Paris", "What is the capital of France?").status == "CONTRADICTED"
     assert check("What is the capital of France?", "Paris", "What is the capital of France?").status == "CONTRADICTED"
+
+
+def test_mark_scheme_ranges_and_explicit_alternatives_are_supported():
+    expected = "An answer between 62.8 and 62.84 (cm) or for an answer of 63 (cm)"
+    assert check("62.82", expected, "Work out the ribbon length").status == "PROVEN"
+    assert check("63 cm", expected, "Work out the ribbon length").status == "PROVEN"
+    assert check("64", expected, "Work out the ribbon length").status == "CONTRADICTED"
+
+
+def test_required_rounding_and_parenthesized_units_are_supported():
+    question = "Find the diameter. Give your answer to 1 decimal place."
+    assert check("50.9 cm", "50.9 (cm)", question).status == "PROVEN"
+    assert check("50.90 cm", "50.9 (cm)", question).status == "CONTRADICTED"
+
+
+def test_equivalent_simple_inequalities_have_same_solution_set():
+    assert check("4 < x", "x > 4", "Solve the inequality").status == "PROVEN"
+    assert check("x >= 4", "x > 4", "Solve the inequality").status == "CONTRADICTED"
+    assert check("(1, 4]", "1 < x <= 4", "Solve the inequality").status == "PROVEN"
+
+
+def test_not_equal_reasoning_is_extracted_from_explanatory_prose():
+    expected = "10 + 15 - 7 is not 2 or she would be correct with different values"
+    answer = "10 + 15 - 7 = 18, which is not equal to 2, so the polyhedron cannot exist"
+    result = check(answer, expected, "Explain why the polyhedron is impossible")
+    assert result.status == "PROVEN"
+    assert result.domain == "mathematical_explanation"
+    assert result.evidence["equations"][0]["valid"] is True
+
+
+def test_unresolved_calculation_in_prose_is_sent_to_ai_not_rejected():
+    result = check(
+        "I calculated 10 + 15 - 7 = 17 but I am unsure",
+        "10 + 15 - 7 is not 2",
+        "Explain why the polyhedron is impossible",
+    )
+    assert result.status == "REVIEW"
+    assert result.domain == "mathematical_explanation"

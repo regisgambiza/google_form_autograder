@@ -173,8 +173,9 @@ def test_answer_categories_are_labelled_and_rejected_is_not_selected():
     assert dialog.answer_list.item(1).text() == "Accepted — accepted"
     assert dialog.answer_list.item(2).text() == "Needs approval — approval"
     assert dialog.answer_list.item(3).text() == "Rejected — wrong"
+    assert dialog.answer_list.item(2).checkState() == Qt.Unchecked
     assert dialog.answer_list.item(3).checkState() == Qt.Unchecked
-    assert dialog._checked_answers() == ["accepted", "approval"]
+    assert dialog._checked_answers() == ["accepted"]
 
 
 def test_filter_switches_between_review_and_all_questions(monkeypatch):

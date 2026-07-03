@@ -55,13 +55,16 @@ def _write_heartbeat_if_needed():
 
 JUDGE_PROMPTS = {
     "semantic_judge": "You are a semantic meaning evaluator. Your ONLY job is to determine whether the student's answer conveys the same MEANING as the expected answer, regardless of wording, grammar, or spelling. Ignore surface form completely. Focus only on whether the core idea is the same.\n\nCRITICAL: Your response MUST be ONLY valid JSON. No explanations, no markdown, no text before or after.",
-    "concept_judge": "You are a concept coverage checker. Given the required concepts for a correct answer, determine what percentage of them appear in the student's answer (even if expressed differently). Return a coverage score from 0.0 to 1.0.\n\nCRITICAL: Your response MUST be ONLY valid JSON. No explanations, no markdown, no text before or after.",
+    "concept_judge": "You are an adversarial rubric-completeness judge. Independently check every required result, concept, unit, rounding rule, working step, and explanation. Try to disprove acceptance by finding omissions, contradictions, or lucky guesses. Do not see or infer other judges' verdicts.\n\nCRITICAL: Your response MUST be ONLY valid JSON. No explanations, no markdown, no text before or after.",
     "factual_judge": "You are a factual accuracy checker for science and mathematics. Determine whether the student's answer is scientifically or mathematically correct, ignoring grammar and spelling. Flag anything factually wrong even if it sounds similar to the correct answer.\n\nCRITICAL: Your response MUST be ONLY valid JSON. No explanations, no markdown, no text before or after.",
     "strict_judge": "You are a strict but fair human examiner. Grade as you would in a real classroom. Do not accept vague or incomplete answers. Require the student to have demonstrated genuine understanding, not just a lucky guess.\n\nCRITICAL: Your response MUST be ONLY valid JSON. No explanations, no markdown, no text before or after.",
     "misconception_judge": "You are a misconception analyst. Your job is to detect whether the student's answer reveals a fundamental conceptual misunderstanding, even if parts of the answer sound correct on the surface. A misconception should lower the score significantly.\n\nCRITICAL: Your response MUST be ONLY valid JSON. No explanations, no markdown, no text before or after.",
     "language_filter": "You are a language quality assessor for ESL and Thai learner answers. Your job is to separate language errors (grammar, spelling, word order) from content errors. Report how much of the answer's incorrectness is due to language issues vs actual wrong content.\n\nCRITICAL: Your response MUST be ONLY valid JSON. No explanations, no markdown, no text before or after.",
 }
-REQUIRED_FIELDS = ["decision", "confidence", "reason_short"]
+REQUIRED_FIELDS = [
+    "decision", "confidence", "reason_short", "requirements_met",
+    "requirements_missing", "contradictions", "calculation_check",
+]
 
 
 def _selected_roles(cfg: Dict[str, object]) -> List[str]:
@@ -103,7 +106,11 @@ def _abstain(reason: str = "judge unavailable") -> Dict[str, object]:
     return {
         "confidence": 0.0,
         "decision": "ERROR",
-        "reason_short": reason
+        "reason_short": reason,
+        "requirements_met": [],
+        "requirements_missing": [],
+        "contradictions": [],
+        "calculation_check": "unavailable",
     }
 
 
@@ -261,6 +268,10 @@ def _fill_judge_defaults(data: Dict[str, object]) -> Dict[str, object]:
             data[nf] = 0.0
     
     data["reason_short"] = str(data.get("reason_short", ""))[:500]
+    for key in ("requirements_met", "requirements_missing", "contradictions"):
+        value = data.get(key, [])
+        data[key] = [str(item)[:300] for item in value][:20] if isinstance(value, list) else []
+    data["calculation_check"] = str(data.get("calculation_check", ""))[:500]
     return data
 
 
@@ -291,8 +302,10 @@ def _make_judge_prompt(question: str, expected: str, answer: str, rubric: Dict[s
         "You MUST make a binary decision. Choose YES if the answer is correct, otherwise choose NO. "
         "Never abstain, defer, or return an uncertain verdict. Uncertainty must be expressed only in "
         "the numeric confidence field while decision remains YES or NO. "
-        "Return ONLY one compact JSON object in this exact shape: "
-        '{"decision":"YES","confidence":0.95,"reason_short":"brief reason"}'
+        "Base the verdict on explicit evidence. Return ONLY one compact JSON object in this exact shape: "
+        '{"decision":"YES","confidence":0.95,"reason_short":"brief reason",'
+        '"requirements_met":["requirement supported by the answer"],'
+        '"requirements_missing":[],"contradictions":[],"calculation_check":"verified or not applicable"}'
     )
 
 
@@ -303,7 +316,11 @@ def _get_judge_format() -> Dict[str, object]:
         "properties": {
             "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
             "decision": {"type": "string", "enum": ["YES", "NO"]},
-            "reason_short": {"type": "string", "maxLength": 500}
+            "reason_short": {"type": "string", "maxLength": 500},
+            "requirements_met": {"type": "array", "items": {"type": "string"}, "maxItems": 20},
+            "requirements_missing": {"type": "array", "items": {"type": "string"}, "maxItems": 20},
+            "contradictions": {"type": "array", "items": {"type": "string"}, "maxItems": 20},
+            "calculation_check": {"type": "string", "maxLength": 500}
         },
         "required": REQUIRED_FIELDS
     }
@@ -359,7 +376,7 @@ async def call_judge_async(
     for attempt in range(retries):
         if attempt:
             payload["messages"][1]["content"] = (
-                base_prompt + "\n\nREPAIR: Your previous response was invalid. Output only the three-field JSON object."
+                base_prompt + "\n\nREPAIR: Your previous response was invalid. Output only the required JSON object."
             )
         if not sem.acquire(timeout=sem_wait):
             log("WARNING", f"Judge {role} semaphore wait timeout ({sem_wait}s)")
@@ -504,7 +521,7 @@ def _run_judges_sync(
         log("INFO", f"START judge_{role} (model={role_model})")
         user_prompt = _make_judge_prompt(question, expected, answer, rubric)
         if repair:
-            user_prompt += "\n\nREPAIR: Your previous response was invalid. Output only the three-field JSON object."
+            user_prompt += "\n\nREPAIR: Your previous response was invalid. Output only the required JSON object."
         payload = {
             "model": role_model,
             "messages": [
@@ -579,7 +596,7 @@ def _run_judges_sync(
     adaptive_cfg = cfg.get("adaptive_math_jury", {})
     if bool(adaptive_cfg.get("enabled", False)):
         primary_roles = [
-            role for role in adaptive_cfg.get("primary_roles", ["semantic_judge", "factual_judge"])
+            role for role in adaptive_cfg.get("primary_roles", ["semantic_judge", "factual_judge", "concept_judge"])
             if role in roles
         ]
         adjudicator_role = str(adaptive_cfg.get("adjudicator_role", "strict_judge"))
@@ -596,9 +613,10 @@ def _run_judges_sync(
         ambiguous = any(
             any(marker in str(j.get("reason_short", "")).casefold() for marker in ambiguity_words)
             for j in out
-        )
+        ) or any(j.get("requirements_missing") or j.get("contradictions") for j in out)
+        expected_primary_count = len(primary_roles)
         needs_adjudicator = (
-            len(out) != 2
+            len(out) != expected_primary_count
             or not valid_primary
             or len(set(decisions)) != 1
             or min(confidences, default=0.0) < threshold
@@ -609,7 +627,7 @@ def _run_judges_sync(
             log("INFO", f"[JUDGES] Escalating to {adjudicator_role}: {reason}")
             out.append(_call_one(adjudicator_role))
         else:
-            log("INFO", "[JUDGES] Two primary judges agree confidently; adjudicator skipped")
+            log("INFO", f"[JUDGES] {expected_primary_count} primary roles agree confidently; adjudicator skipped")
         return out
 
     if sync_parallelism <= 1:

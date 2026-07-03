@@ -36,6 +36,8 @@ from auth import get_service
 from app_theme import apply_widget_theme
 from form_searcher import find_all_forms_in_sources
 from updater import update_correct_answers
+from benchmark import save_teacher_labels, summarize_recorded_decisions
+from evaluator_config import load_config
 
 
 class _AnswerKeySaveWorker(QThread):
@@ -435,11 +437,13 @@ class AnswerKeyDashboard(QDialog):
                 item.setToolTip("Protected teacher canonical answer")
             else:
                 item.setFlags(item.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsEditable)
-                item.setCheckState(Qt.Unchecked if category == "Rejected" else Qt.Checked)
-                if category == "Rejected":
-                    item.setToolTip("Rejected by grading and not entered in the form. Check to approve it manually.")
+                item.setCheckState(Qt.Checked if category == "Accepted" else Qt.Unchecked)
+                if category == "Accepted":
+                    item.setToolTip("Confidently accepted and entered in the form. Uncheck to remove.")
+                elif category == "Needs approval":
+                    item.setToolTip("Not entered in the form. Check to approve it manually.")
                 else:
-                    item.setToolTip("Currently entered in the form. Uncheck to remove; double-click to edit.")
+                    item.setToolTip("Rejected and not entered in the form. Check to override manually.")
             self.answer_list.addItem(item)
         self._set_detail_enabled(True)
 
@@ -471,10 +475,43 @@ class AnswerKeyDashboard(QDialog):
         for row in range(self.answer_list.count()):
             item = self.answer_list.item(row)
             if not bool(item.data(Qt.UserRole + 1)) and item.checkState() == Qt.Checked:
-                text = item.text().strip()
-                prefix = f"{item.data(Qt.UserRole + 2)} — "
-                answers.append(text[len(prefix):].strip() if text.startswith(prefix) else text)
+                answers.append(self._answer_item_value(item))
         return answers
+
+    @staticmethod
+    def _answer_item_value(item) -> str:
+        text = item.text().strip()
+        prefix = f"{item.data(Qt.UserRole + 2)} — "
+        return text[len(prefix):].strip() if text.startswith(prefix) else text
+
+    def _teacher_benchmark_examples(self, finding: HealthFinding, canonical: str) -> List[Dict]:
+        examples = []
+        decision_by_category = {"Accepted": "YES", "Needs approval": "REVIEW", "Rejected": "NO"}
+        reviewed_keys = {
+            identity_key(value)
+            for record in getattr(finding, "review_records", [])
+            for value in record.get("candidates", [])
+        }
+        if not reviewed_keys:
+            return examples
+        for row in range(self.answer_list.count()):
+            item = self.answer_list.item(row)
+            if bool(item.data(Qt.UserRole + 1)):
+                continue
+            answer = self._answer_item_value(item)
+            if identity_key(answer) not in reviewed_keys:
+                continue
+            category = str(item.data(Qt.UserRole + 2) or "Needs approval")
+            examples.append({
+                "form_id": self.form_id,
+                "item_id": finding.item_id,
+                "question": finding.title,
+                "expected": [canonical],
+                "answer": answer,
+                "label": "YES" if item.checkState() == Qt.Checked else "NO",
+                "model_decision": decision_by_category.get(category, "REVIEW"),
+            })
+        return examples
 
     def save_question(self):
         finding = self.active_finding
@@ -488,6 +525,7 @@ class AnswerKeyDashboard(QDialog):
                     backup_form_grading(self.service, self.form_id, reason="before answer-key review")
                 )
             answers = self._checked_answers()
+            benchmark_examples = self._teacher_benchmark_examples(finding, canonical)
             self._set_detail_enabled(False)
             progress = QProgressDialog("Saving answer key…", "Cancel", 0, 0, self)
             progress.setWindowTitle("Saving")
@@ -505,16 +543,23 @@ class AnswerKeyDashboard(QDialog):
                 canonical,
                 self,
             )
-            worker.finished.connect(lambda _: self._on_save_finished(progress, finding))
+            worker.finished.connect(lambda _: self._on_save_finished(progress, finding, benchmark_examples))
             worker.failed.connect(lambda error: self._on_save_failed(progress, error))
             worker.start()
         except Exception as exc:
             QMessageBox.critical(self, "Could not save answer key", str(exc))
 
-    def _on_save_finished(self, progress, finding):
+    def _on_save_finished(self, progress, finding, benchmark_examples=None):
         progress.close()
         resolve_reviews(self.form_id, finding.item_id, "approved")
-        self._remove_review_item(finding, f"Saved Q{finding.index + 1}")
+        benchmark_path = str(load_config().get("teacher_benchmark_path", "teacher_benchmark.jsonl"))
+        added = save_teacher_labels(benchmark_path, benchmark_examples or [])
+        report = summarize_recorded_decisions(benchmark_path)
+        accuracy = float(report.get("decided_accuracy", 0.0)) * 100.0
+        self._remove_review_item(
+            finding,
+            f"Saved Q{finding.index + 1}; benchmark updated with {added} labels ({accuracy:.1f}% decided accuracy)",
+        )
 
     def _on_save_failed(self, progress, error):
         progress.close()

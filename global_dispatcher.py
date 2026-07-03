@@ -651,14 +651,16 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                     answer for answer in data["question_answers"].get(qid, [])
                     if answer and identity_key(answer) not in expected_keys
                 ))
-                categorized_candidates = list(dict.fromkeys(accepted + approval_answers))
+                # Only confident agreement between the two primary judges may
+                # change the live Form automatically. REVIEW stays queued.
+                categorized_candidates = list(dict.fromkeys(accepted))
                 if accepted or approval_answers or rejected_answers:
                     enqueue_review({
                         "form_id": form_id,
                         "item_id": question["itemId"],
                         "question_id": qid,
                         "canonical": trusted_expected[0] if trusted_expected else "",
-                        "candidates": list(dict.fromkeys(categorized_candidates + rejected_answers)),
+                        "candidates": list(dict.fromkeys(accepted + approval_answers + rejected_answers)),
                         "accepted": list(dict.fromkeys(accepted)),
                         "needs_approval": approval_answers,
                         "rejected": rejected_answers,

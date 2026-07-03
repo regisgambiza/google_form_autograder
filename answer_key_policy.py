@@ -64,7 +64,8 @@ def equivalence_confidence(candidate: object, canonical: object) -> float:
     candidate_number = _numeric_value(candidate)
     canonical_number = _numeric_value(canonical)
     if canonical_number is not None and candidate_number is None:
-        return 0.0
+        candidate_text = clean_display(candidate)
+        return 0.0 if re.search(r"[0-9=+*/^()]", candidate_text) else 0.60
     if candidate_number is not None and canonical_number is not None:
         return 0.0
     return 0.60

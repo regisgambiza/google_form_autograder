@@ -228,6 +228,8 @@ def evaluate_answer(answer: str, expected: Union[str, List[str]], question: str)
     _write_heartbeat_if_needed(hang_stage="rubric_generation")
     exp_text = _expected_text(expected)
     rubric = get_or_generate_rubric(question, exp_text, question_id=qh)
+    jury_rubric = dict(rubric)
+    jury_rubric["deterministic_math_evidence"] = domain.to_dict()
 
     _write_heartbeat_if_needed(hang_stage="concept_scoring")
     concept = score_concepts(normalize(answer), rubric)
@@ -297,7 +299,7 @@ def evaluate_answer(answer: str, expected: Union[str, List[str]], question: str)
         err = {}
         def _runner():
             try:
-                holder["judges"] = run_judges(answer, question, exp_text, rubric, retries=int(cfg.get("retry_attempts", 3)))
+                holder["judges"] = run_judges(answer, question, exp_text, jury_rubric, retries=int(cfg.get("retry_attempts", 3)))
             except Exception as ex:
                 err["ex"] = ex
         t = threading.Thread(target=_runner, daemon=True)
@@ -356,7 +358,7 @@ def evaluate_answer(answer: str, expected: Union[str, List[str]], question: str)
                 judges,
                 cfg.get("jury_models", {}),
                 min_confidence=float(adaptive_cfg.get("minimum_primary_confidence", accuracy_cfg.get("minimum_judge_confidence", 0.90))),
-                primary_roles=adaptive_cfg.get("primary_roles", ["semantic_judge", "factual_judge"]),
+                primary_roles=adaptive_cfg.get("primary_roles", ["semantic_judge", "factual_judge", "concept_judge"]),
                 adjudicator_role=str(adaptive_cfg.get("adjudicator_role", "strict_judge")),
                 require_distinct_models=bool(accuracy_cfg.get("require_distinct_models", True)),
             )
@@ -379,7 +381,7 @@ def evaluate_answer(answer: str, expected: Union[str, List[str]], question: str)
     votes = [1.0 if j.get("decision") == decision else 0.0 for j in active]
     agree = (sum(votes) / len(votes)) if votes else 0.0
     key_eligible = decision == "YES" and domain.domain in {"natural_language", "multipart_list"}
-    evidence = {"question": question, "expected": expected, "answer": answer, "embedding_similarity": emb_score, "rubric": rubric, "policy": policy_evidence, "domain_validation": domain.to_dict(), "key_eligible": key_eligible}
+    evidence = {"question": question, "expected": expected, "answer": answer, "embedding_similarity": emb_score, "rubric": jury_rubric, "policy": policy_evidence, "domain_validation": domain.to_dict(), "key_eligible": key_eligible}
     res = EvaluationResult(answer, decision, float(final_score), float(concept["semantic_score"]), float(concept["concept_score"]), factual, bool(misconception["misconception_detected"]), str(misconception["misconception_description"]), list(concept["missing_concepts"]), list(concept["accepted_concepts"]), agree, float(confidence), False, lat, stage, evidence)
     record_decision(asdict(res), str(cfg.get("decision_audit_path", "logs/grading_decisions.jsonl")))
     with RESULT_CACHE_LOCK:

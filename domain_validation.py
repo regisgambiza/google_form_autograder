@@ -1,11 +1,12 @@
 """Question-aware deterministic validation before semantic AI judging."""
 import re
+import unicodedata
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from fractions import Fraction
 from typing import Dict, List, Optional, Sequence
 
-from sympy import simplify, sympify
+from sympy import Ge, Gt, Interval, Le, Lt, simplify, solve_univariate_inequality, sympify
 
 from normalization import normalize
 
@@ -33,10 +34,13 @@ _MATH_HINT = re.compile(
 _LIST_HINT = re.compile(r"\b(list|name|state|give|identify)\s+(?:the\s+)?(?:two|three|four|\d+)", re.I)
 _DATE_HINT = re.compile(r"\b(date|day|month|year)\b", re.I)
 _UNITS = ("kg", "km", "cm", "mm", "mph", "kph", "°c", "°f", "degrees", "%", "$", "m", "g", "s", "h")
+_NUMBER_TOKEN = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)"
 
 
 def _clean(value: object) -> str:
-    return " ".join(str(value or "").replace("\r", " ").replace("\n", " ").split()).strip()
+    text = unicodedata.normalize("NFKC", str(value or ""))
+    text = text.translate(str.maketrans({"−": "-", "–": "-", "—": "-", "×": "*", "÷": "/"}))
+    return " ".join(text.replace("\r", " ").replace("\n", " ").split()).strip()
 
 
 def _numeric(value: str) -> Optional[Fraction]:
@@ -68,6 +72,7 @@ def _number_without_unit(value: str) -> Optional[Fraction]:
     unit = _unit(text)
     if unit:
         text = re.sub(rf"(?<![a-z]){re.escape(unit)}(?![a-z])", "", text).strip()
+        text = re.sub(r"\(\s*\)", "", text).strip()
     return _numeric(text)
 
 
@@ -91,6 +96,97 @@ def _math_expr(value: str):
     text = re.sub(r"([A-Za-z0-9])(\()", r"\1*\2", text)
     try:
         return sympify(text)
+    except Exception:
+        return None
+
+
+def _allowed_numeric_spec(expected: str) -> Dict[str, object]:
+    """Extract explicit ranges and alternatives from teacher mark-scheme prose."""
+    text = _clean(expected).casefold()
+    spec: Dict[str, object] = {"range": None, "alternatives": []}
+    match = re.search(rf"\bbetween\s+({_NUMBER_TOKEN})\s+and\s+({_NUMBER_TOKEN})", text)
+    if not match:
+        match = re.search(rf"({_NUMBER_TOKEN})\s*(?:to|\.\.|-)\s*({_NUMBER_TOKEN})", text)
+    if match:
+        low, high = _numeric(match.group(1)), _numeric(match.group(2))
+        if low is not None and high is not None:
+            spec["range"] = (min(low, high), max(low, high))
+    for pattern in (rf"\banswer\s+of\s+({_NUMBER_TOKEN})", rf"\bor\s+({_NUMBER_TOKEN})(?:\s|\(|$)"):
+        for token in re.findall(pattern, text):
+            parsed = _numeric(token)
+            if parsed is not None and parsed not in spec["alternatives"]:
+                spec["alternatives"].append(parsed)
+    return spec
+
+
+def _decimal_places(value: str) -> Optional[int]:
+    match = re.fullmatch(rf"\s*({_NUMBER_TOKEN})\s*(?:[a-z°%$]+)?\s*", _clean(value), re.I)
+    if not match:
+        return None
+    token = match.group(1)
+    return len(token.split(".", 1)[1]) if "." in token else 0
+
+
+def _required_decimal_places(question: str) -> Optional[int]:
+    match = re.search(r"(?:to|give\s+your\s+answer\s+to)\s+(\d+)\s+decimal\s+place", _clean(question), re.I)
+    return int(match.group(1)) if match else None
+
+
+def _not_equal_values(value: str) -> List[Fraction]:
+    text = _clean(value).casefold().replace("≠", " != ").replace("=/", " != ")
+    found = []
+    pattern = rf"(?:!=|not\s+equal\s+to|is\s+not|not)\s*({_NUMBER_TOKEN})"
+    for token in re.findall(pattern, text):
+        parsed = _numeric(token)
+        if parsed is not None and parsed not in found:
+            found.append(parsed)
+    return found
+
+
+def _equation_fragments(value: str) -> List[Dict[str, object]]:
+    """Extract arithmetic equations from prose without parsing the prose itself."""
+    fragments = []
+    pattern = re.compile(r"(?<![A-Za-z])([0-9.()\s+*/^-]+=[0-9.()\s+*/^-]+)")
+    for raw in pattern.findall(_clean(value)):
+        fragment = raw.strip(" ,.;")
+        left, right = fragment.split("=", 1)
+        lhs, rhs = _math_expr(left), _math_expr(right)
+        valid = bool(
+            lhs is not None and rhs is not None
+            and not lhs.free_symbols and not rhs.free_symbols
+            and simplify(lhs - rhs) == 0
+        )
+        fragments.append({"text": fragment, "valid": valid})
+    return fragments
+
+
+def _inequality_set(value: str):
+    text = _clean(value).replace("≤", "<=").replace("≥", ">=")
+    interval = re.fullmatch(rf"\s*([\[(])\s*({_NUMBER_TOKEN})\s*,\s*({_NUMBER_TOKEN})\s*([\])])\s*", text)
+    if interval:
+        low, high = _numeric(interval.group(2)), _numeric(interval.group(3))
+        if low is not None and high is not None:
+            return Interval(low, high, left_open=interval.group(1) == "(", right_open=interval.group(4) == ")")
+    compound = re.fullmatch(r"\s*(.+?)\s*(<=|>=|<|>)\s*(.+?)\s*(<=|>=|<|>)\s*(.+?)\s*", text)
+    if compound:
+        left, op1, middle, op2, right = compound.groups()
+        first = _inequality_set(f"{left}{op1}{middle}")
+        second = _inequality_set(f"{middle}{op2}{right}")
+        if first is not None and second is not None:
+            return first.intersect(second)
+        return None
+    match = re.fullmatch(r"\s*(.+?)\s*(<=|>=|<|>)\s*(.+?)\s*", text)
+    if not match:
+        return None
+    left, op, right = _math_expr(match.group(1)), match.group(2), _math_expr(match.group(3))
+    if left is None or right is None:
+        return None
+    symbols = left.free_symbols | right.free_symbols
+    if len(symbols) != 1:
+        return None
+    relation = {"<": Lt, "<=": Le, ">": Gt, ">=": Ge}[op](left, right)
+    try:
+        return solve_univariate_inequality(relation, next(iter(symbols)), relational=False)
     except Exception:
         return None
 
@@ -137,11 +233,26 @@ def validate_answer_domain(answer: str, expected_values: Sequence[str], question
     if normalize(candidate) == normalize(question) or len(re.sub(r"\W", "", candidate)) < 1:
         return DomainValidation("CONTRADICTED", "irrelevant", 0.99, "copied question or nonsensical answer", False, base)
 
+    numeric_spec = _allowed_numeric_spec(expected)
     cnum, enum = _number_without_unit(candidate), _number_without_unit(expected)
+    if cnum is not None and (numeric_spec["range"] or numeric_spec["alternatives"]):
+        allowed_range = numeric_spec["range"]
+        alternatives = numeric_spec["alternatives"]
+        in_range = bool(allowed_range and allowed_range[0] <= cnum <= allowed_range[1])
+        allowed = in_range or cnum in alternatives
+        evidence = {**base, "candidate_value": str(cnum), "allowed_range": tuple(map(str, allowed_range)) if allowed_range else None, "alternatives": [str(v) for v in alternatives]}
+        return DomainValidation(
+            "PROVEN" if allowed else "CONTRADICTED", "numeric_range", 1.0,
+            "value is within an accepted range/alternative" if allowed else "value is outside the accepted range/alternatives",
+            allowed, evidence,
+        )
     if cnum is not None and enum is not None:
         cu, eu = _unit(candidate), _unit(expected)
         if cu != eu and (cu or eu):
             return DomainValidation("CONTRADICTED", "numeric", 1.0, "unit mismatch", False, {**base, "candidate_unit": cu, "canonical_unit": eu})
+        places = _required_decimal_places(question)
+        if places is not None and _decimal_places(candidate) != places:
+            return DomainValidation("CONTRADICTED", "rounding", 0.99, f"answer must be given to {places} decimal place(s)", False, {**base, "required_decimal_places": places})
         if cnum == enum:
             return DomainValidation("PROVEN", "numeric", 1.0, "exact numeric equivalence", True, base)
         return DomainValidation("CONTRADICTED", "numeric", 1.0, "numeric value contradicts canonical", False, base)
@@ -154,6 +265,33 @@ def validate_answer_domain(answer: str, expected_values: Sequence[str], question
         return DomainValidation("REVIEW", "date", 0.0, "date format could not be verified", False, base)
 
     if _looks_structured_math(question, expected):
+        candidate_inequality = _inequality_set(candidate)
+        expected_inequality = _inequality_set(expected)
+        if candidate_inequality is not None and expected_inequality is not None:
+            same = candidate_inequality == expected_inequality
+            return DomainValidation(
+                "PROVEN" if same else "CONTRADICTED", "inequality", 0.99,
+                "equivalent inequality solution set" if same else "different inequality solution set",
+                same, {**base, "candidate_set": str(candidate_inequality), "expected_set": str(expected_inequality)},
+            )
+        expected_not_equal = _not_equal_values(expected)
+        candidate_not_equal = _not_equal_values(candidate)
+        candidate_equations = _equation_fragments(candidate)
+        if expected_not_equal and set(expected_not_equal) & set(candidate_not_equal):
+            valid_working = [fragment for fragment in candidate_equations if fragment["valid"]]
+            return DomainValidation(
+                "PROVEN", "mathematical_explanation", 0.98,
+                "student explicitly reaches the required not-equal conclusion",
+                True, {**base, "shared_not_equal_values": [str(v) for v in set(expected_not_equal) & set(candidate_not_equal)], "equations": candidate_equations, "valid_working": valid_working},
+            )
+        # Prose containing calculations is not itself a symbolic expression.
+        # Preserve the extracted working for the AI jury instead of rejecting it.
+        if candidate_equations:
+            return DomainValidation(
+                "REVIEW", "mathematical_explanation", 0.0,
+                "calculation extracted from explanatory prose for AI evaluation",
+                False, {**base, "equations": candidate_equations},
+            )
         equivalent = _equivalent_math(candidate, expected)
         if equivalent is False:
             return DomainValidation("CONTRADICTED", "mathematics", 0.99, "mathematical contradiction or answer-type mismatch", False, base)
