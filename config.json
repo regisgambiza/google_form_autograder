@@ -24,6 +24,8 @@
     "external_heartbeat_interval_seconds": 20,
     "external_log_student_answers": true,
     "gui_show_student_answers": true,
+    "gui_terminal_log_path": "logs/gui_terminal.log",
+    "gui_terminal_jsonl_path": "logs/gui_terminal.jsonl",
     "enable_form_context": true,
     "enable_vision_context": true,
     "vision_context_optional": true,

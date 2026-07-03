@@ -4,6 +4,8 @@ import os
 import subprocess
 import json
 import html
+import re
+from datetime import datetime, timezone
 from PyQt5.QtCore import QThread, pyqtSignal
 
 
@@ -21,6 +23,10 @@ class GraderThread(QThread):
         self.grade_recent_only = grade_recent_only
         self.process = None
         self._stop_requested = False
+        self._gui_log_fh = None
+        self._gui_jsonl_fh = None
+        self.gui_log_path = "logs/gui_terminal.log"
+        self.gui_jsonl_path = "logs/gui_terminal.jsonl"
 
     @staticmethod
     def _terminate_process_tree(pid):
@@ -72,6 +78,49 @@ class GraderThread(QThread):
         if self.process and self.process.poll() is None:
             self._terminate_process_tree(self.process.pid)
 
+    def _open_gui_terminal_logs(self):
+        cfg = {}
+        try:
+            with open("config.json", "r", encoding="utf-8") as fh:
+                cfg = json.load(fh)
+        except Exception:
+            pass
+        self.gui_log_path = str(cfg.get("gui_terminal_log_path", self.gui_log_path))
+        self.gui_jsonl_path = str(cfg.get("gui_terminal_jsonl_path", self.gui_jsonl_path))
+        for path in (self.gui_log_path, self.gui_jsonl_path):
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        self._gui_log_fh = open(self.gui_log_path, "w", encoding="utf-8")
+        self._gui_jsonl_fh = open(self.gui_jsonl_path, "w", encoding="utf-8")
+        started = datetime.now(timezone.utc).isoformat()
+        self._gui_log_fh.write(f"GUI grading transcript started {started}\n\n")
+        self._gui_log_fh.flush()
+
+    def _close_gui_terminal_logs(self):
+        for fh in (self._gui_log_fh, self._gui_jsonl_fh):
+            try:
+                if fh:
+                    fh.flush()
+                    fh.close()
+            except Exception:
+                pass
+        self._gui_log_fh = None
+        self._gui_jsonl_fh = None
+
+    @staticmethod
+    def _plain_gui_event(rendered_html):
+        text = re.sub(r"<br\s*/?>", "\n", str(rendered_html), flags=re.I)
+        text = re.sub(r"<[^>]+>", "", text)
+        return html.unescape(text).strip()
+
+    def _write_gui_terminal_event(self, event, rendered_html):
+        if self._gui_jsonl_fh:
+            self._gui_jsonl_fh.write(json.dumps(event, ensure_ascii=True) + "\n")
+            self._gui_jsonl_fh.flush()
+        if self._gui_log_fh:
+            timestamp = str(event.get("timestamp", ""))
+            self._gui_log_fh.write(f"[{timestamp}]\n{self._plain_gui_event(rendered_html)}\n\n")
+            self._gui_log_fh.flush()
+
     @staticmethod
     def _format_gui_event(event):
         kind = event.get("type")
@@ -80,6 +129,7 @@ class GraderThread(QThread):
             return (
                 f"<b>Grading: {esc(event.get('form_title'))}</b><br>"
                 f"Answers to evaluate: {int(event.get('total', 0))}<br>"
+                f"Transcript: {esc(event.get('transcript_path'))}<br>"
                 "────────────────────────────────────"
             )
         if kind == "answer_result":
@@ -152,6 +202,7 @@ class GraderThread(QThread):
             # Pass grading mode to main.py via environment variable
             my_env["GRADE_RECENT_ONLY"] = str(self.grade_recent_only).lower()
             my_env["AUTOGRADER_GRADER"] = "1"
+            self._open_gui_terminal_logs()
 
             main_path = os.path.abspath("main.py")
             creationflags = 0
@@ -181,7 +232,9 @@ class GraderThread(QThread):
                 if ls.startswith("GUI_EVENT:"):
                     try:
                         event = json.loads(ls.split(":", 1)[1])
-                        self.debug_message.emit(self._format_gui_event(event))
+                        rendered = self._format_gui_event(event)
+                        self._write_gui_terminal_event(event, rendered)
+                        self.debug_message.emit(rendered)
                     except Exception:
                         pass
                 else:
@@ -266,3 +319,4 @@ class GraderThread(QThread):
                 except Exception:
                     pass
             self.process = None
+            self._close_gui_terminal_logs()

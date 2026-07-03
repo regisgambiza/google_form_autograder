@@ -143,7 +143,13 @@ def runtime_snapshot():
 
 def gui_event(event_type: str, **payload):
     """Emit one machine-readable event intended exclusively for the GUI terminal."""
-    record = {"type": str(event_type), **payload}
+    state = runtime_snapshot()
+    record = {
+        "type": str(event_type),
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "run_id": state.get("run_id", ""),
+        **payload,
+    }
     try:
         print("GUI_EVENT:" + json.dumps(record, ensure_ascii=True), flush=True)
     except Exception:

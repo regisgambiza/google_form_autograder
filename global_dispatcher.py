@@ -897,7 +897,11 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
             expected_at_start = int(progress["expected_tasks"])
         print(f"FormProgress: 0/{expected_at_start}", flush=True)
         first_meta = next((data.get("meta", {}) for data in forms_results.values()), {})
-        gui_event("run_start", form_title=first_meta.get("title", "Google Form"), total=expected_at_start)
+        gui_event(
+            "run_start", form_title=first_meta.get("title", "Google Form"), total=expected_at_start,
+            transcript_path=str(cfg.get("gui_terminal_log_path", "logs/gui_terminal.log")),
+            jsonl_path=str(cfg.get("gui_terminal_jsonl_path", "logs/gui_terminal.jsonl")),
+        )
         [t.start() for t in da]
         [t.start() for t in aw]
         ag.start()
@@ -909,7 +913,11 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
         with metrics_lock:
             expected_at_start = int(progress["expected_tasks"])
         first_meta = next((data.get("meta", {}) for data in forms_results.values()), {})
-        gui_event("run_start", form_title=first_meta.get("title", "Google Form"), total=expected_at_start)
+        gui_event(
+            "run_start", form_title=first_meta.get("title", "Google Form"), total=expected_at_start,
+            transcript_path=str(cfg.get("gui_terminal_log_path", "logs/gui_terminal.log")),
+            jsonl_path=str(cfg.get("gui_terminal_jsonl_path", "logs/gui_terminal.jsonl")),
+        )
 
     [t.join() for t in da]
     for _ in range(ai_workers):

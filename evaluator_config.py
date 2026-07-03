@@ -22,6 +22,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "external_heartbeat_interval_seconds": 20,
     "external_log_student_answers": True,
     "gui_show_student_answers": True,
+    "gui_terminal_log_path": "logs/gui_terminal.log",
+    "gui_terminal_jsonl_path": "logs/gui_terminal.jsonl",
     "enable_form_context": True,
     "enable_vision_context": False,
     "vision_context_optional": True,
