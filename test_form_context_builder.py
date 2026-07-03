@@ -281,6 +281,29 @@ def test_validator_can_use_plain_text_model_response():
     assert parsed["confidence"] == 0.5
 
 
+def test_validator_caps_context_and_output_options(monkeypatch):
+    import expected_answer_validator
+
+    captured = {}
+
+    class Response:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"message": {"content": '{"valid": true, "confidence": 1, "suggested_answers": [], "reason": "ok"}'}}
+
+    def post(_url, json, timeout):
+        captured.update(json)
+        return Response()
+
+    monkeypatch.setattr(expected_answer_validator.requests, "post", post)
+    result = expected_answer_validator._call_validator("llama3.1:8b", "Question", ["4"], 10, 2)
+    assert result["valid"] is True
+    assert captured["options"]["num_ctx"] == 8192
+    assert captured["options"]["num_predict"] == 512
+
+
 def test_question_map_adds_exact_textbook_prompt(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(form_context_builder, "log", lambda *_args, **_kwargs: None)

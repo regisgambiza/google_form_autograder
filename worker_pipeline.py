@@ -105,6 +105,7 @@ def evaluate_answers_worker_pipeline(
                         fast_path_used=True,
                         latency_ms=lat_ms,
                         stage_reached="deterministic",
+                        evidence={"proof": det.method, "key_eligible": True},
                     )
                     results_q.put(TaskResult(task.index, res))
                     with lock:

@@ -4,7 +4,7 @@ import os
 import time
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Union
 
@@ -18,6 +18,9 @@ from misconception_detector import detect_misconception
 from normalization import normalize, semantic_deduplicate
 from rubric_generator import generate_rubric
 from semantic_scoring import score_concepts
+from accuracy_policy import adaptive_math_jury_decision, conservative_jury_decision
+from decision_audit import record_decision
+from domain_validation import validate_answer_domain
 
 
 def _write_heartbeat_if_needed(hang_stage: str = "unknown"):
@@ -79,6 +82,7 @@ class EvaluationResult:
     fast_path_used: bool
     latency_ms: float
     stage_reached: str
+    evidence: Dict[str, object] = field(default_factory=dict)
 
 
 def _expected_text(expected: Union[str, List[str]]) -> str:
@@ -188,10 +192,34 @@ def evaluate_answer(answer: str, expected: Union[str, List[str]], question: str)
     det = run_deterministic_checks(answer, expected, float(cfg.get("numeric_tolerance", 0.01)))
     if det.accepted and det.confidence >= 0.95:
         lat = (time.perf_counter() - start) * 1000.0
-        res = EvaluationResult(answer, "YES", det.confidence, det.confidence, det.confidence, det.confidence, False, "", [], [], 1.0, det.confidence, True, lat, "deterministic")
+        evidence = {"question": question, "expected": expected, "answer": answer, "proof": det.method, "key_eligible": True}
+        res = EvaluationResult(answer, "YES", det.confidence, det.confidence, det.confidence, det.confidence, False, "", [], [], 1.0, det.confidence, True, lat, "deterministic", evidence)
         with RESULT_CACHE_LOCK:
             RESULT_CACHE[ck] = res
+        record_decision(asdict(res), str(cfg.get("decision_audit_path", "logs/grading_decisions.jsonl")))
         log("DEBUG", f"latency_ms={lat:.2f} stage=deterministic")
+        return res
+
+    domain = validate_answer_domain(answer, expected if isinstance(expected, list) else [expected], question)
+    if domain.status in {"PROVEN", "CONTRADICTED", "REVIEW"}:
+        lat = (time.perf_counter() - start) * 1000.0
+        decision = {"PROVEN": "YES", "CONTRADICTED": "NO", "REVIEW": "REVIEW"}[domain.status]
+        evidence = {
+            "question": question,
+            "expected": expected,
+            "answer": answer,
+            "domain_validation": domain.to_dict(),
+            "key_eligible": bool(domain.key_eligible),
+        }
+        confidence = float(domain.confidence)
+        res = EvaluationResult(
+            answer, decision, confidence, confidence, confidence, confidence,
+            False, domain.reason if decision == "NO" else "", [], [], 1.0,
+            confidence, True, lat, f"domain_{domain.domain}", evidence,
+        )
+        with RESULT_CACHE_LOCK:
+            RESULT_CACHE[ck] = res
+        record_decision(asdict(res), str(cfg.get("decision_audit_path", "logs/grading_decisions.jsonl")))
         return res
 
     # Get rubric from cache (one rubric per question reused for all students)
@@ -208,38 +236,7 @@ def evaluate_answer(answer: str, expected: Union[str, List[str]], question: str)
     _write_heartbeat_if_needed(hang_stage="misconception_detection")
     misconception = detect_misconception(answer, rubric)
 
-    # High-coverage semantic accept fast path (pre-jury) when no misconception is detected.
-    if float(concept["concept_score"]) >= 1.0 and float(concept["semantic_score"]) >= 0.70 and not bool(misconception["misconception_detected"]):
-        lat = (time.perf_counter() - start) * 1000.0
-        res = EvaluationResult(
-            answer,
-            "YES",
-            float(concept["semantic_score"]),
-            float(concept["semantic_score"]),
-            float(concept["concept_score"]),
-            float(concept["semantic_score"]),
-            False,
-            "",
-            list(concept["missing_concepts"]),
-            list(concept["accepted_concepts"]),
-            1.0,
-            float(concept["semantic_score"]),
-            False,
-            lat,
-            "embedding",
-        )
-        with RESULT_CACHE_LOCK:
-            RESULT_CACHE[ck] = res
-        return res
-
-    # Embedding pre-filter BEFORE jury
-    if emb_score >= float(emb_th.get("auto_accept", 0.92)):
-        lat = (time.perf_counter() - start) * 1000.0
-        res = EvaluationResult(answer, "YES", emb_score, float(concept["semantic_score"]), float(concept["concept_score"]), float(concept["semantic_score"]), False, "", list(concept["missing_concepts"]), list(concept["accepted_concepts"]), 1.0, emb_score, False, lat, "embedding")
-        with RESULT_CACHE_LOCK:
-            RESULT_CACHE[ck] = res
-        log("INFO", f"stage=embedding auto_accept=True score={emb_score:.3f} latency_ms={lat:.0f}")
-        return res
+    # Embeddings and concept coverage route work; they never prove correctness.
     if emb_score < float(emb_th.get("auto_reject", 0.35)):
         lat = (time.perf_counter() - start) * 1000.0
         res = EvaluationResult(answer, "NO", emb_score, float(concept["semantic_score"]), float(concept["concept_score"]), float(concept["semantic_score"]), False, "", list(concept["missing_concepts"]), list(concept["accepted_concepts"]), 1.0, emb_score, False, lat, "embedding")
@@ -252,9 +249,11 @@ def evaluate_answer(answer: str, expected: Union[str, List[str]], question: str)
     _write_heartbeat_if_needed(hang_stage="jury_consensus")
     with JURY_CIRCUIT_LOCK:
         jury_disabled_until = float(JURY_DISABLED_UNTIL_TS)
-    if jury_disabled_until > time.time():
+    patient_mode = bool(cfg.get("patient_ai_mode", False))
+    circuit_enabled = bool(cfg.get("enable_jury_circuit_breaker", not patient_mode))
+    if circuit_enabled and jury_disabled_until > time.time():
         lat = (time.perf_counter() - start) * 1000.0
-        decision = "YES" if emb_score >= float(cfg["confidence_thresholds"]["auto_accept"]) else "NO"
+        decision = "REVIEW"
         res = EvaluationResult(
             answer, decision, emb_score, float(concept["semantic_score"]), float(concept["concept_score"]),
             float(concept["semantic_score"]), bool(misconception["misconception_detected"]),
@@ -266,11 +265,11 @@ def evaluate_answer(answer: str, expected: Union[str, List[str]], question: str)
         return res
     jury_sem = _get_jury_semaphore()
     sem_wait_timeout_s = max(5.0, float(cfg.get("jury_semaphore_acquire_timeout_seconds", max(30.0, float(cfg.get("max_latency_per_answer_seconds", 30.0))))))
-    acquired = jury_sem.acquire(timeout=sem_wait_timeout_s)
+    acquired = jury_sem.acquire() if patient_mode else jury_sem.acquire(timeout=sem_wait_timeout_s)
     if not acquired:
         lat = (time.perf_counter() - start) * 1000.0
         log("WARNING", f"[PIPELINE] jury semaphore wait timed out after {sem_wait_timeout_s:.1f}s; using embedding fallback")
-        decision = "YES" if emb_score >= float(cfg["confidence_thresholds"]["auto_accept"]) else "NO"
+        decision = "REVIEW"
         res = EvaluationResult(
             answer,
             decision,
@@ -313,33 +312,63 @@ def evaluate_answer(answer: str, expected: Union[str, List[str]], question: str)
     try:
         judges = _run_judges_bounded()
     except Exception as jury_ex:
-        with JURY_CIRCUIT_LOCK:
-            JURY_DISABLED_UNTIL_TS = time.time() + max(60, int(cfg.get("jury_circuit_break_seconds", 600)))
-        log("ERROR", f"[PIPELINE] jury failed: {jury_ex}; opening circuit and using embedding fallback")
+        if circuit_enabled:
+            with JURY_CIRCUIT_LOCK:
+                JURY_DISABLED_UNTIL_TS = time.time() + max(60, int(cfg.get("jury_circuit_break_seconds", 600)))
+        log("ERROR", f"[PIPELINE] jury failed: {jury_ex}; routing answer to REVIEW")
         judges = []
     finally:
         try:
             jury_sem.release()
         except Exception:
             pass
-    active = [j for j in judges if j.get("decision") != "ABSTAIN"]
+    active = [j for j in judges if j.get("decision") in {"YES", "NO"}]
+    policy_evidence = {}
     if not active:
-        final_score = emb_score
-        decision = "YES" if final_score >= float(cfg["confidence_thresholds"]["auto_accept"]) else "NO"
-        stage = "embedding"
-        confidence = final_score
-        factual = float(concept["semantic_score"])
-        agg = {"semantic_similarity": float(concept["semantic_score"]), "concept_coverage": float(concept["concept_score"]), "factual_accuracy": float(concept["semantic_score"]), "strict_judge_score": 0.0, "language_noise_ratio": 0.0}
+        final_score, decision, stage, confidence = emb_score, "REVIEW", "jury_unavailable", 0.0
+        factual = 0.0
+        agg = {"semantic_similarity": float(concept["semantic_score"]), "concept_coverage": float(concept["concept_score"]), "factual_accuracy": 0.0, "strict_judge_score": 0.0, "language_noise_ratio": 0.0}
     else:
+        by_role = {str(j.get("role", "")): j for j in active}
+
+        def verdict_score(role: str) -> float:
+            judge = by_role.get(role)
+            if not judge:
+                return 0.0
+            confidence_value = max(0.0, min(1.0, float(judge.get("confidence", 0.0))))
+            return confidence_value if judge.get("decision") == "YES" else 1.0 - confidence_value
+
         agg = {
-            "semantic_similarity": sum(float(j.get("semantic_similarity", 0.0)) for j in active) / len(active),
-            "concept_coverage": max(float(concept["concept_score"]), sum(float(j.get("concept_coverage", 0.0)) for j in active) / len(active)),
-            "factual_accuracy": sum(float(j.get("factual_accuracy", 0.0)) for j in active) / len(active),
-            "strict_judge_score": max(float(j.get("confidence", 0.0)) for j in active),
-            "language_noise_ratio": sum(float(j.get("language_noise_ratio", 0.0)) for j in active) / len(active),
+            "semantic_similarity": verdict_score("semantic_judge"),
+            "concept_coverage": float(concept["concept_score"]),
+            "factual_accuracy": verdict_score("factual_judge"),
+            "strict_judge_score": verdict_score("strict_judge") if "strict_judge" in by_role else min(
+                verdict_score("semantic_judge"), verdict_score("factual_judge")
+            ),
+            "language_noise_ratio": 0.0,
         }
         final_score = combine_scores(agg, emb_score, bool(misconception["misconception_detected"]), cfg)
-        decision, confidence, _, stage = route_decision(final_score, answer, question, rubric, agg, cfg["confidence_thresholds"])
+        accuracy_cfg = cfg.get("accuracy_policy", {})
+        adaptive_cfg = cfg.get("adaptive_math_jury", {})
+        if bool(adaptive_cfg.get("enabled", False)):
+            decision, confidence, reason, policy_evidence = adaptive_math_jury_decision(
+                judges,
+                cfg.get("jury_models", {}),
+                min_confidence=float(adaptive_cfg.get("minimum_primary_confidence", accuracy_cfg.get("minimum_judge_confidence", 0.90))),
+                primary_roles=adaptive_cfg.get("primary_roles", ["semantic_judge", "factual_judge"]),
+                adjudicator_role=str(adaptive_cfg.get("adjudicator_role", "strict_judge")),
+                require_distinct_models=bool(accuracy_cfg.get("require_distinct_models", True)),
+            )
+        else:
+            decision, confidence, reason, policy_evidence = conservative_jury_decision(
+                judges,
+                cfg.get("jury_models", {}),
+                min_confidence=float(accuracy_cfg.get("minimum_judge_confidence", 0.90)),
+                required_roles=accuracy_cfg.get("required_accept_roles", ["semantic_judge", "factual_judge", "strict_judge"]),
+                require_distinct_models=bool(accuracy_cfg.get("require_distinct_models", True)),
+            )
+        stage = "jury" if decision in {"YES", "NO"} else "review"
+        policy_evidence["policy_reason"] = reason
         factual = float(agg["factual_accuracy"])
 
     lat = (time.perf_counter() - start) * 1000.0
@@ -348,7 +377,10 @@ def evaluate_answer(answer: str, expected: Union[str, List[str]], question: str)
 
     votes = [1.0 if j.get("decision") == decision else 0.0 for j in active]
     agree = (sum(votes) / len(votes)) if votes else 0.0
-    res = EvaluationResult(answer, decision, float(final_score), float(concept["semantic_score"]), float(concept["concept_score"]), factual, bool(misconception["misconception_detected"]), str(misconception["misconception_description"]), list(concept["missing_concepts"]), list(concept["accepted_concepts"]), agree, float(confidence), False, lat, stage)
+    key_eligible = decision == "YES" and domain.domain in {"natural_language", "multipart_list"}
+    evidence = {"question": question, "expected": expected, "answer": answer, "embedding_similarity": emb_score, "rubric": rubric, "policy": policy_evidence, "domain_validation": domain.to_dict(), "key_eligible": key_eligible}
+    res = EvaluationResult(answer, decision, float(final_score), float(concept["semantic_score"]), float(concept["concept_score"]), factual, bool(misconception["misconception_detected"]), str(misconception["misconception_description"]), list(concept["missing_concepts"]), list(concept["accepted_concepts"]), agree, float(confidence), False, lat, stage, evidence)
+    record_decision(asdict(res), str(cfg.get("decision_audit_path", "logs/grading_decisions.jsonl")))
     with RESULT_CACHE_LOCK:
         RESULT_CACHE[ck] = res
 
@@ -403,5 +435,5 @@ def evaluate_answers(answers: List[str], expected: Union[str, List[str]], questi
     for rep, originals in mapping.items():
         for original in originals:
             r = rep_results[rep]
-            out.append(EvaluationResult(original, r.decision, r.final_score, r.semantic_score, r.concept_score, r.factual_score, r.misconception_detected, r.misconception_description, r.missing_concepts, r.accepted_concepts, r.model_agreement, r.confidence, r.fast_path_used, r.latency_ms, r.stage_reached))
+            out.append(EvaluationResult(original, r.decision, r.final_score, r.semantic_score, r.concept_score, r.factual_score, r.misconception_detected, r.misconception_description, r.missing_concepts, r.accepted_concepts, r.model_agreement, r.confidence, r.fast_path_used, r.latency_ms, r.stage_reached, dict(r.evidence)))
     return out

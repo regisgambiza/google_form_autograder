@@ -2,7 +2,7 @@ import copy
 import threading
 
 from answer_key_manager import backup_form_grading, enqueue_review
-from answer_key_policy import clean_display, equivalence_confidence, identity_key, prepare_answer_key
+from answer_key_policy import clean_display, equivalence_confidence, identity_key, prepare_answer_key, safely_equivalent
 from evaluator_config import load_config
 from logger import log
 
@@ -30,6 +30,7 @@ def update_correct_answers(
     create_backup=True,
     manual_approval=False,
 ):
+    review_record = None
     log("DEBUG", f"Entering update_correct_answers for QID {question_id} "
                  f"with correct_answers={correct_answers}, index={question_index}")
     
@@ -86,62 +87,67 @@ def update_correct_answers(
         log("INFO", f"Existing correct answers for QID {question_id}: {existing_answers}")
         
         cfg = load_config()
+        auto_add_variants = bool(cfg.get("answer_key_auto_add_proven_equivalents", True))
         if dry_run is None:
             dry_run = bool(cfg.get("answer_key_dry_run", False))
-        plan = prepare_answer_key(
-            existing_answers,
-            correct_answers,
-            trusted_expected or [],
-            max_variants=int(cfg.get("answer_key_max_variants", 5)),
-        )
-        duplicates = plan.duplicates
         canonical = clean_display((trusted_expected or [""])[0]).split("|", 1)[0].strip()
-        if manual_approval and canonical:
-            approved = [canonical] + [clean_display(value) for value in correct_answers]
-            updated_answers = []
-            approved_keys = set()
-            for value in approved:
-                key = identity_key(value)
-                if value and key not in approved_keys:
-                    updated_answers.append(value)
-                    approved_keys.add(key)
-            changed = updated_answers != [clean_display(value) for value in existing_answers]
-        else:
-            updated_answers = list(plan.answers)
-            changed = None
-        uncertain_existing = [
-            clean_display(value)
-            for value in existing_answers
-            if not manual_approval and canonical and equivalence_confidence(value, canonical) == 0.60
-        ]
-        updated_keys = {identity_key(value) for value in updated_answers}
-        for value in uncertain_existing:
-            if identity_key(value) not in updated_keys:
-                updated_answers.append(value)
-                updated_keys.add(identity_key(value))
-        if changed is None:
-            changed = updated_answers != [clean_display(value) for value in existing_answers]
-        if plan.rejected and not manual_approval:
-            log(
-                "WARNING",
-                f"Rejected {len(plan.rejected)} unverified answer-key candidates for "
-                f"QID {question_id}: {plan.rejected}",
-            )
-            if trusted_expected:
-                enqueue_review({
-                    "form_id": form_id,
-                    "item_id": question_id,
-                    "question_id": question.get("questionId", question_id),
-                    "canonical": trusted_expected[0],
-                    "candidates": plan.rejected,
-                    "confidence": 0.60,
-                    "route": "review",
-                })
-        log("INFO", f"Filtered {len(duplicates)} duplicate answer-key candidates: {duplicates}")
-
-        if not trusted_expected:
+        if not canonical:
             log("WARNING", f"No trusted teacher answer for QID {question_id}; answer-key update blocked.")
             return duplicates
+
+        existing_clean = [clean_display(value) for value in existing_answers if clean_display(value)]
+        existing_keys = {identity_key(value) for value in existing_clean}
+        updated_answers = []
+        seen = set()
+        duplicates = []
+
+        def append_unique(raw):
+            value = clean_display(raw)
+            if not value:
+                return False
+            key = identity_key(value)
+            if key in seen:
+                duplicates.append(value)
+                return False
+            seen.add(key)
+            updated_answers.append(value)
+            return True
+
+        # The teacher answer is always first and can never be removed/reordered.
+        append_unique(canonical)
+        if manual_approval:
+            for value in correct_answers:
+                if identity_key(value) != identity_key(canonical):
+                    append_unique(value)
+        else:
+            # Preserve all existing variants until a teacher removes them in review.
+            for value in existing_clean[1:]:
+                append_unique(value)
+            newly_added = []
+            if auto_add_variants:
+                max_variants = max(1, int(cfg.get("answer_key_max_variants", 50)))
+                for value in correct_answers:
+                    cleaned = clean_display(value)
+                    if len(updated_answers) >= max_variants:
+                        break
+                    if cleaned and identity_key(cleaned) not in existing_keys and append_unique(cleaned):
+                        newly_added.append(cleaned)
+                if newly_added:
+                    review_record = {
+                        "form_id": form_id,
+                        "item_id": question_id,
+                        "question_id": question.get("questionId", question_id),
+                        "canonical": canonical,
+                        "candidates": newly_added,
+                        "confidence": 1.0,
+                        "route": "ai_added_to_form",
+                        "added_to_form": True,
+                        "reason": "AI-approved variants added pending teacher audit",
+                    }
+
+        changed = updated_answers != existing_clean
+        log("INFO", f"Filtered {len(duplicates)} duplicate answer-key candidates: {duplicates}")
+
         auto_threshold = float(cfg.get("answer_key_auto_apply_confidence", 0.95))
         if auto_threshold > 1.0:
             log("INFO", f"Answer-key automation disabled by confidence threshold for QID {question_id}.")
@@ -155,7 +161,7 @@ def update_correct_answers(
                 f"DRY RUN QID {question_id}: {existing_answers} -> {updated_answers}; no update sent.",
             )
             return duplicates
-        log("INFO", f"Submitting {len(updated_answers)} verified answer-key variants")
+        log("INFO", f"Submitting canonical plus {max(0, len(updated_answers) - 1)} accepted variant(s)")
         log("DEBUG", f"Final verified answers: {updated_answers}")
             
     except Exception as e:
@@ -198,6 +204,8 @@ def update_correct_answers(
                 log("INFO", f"Answer-key backup saved: {backup_path}")
         log("DEBUG", f"Executing batch update for form ID {form_id}")
         service.forms().batchUpdate(formId=form_id, body=update_request).execute()
+        if review_record:
+            enqueue_review(review_record)
         log("INFO", f"Updated QID {question_id} successfully with {len(updated_answers)} verified answers.")
     except Exception as e:
         log("ERROR", f"Failed to update QID {question_id}: {str(e)}")

@@ -55,7 +55,7 @@ def analyze_question(
     index: int,
     canonical_override: Optional[str] = None,
     review_candidates: Optional[Sequence[str]] = None,
-    max_variants: int = 5,
+    max_variants: int = 50,
     unreasonable_count: int = 12,
 ) -> Optional[HealthFinding]:
     question = item.get("questionItem", {}).get("question", {})
@@ -277,6 +277,56 @@ def remove_form_duplicates(service, form_id: str, dry_run: bool = False) -> Dict
     }
 
 
+def keep_teacher_answers_only(service, form_id: str, dry_run: bool = False) -> Dict:
+    """Remove every answer-key variant except the protected first teacher answer."""
+    form = service.forms().get(formId=form_id).execute()
+    requests = []
+    removed = 0
+    changed_questions = 0
+    for index, item in enumerate(form.get("items", [])):
+        question = item.get("questionItem", {}).get("question", {})
+        if "textQuestion" not in question:
+            continue
+        grading = question.get("grading", {})
+        current = _answers(question)
+        if len(current) <= 1:
+            continue
+        canonical = clean_display(current[0])
+        if not canonical:
+            continue
+        removed += len(current) - 1
+        changed_questions += 1
+        updated_grading = json.loads(json.dumps(grading))
+        updated_grading["correctAnswers"] = {"answers": [{"value": canonical}]}
+        requests.append({
+            "updateItem": {
+                "item": {
+                    "itemId": item.get("itemId"),
+                    "questionItem": {
+                        "question": {
+                            "questionId": question.get("questionId"),
+                            "grading": updated_grading,
+                        }
+                    },
+                },
+                "location": {"index": index},
+                "updateMask": "questionItem.question.grading",
+            }
+        })
+    backup = None
+    if requests and not dry_run:
+        backup = backup_form_grading(service, form_id, reason="before keeping teacher answers only")
+        service.forms().batchUpdate(formId=form_id, body={"requests": requests}).execute()
+    return {
+        "form_id": form_id,
+        "removed": removed,
+        "changed_questions": changed_questions,
+        "request_count": len(requests),
+        "dry_run": dry_run,
+        "backup": str(backup) if backup else None,
+    }
+
+
 def enqueue_review(record: Dict) -> None:
     with _REVIEW_LOCK:
         data = {"version": 1, "items": []}
@@ -307,6 +357,7 @@ def resolve_reviews(form_id: str, item_id: str, status: str) -> int:
             data = json.loads(REVIEW_QUEUE_PATH.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return 0
+        remaining = []
         changed = 0
         for item in data.get("items", []):
             if (
@@ -317,7 +368,10 @@ def resolve_reviews(form_id: str, item_id: str, status: str) -> int:
                 item["status"] = status
                 item["resolved_at"] = datetime.now(timezone.utc).isoformat()
                 changed += 1
+                continue
+            remaining.append(item)
         if changed:
+            data["items"] = remaining
             REVIEW_QUEUE_PATH.write_text(json.dumps(data, indent=2, ensure_ascii=True), encoding="utf-8")
         return changed
 

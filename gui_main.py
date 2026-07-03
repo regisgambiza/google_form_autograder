@@ -8,7 +8,7 @@ from PyQt5.QtWidgets import (
     QPushButton, QLineEdit, QListWidget, QListWidgetItem, QMessageBox,
     QTextEdit, QLabel, QComboBox, QCheckBox,
     QProgressDialog, QSplitter, QSpinBox, QDialog, QFormLayout, QTabWidget,
-    QSystemTrayIcon, QMenu, QAction, QStyle, QFrame, QProgressBar
+    QSystemTrayIcon, QMenu, QAction, QStyle, QFrame, QProgressBar, QDoubleSpinBox
 )
 
 from PyQt5.QtCore import Qt, QDate, QTimer, QSize
@@ -33,10 +33,50 @@ from evaluator_config import DEFAULT_CONFIG
 from scheduler import scheduler as auto_scheduler
 from answer_key_dashboard import AnswerKeyDashboard
 from app_theme import apply_application_theme, apply_widget_theme
+from cache_manager import clear_grading_cache
 
 BANGKOK_TZ = timezone(timedelta(hours=7))
 
 EXECUTION_MODE_PRESETS = {
+    "Maximum accuracy: independent unanimous jury + review": {
+        "deterministic_worker_count": 4,
+        "ai_worker_count": 1,
+        "max_concurrent_judge_http": 1,
+        "max_concurrent_jury_answers": 1,
+        "enable_async_judges": False,
+        "sync_judge_parallelism": 1,
+        "active_judge_roles": ["semantic_judge", "factual_judge", "strict_judge"],
+        "adaptive_math_jury": {
+            "enabled": True,
+            "primary_roles": ["semantic_judge", "factual_judge"],
+            "adjudicator_role": "strict_judge",
+            "minimum_primary_confidence": 0.90,
+            "ambiguity_markers": ["ambiguous", "uncertain", "unclear", "insufficient", "depends"],
+        },
+        "early_exit": {"enabled": False, "min_judges": 3, "agreement_confidence": 0.90},
+        "accuracy_policy": {
+            "enabled": True,
+            "minimum_judge_confidence": 0.90,
+            "required_accept_roles": ["semantic_judge", "factual_judge", "strict_judge"],
+            "require_distinct_models": True,
+            "embeddings_can_accept": False,
+            "ambiguous_outcome": "REVIEW",
+        },
+        "answer_key_auto_add_proven_equivalents": True,
+        "patient_ai_mode": True,
+        "enable_jury_circuit_breaker": False,
+        "judge_timeout_seconds": 7200,
+        "judge_http_timeout_seconds": 7200,
+        "judge_total_hard_timeout_seconds": 21600,
+        "answer_hard_timeout_seconds": 21600,
+        "jury_semaphore_acquire_timeout_seconds": 21600,
+        "max_latency_per_answer_seconds": 21600,
+        "embedding_timeout_seconds": 1800,
+        "rubric_timeout_seconds": 3600,
+        "dispatcher_stall_timeout_seconds": 7200,
+        "ai_stall_timeout_seconds": 900,
+        "jury_circuit_break_seconds": 0,
+    },
     "Math: deterministic checks + semantic judge only (recommended)": {
         "deterministic_worker_count": 4,
         "ai_worker_count": 1,
@@ -215,7 +255,7 @@ EXECUTION_MODE_ALIASES = {
     "Recovery: Low Load": "Recovery: lowest load, longest timeouts",
 }
 
-DEFAULT_EXECUTION_MODE = "Math: deterministic checks + semantic judge only (recommended)"
+DEFAULT_EXECUTION_MODE = "Maximum accuracy: independent unanimous jury + review"
 
 
 def normalize_execution_mode(mode_name):
@@ -234,6 +274,7 @@ class FormManager(QMainWindow):
         self.forms_data = {}
         self.service = None
         self.finished_forms = []
+        self.current_form_url = None
         self.auto_mode = False
         self.auto_timer = None  # Track the QTimer for auto-cycle
         self.debug_lines = []
@@ -254,6 +295,7 @@ class FormManager(QMainWindow):
         self.is_grading = False
         self.is_closing = False
         self._force_exit = False
+        self._shutdown_complete = False
         self.tray_icon = None
 
         # Prevent sleep
@@ -574,9 +616,13 @@ class FormManager(QMainWindow):
 
         metrics_row = QHBoxLayout()
         self.metric_responses = QLabel("0 / 0")
-        self.metric_accepted = QLabel("-")
-        self.metric_review = QLabel("-")
+        self.metric_accepted = QLabel("0")
+        self.metric_review = QLabel('<a href="review">0</a>')
         self.metric_elapsed = QLabel("00:00")
+        self.metric_review.setTextFormat(Qt.RichText)
+        self.metric_review.setTextInteractionFlags(Qt.TextBrowserInteraction)
+        self.metric_review.setOpenExternalLinks(False)
+        self.metric_review.linkActivated.connect(self.open_current_form_review)
         for metric_name, metric_value in (
             ("Responses", self.metric_responses),
             ("Auto accepted", self.metric_accepted),
@@ -856,6 +902,17 @@ class FormManager(QMainWindow):
         rubric_model_combo = QComboBox(dialog)
         embedding_model_combo = QComboBox(dialog)
         reasoning_model_combo = QComboBox(dialog)
+        expected_validator_model_combo = QComboBox(dialog)
+        expected_validator_fallback_combo = QComboBox(dialog)
+        minimum_judge_confidence_spin = QDoubleSpinBox(dialog)
+        minimum_judge_confidence_spin.setRange(0.50, 1.00)
+        minimum_judge_confidence_spin.setSingleStep(0.01)
+        minimum_judge_confidence_spin.setDecimals(2)
+        distinct_models_checkbox = QCheckBox("Require different models for acceptance", dialog)
+        key_auto_add_checkbox = QCheckBox("Append validated answers now; audit them in Answer Keys", dialog)
+        patient_ai_checkbox = QCheckBox("Patient AI: wait for complete model responses", dialog)
+        audit_path_edit = QLineEdit(dialog)
+        benchmark_path_edit = QLineEdit(dialog)
 
         cfg = {}
         try:
@@ -903,11 +960,15 @@ class FormManager(QMainWindow):
         rubric_model = cfg.get("rubric_model")
         embedding_model = cfg.get("embedding_model")
         reasoning_model = cfg.get("reasoning_model")
+        expected_validator_model = cfg.get("expected_answer_validator_model")
+        expected_validator_fallback = cfg.get("expected_answer_validator_fallback_model")
         if models:
             add_model_choice(available_models, seen_model_keys, models[0])
         add_model_choice(available_models, seen_model_keys, rubric_model)
         add_model_choice(available_models, seen_model_keys, embedding_model)
         add_model_choice(available_models, seen_model_keys, reasoning_model)
+        add_model_choice(available_models, seen_model_keys, expected_validator_model)
+        add_model_choice(available_models, seen_model_keys, expected_validator_fallback)
 
         cfg_jury = cfg.get("jury_models", {}) if cfg else {}
         for configured_model in cfg_jury.values():
@@ -936,6 +997,8 @@ class FormManager(QMainWindow):
             rubric_model_combo.addItems(available_models)
             embedding_model_combo.addItems(available_models)
             reasoning_model_combo.addItems(available_models)
+            expected_validator_model_combo.addItems(available_models)
+            expected_validator_fallback_combo.addItems(available_models)
 
         # Jury model selectors (one combobox per jury role)
         jury_combos = {}
@@ -991,7 +1054,7 @@ class FormManager(QMainWindow):
 
         # Heartbeat monitor settings
         heartbeat_timeout_spin = QSpinBox(dialog)
-        heartbeat_timeout_spin.setRange(30, 300)
+        heartbeat_timeout_spin.setRange(30, 21600)
         heartbeat_timeout_spin.setValue(cfg.get("heartbeat_timeout", 90))
         heartbeat_interval_spin = QSpinBox(dialog)
         heartbeat_interval_spin.setRange(5, 60)
@@ -1022,6 +1085,15 @@ class FormManager(QMainWindow):
         rubric_model_combo.setCurrentText(cfg.get("rubric_model", cfg.get("models", {}).get("judge", [""])[0] if models else ""))
         embedding_model_combo.setCurrentText(cfg.get("embedding_model", DEFAULT_CONFIG.get("embedding_model", "")))
         reasoning_model_combo.setCurrentText(cfg.get("reasoning_model", DEFAULT_CONFIG.get("reasoning_model", "")))
+        expected_validator_model_combo.setCurrentText(cfg.get("expected_answer_validator_model", "llama3.1:8b"))
+        expected_validator_fallback_combo.setCurrentText(cfg.get("expected_answer_validator_fallback_model", "gemma3:12b"))
+        accuracy_cfg = cfg.get("accuracy_policy", {})
+        minimum_judge_confidence_spin.setValue(float(accuracy_cfg.get("minimum_judge_confidence", 0.90)))
+        distinct_models_checkbox.setChecked(bool(accuracy_cfg.get("require_distinct_models", True)))
+        key_auto_add_checkbox.setChecked(bool(cfg.get("answer_key_auto_add_proven_equivalents", True)))
+        patient_ai_checkbox.setChecked(bool(cfg.get("patient_ai_mode", True)))
+        audit_path_edit.setText(str(cfg.get("decision_audit_path", "logs/grading_decisions.jsonl")))
+        benchmark_path_edit.setText(str(cfg.get("teacher_benchmark_path", "teacher_benchmark.jsonl")))
         report_checkbox.setChecked(bool(cfg.get("generate_report", True)))
         batch_size = cfg.get("batch_size", 32)
         if isinstance(batch_size, str) and batch_size.lower() == "auto":
@@ -1044,6 +1116,14 @@ class FormManager(QMainWindow):
         form.addRow("Rubric Model:", rubric_model_combo)
         form.addRow("Embedding Model:", embedding_model_combo)
         form.addRow("Reasoning Model:", reasoning_model_combo)
+        form.addRow("Teacher-Key Validator:", expected_validator_model_combo)
+        form.addRow("Validator Fallback:", expected_validator_fallback_combo)
+        form.addRow("Minimum Judge Confidence:", minimum_judge_confidence_spin)
+        form.addRow("Independent Jury:", distinct_models_checkbox)
+        form.addRow("Answer-Key Automation:", key_auto_add_checkbox)
+        form.addRow("Slow Model Handling:", patient_ai_checkbox)
+        form.addRow("Decision Evidence Log:", audit_path_edit)
+        form.addRow("Teacher Benchmark:", benchmark_path_edit)
         form.addRow("Model Choices:", model_status_label)
         # Add jury model rows
         for role, combo in jury_combos.items():
@@ -1094,8 +1174,38 @@ class FormManager(QMainWindow):
         b.setContentsMargins(0, 0, 0, 0)
         save_btn = QPushButton("Save", dialog)
         cancel_btn = QPushButton("Cancel", dialog)
+        clear_cache_btn = QPushButton("Clear Cache & Grading History", dialog)
+        clear_cache_btn.setObjectName("Danger")
+
+        def clear_cache_now():
+            answer = QMessageBox.question(
+                dialog,
+                "Clear grading cache?",
+                "This clears regenerated model/context caches and Recent Only grading history. "
+                "The next run will fetch and grade everything again. Credentials, backups, reviews, "
+                "configuration, and form lists are preserved.",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return
+            try:
+                result = clear_grading_cache(reset_history=True)
+                megabytes = result["removed_bytes"] / (1024 * 1024)
+                QMessageBox.information(
+                    dialog,
+                    "Cache cleared",
+                    f"Removed {result['removed_files']} cached files ({megabytes:.1f} MB). "
+                    "The next grading run will start fresh.",
+                )
+            except Exception as exc:
+                QMessageBox.critical(dialog, "Could not clear cache", str(exc))
+
+        clear_cache_btn.clicked.connect(clear_cache_now)
         save_btn.clicked.connect(dialog.accept)
         cancel_btn.clicked.connect(dialog.reject)
+        b.addWidget(clear_cache_btn)
+        b.addStretch()
         b.addWidget(save_btn)
         b.addWidget(cancel_btn)
         form.addRow("", buttons)
@@ -1129,6 +1239,25 @@ class FormManager(QMainWindow):
                 config_data["embedding_model"] = embedding_model_combo.currentText()
             if reasoning_model_combo.currentText():
                 config_data["reasoning_model"] = reasoning_model_combo.currentText()
+            if expected_validator_model_combo.currentText():
+                config_data["expected_answer_validator_model"] = expected_validator_model_combo.currentText()
+            if expected_validator_fallback_combo.currentText():
+                config_data["expected_answer_validator_fallback_model"] = expected_validator_fallback_combo.currentText()
+            accuracy_policy = dict(config_data.get("accuracy_policy", {}))
+            accuracy_policy.update({
+                "enabled": True,
+                "minimum_judge_confidence": float(minimum_judge_confidence_spin.value()),
+                "required_accept_roles": ["semantic_judge", "factual_judge", "strict_judge"],
+                "require_distinct_models": distinct_models_checkbox.isChecked(),
+                "embeddings_can_accept": False,
+                "ambiguous_outcome": "REVIEW",
+            })
+            config_data["accuracy_policy"] = accuracy_policy
+            config_data["answer_key_auto_add_proven_equivalents"] = key_auto_add_checkbox.isChecked()
+            config_data["patient_ai_mode"] = patient_ai_checkbox.isChecked()
+            config_data["enable_jury_circuit_breaker"] = not patient_ai_checkbox.isChecked()
+            config_data["decision_audit_path"] = audit_path_edit.text().strip() or "logs/grading_decisions.jsonl"
+            config_data["teacher_benchmark_path"] = benchmark_path_edit.text().strip() or "teacher_benchmark.jsonl"
 
             # Save jury model selections
             selected_jury = {}
@@ -1157,6 +1286,14 @@ class FormManager(QMainWindow):
             preset = EXECUTION_MODE_PRESETS.get(selected_mode, EXECUTION_MODE_PRESETS[DEFAULT_EXECUTION_MODE])
             for key, value in preset.items():
                 config_data[key] = value
+            # User-facing accuracy controls override the preset defaults.
+            config_data["accuracy_policy"]["minimum_judge_confidence"] = float(minimum_judge_confidence_spin.value())
+            config_data["accuracy_policy"]["require_distinct_models"] = distinct_models_checkbox.isChecked()
+            if isinstance(config_data.get("adaptive_math_jury"), dict):
+                config_data["adaptive_math_jury"]["minimum_primary_confidence"] = float(minimum_judge_confidence_spin.value())
+            config_data["answer_key_auto_add_proven_equivalents"] = key_auto_add_checkbox.isChecked()
+            config_data["patient_ai_mode"] = patient_ai_checkbox.isChecked()
+            config_data["enable_jury_circuit_breaker"] = not patient_ai_checkbox.isChecked()
             # Prevent stale mode-only knobs from previous selection.
             if "active_judge_roles" not in preset:
                 config_data["active_judge_roles"] = [
@@ -1482,9 +1619,23 @@ class FormManager(QMainWindow):
         dialog = AutoAddDialog(self, mode='manual')
         dialog.exec_()
 
-    def open_answer_key_dashboard(self):
+    def open_answer_key_dashboard(self, target_url=None, auto_scan=False):
+        if isinstance(target_url, bool):
+            target_url = None
         dialog = AnswerKeyDashboard(dict(self.forms_data), self)
+        if target_url:
+            index = dialog.form_combo.findData(target_url)
+            if index >= 0:
+                dialog.form_combo.setCurrentIndex(index)
+        if auto_scan:
+            QTimer.singleShot(0, dialog.scan)
         dialog.exec_()
+
+    def open_current_form_review(self, _link="review"):
+        target = self.current_form_url
+        if not target and self.form_list.currentItem():
+            target = self.form_list.currentItem().data(Qt.UserRole)
+        self.open_answer_key_dashboard(target_url=target, auto_scan=True)
 
     def open_auto_run_dialog(self):
         dialog = AutoAddDialog(self, mode='auto')
@@ -2033,13 +2184,13 @@ class FormManager(QMainWindow):
         """Terminate python.exe/pythonw.exe instances started from this project path."""
         try:
             current_pid = os.getpid()
-            project_path = os.path.abspath(os.getcwd()).replace("'", "''")
+            main_path = os.path.abspath("main.py").replace("'", "''")
             ps_script = (
-                "$p='" + project_path + "'; "
+                "$main='" + main_path + "'; "
                 f"$self={current_pid}; "
                 "Get-CimInstance Win32_Process | "
                 "Where-Object {($_.Name -in @('python.exe','pythonw.exe')) -and $_.ProcessId -ne $self -and "
-                "($_.CommandLine -like \"*$p*\" -or $_.CommandLine -match '(^|[\\\\/\\s\"''])(main\\.py)([\"''\\s]|$)')} | "
+                "$_.CommandLine -like ('*' + $main + '*')} | "
                 "ForEach-Object { try { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop } catch {} }"
             )
             subprocess.run(["powershell", "-NoProfile", "-Command", ps_script], check=False)
@@ -2049,9 +2200,44 @@ class FormManager(QMainWindow):
     def exit_app(self):
         """Stop grading/search and close application."""
         self._force_exit = True
-        self.stop_grading()
-        self._terminate_project_python_processes()
         self.close()
+
+    def _shutdown_owned_work(self):
+        """Idempotently stop timers, schedulers, threads, and grader children."""
+        if self._shutdown_complete:
+            return
+        self._shutdown_complete = True
+        self.is_closing = True
+        self.auto_mode = False
+
+        if self.auto_timer:
+            self.auto_timer.stop()
+            self.auto_timer.deleteLater()
+            self.auto_timer = None
+        auto_scheduler.stop()
+
+        # QThread.quit() cannot stop GraderThread.run() while it is blocked reading
+        # child stdout. Terminate the owned child tree first, then join the thread.
+        if self.grader_thread:
+            try:
+                self.grader_thread.stop_grading()
+            except Exception:
+                pass
+            if self.grader_thread.isRunning() and not self.grader_thread.wait(7000):
+                self.grader_thread.terminate()
+                self.grader_thread.wait(2000)
+
+        if self.auto_search_thread and self.auto_search_thread.isRunning():
+            self.auto_search_thread.requestInterruption()
+            self.auto_search_thread.quit()
+            if not self.auto_search_thread.wait(3000):
+                self.auto_search_thread.terminate()
+                self.auto_search_thread.wait(2000)
+
+        # Final sweep catches a grader spawned during a close/start race.
+        self._terminate_project_python_processes()
+        if self.tray_icon:
+            self.tray_icon.hide()
 
     def minimize_app(self):
         """Hide the app window to the system tray."""
@@ -2086,6 +2272,13 @@ class FormManager(QMainWindow):
         self.debug_output.clear()
         self.debug_lines = []
         self.finished_forms = []
+        self.detail_progress.setValue(0)
+        self.detail_progress_value.setText("0%")
+        self.metric_responses.setText("0 / 0")
+        self.metric_accepted.setText("0")
+        self.metric_review.setText('<a href="review">0</a>')
+        self.metric_elapsed.setText("00:00")
+        self.detail_progress_text.setText("Preparing form and responses")
         for i in range(self.form_list.count()):
             item = self.form_list.item(i)
             meta = item.data(Qt.UserRole + 1) or {}
@@ -2112,6 +2305,7 @@ class FormManager(QMainWindow):
         self.grader_thread.finished.connect(self.on_grading_finished)
         self.grader_thread.progress.connect(self.update_progress)
         self.grader_thread.overall_progress.connect(self.update_overall_progress)
+        self.grader_thread.form_metrics.connect(self.update_form_metrics)
         self.grader_thread.debug_message.connect(self.append_debug)
         self.grader_thread.current_form.connect(self.update_current_form)
         self.grader_thread.finished_form.connect(self.update_finished_form)
@@ -2119,8 +2313,13 @@ class FormManager(QMainWindow):
 
     def update_progress(self, cur, tot):
         if not tot:
+            self.detail_progress.setValue(0)
+            self.detail_progress_value.setText("0%")
+            self.metric_responses.setText("0 / 0")
+            self.detail_progress_text.setText("No learner answers to evaluate")
             return
-        percent = max(0, min(100, int((cur / tot) * 100)))
+        # Round to the nearest whole percent so small real increments are visible.
+        percent = max(0, min(100, int(round((cur / tot) * 100))))
         self.detail_progress.setValue(percent)
         self.detail_progress_value.setText(f"{percent}%")
         self.metric_responses.setText(f"{cur} / {tot}")
@@ -2132,7 +2331,27 @@ class FormManager(QMainWindow):
         self.in_queue_label.setText(f"In Queue: {max(0, tot - cur)}")
         self.command_summary.setText(f"{tot} forms · {cur} completed")
 
+    def update_form_metrics(self, completed, total, accepted, review_questions, elapsed_seconds):
+        self.metric_responses.setText(f"{completed} / {total}")
+        self.metric_accepted.setText(str(accepted))
+        self.metric_review.setText(f'<a href="review">{review_questions}</a>')
+        hours, remainder = divmod(max(0, int(elapsed_seconds)), 3600)
+        minutes, seconds = divmod(remainder, 60)
+        self.metric_elapsed.setText(
+            f"{hours:02d}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes:02d}:{seconds:02d}"
+        )
+
     def update_current_form(self, url):
+        # Progress belongs to the newly announced form, never the previously
+        # selected/completed one.
+        self.detail_progress.setValue(0)
+        self.detail_progress_value.setText("0%")
+        self.metric_responses.setText("0 / 0")
+        self.metric_accepted.setText("0")
+        self.metric_review.setText('<a href="review">0</a>')
+        self.metric_elapsed.setText("00:00")
+        self.detail_progress_text.setText("Preparing form and responses")
+        self.current_form_url = url
         item = self._find_form_item_by_url(url)
         title = "Current form"
         if item:
@@ -2383,37 +2602,9 @@ class FormManager(QMainWindow):
         return None
 
     def closeEvent(self, event):
-        """Properly clean up threads before closing"""
-        if not self._force_exit:
-            if self.tray_icon and self.tray_icon.isVisible():
-                self.hide()
-                event.ignore()
-                return
-        self.is_closing = True
-        self.auto_mode = False
-        self._terminate_project_python_processes()
-        
-        # Cancel timer
-        if self.auto_timer:
-            self.auto_timer.stop()
-            self.auto_timer.deleteLater()
-        
-        # Stop and wait for grader thread
-        if self.grader_thread and self.grader_thread.isRunning():
-            self.grader_thread.quit()  # Safer than terminate
-            if not self.grader_thread.wait(3000):
-                self.grader_thread.terminate()
-                self.grader_thread.wait(2000)
-        
-        # Stop and wait for auto search thread
-        if self.auto_search_thread and self.auto_search_thread.isRunning():
-            self.auto_search_thread.quit()
-            if not self.auto_search_thread.wait(3000):
-                self.auto_search_thread.terminate()
-                self.auto_search_thread.wait(2000)
-        if self.tray_icon:
-            self.tray_icon.hide()
-        
+        """Closing the window exits; Minimize remains the explicit tray action."""
+        self._force_exit = True
+        self._shutdown_owned_work()
         event.accept()
 
 
@@ -2425,6 +2616,7 @@ if __name__ == "__main__":
     palette.setColor(QPalette.WindowText, Qt.black)
     app.setPalette(palette)
     window = FormManager()
+    app.aboutToQuit.connect(window._shutdown_owned_work)
     window.show()
     sys.exit(app.exec_())
 

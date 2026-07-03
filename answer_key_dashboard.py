@@ -1,6 +1,6 @@
 from typing import Dict, List, Optional
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtWidgets import (
     QComboBox,
     QDialog,
@@ -12,6 +12,7 @@ from PyQt5.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMessageBox,
+    QProgressDialog,
     QPushButton,
     QSplitter,
     QStyle,
@@ -23,6 +24,7 @@ from answer_key_manager import (
     HealthFinding,
     backup_form_grading,
     list_backups,
+    keep_teacher_answers_only,
     remove_form_duplicates,
     resolve_reviews,
     restore_backup,
@@ -33,6 +35,37 @@ from auth import get_service
 from app_theme import apply_widget_theme
 from form_searcher import find_all_forms_in_sources
 from updater import update_correct_answers
+
+
+class _AnswerKeySaveWorker(QThread):
+    finished = pyqtSignal(object)
+    failed = pyqtSignal(str)
+
+    def __init__(self, service, form_id, item_id, answers, index, canonical, parent=None):
+        super().__init__(parent)
+        self.service = service
+        self.form_id = form_id
+        self.item_id = item_id
+        self.answers = answers
+        self.index = index
+        self.canonical = canonical
+
+    def run(self):
+        try:
+            update_correct_answers(
+                self.service,
+                self.form_id,
+                self.item_id,
+                self.answers,
+                self.index,
+                [self.canonical],
+                dry_run=False,
+                create_backup=False,
+                manual_approval=True,
+            )
+            self.finished.emit((self.form_id, self.item_id))
+        except Exception as exc:  # pragma: no cover - exercised via UI path
+            self.failed.emit(str(exc))
 
 
 def _form_id(url: str) -> str:
@@ -55,6 +88,7 @@ class AnswerKeyDashboard(QDialog):
         self.form_data = {}
         self.findings: List[HealthFinding] = []
         self.active_finding: Optional[HealthFinding] = None
+        self.processed_item_ids = set()
         self.backup_path = None
 
         root = QVBoxLayout(self)
@@ -91,6 +125,11 @@ class AnswerKeyDashboard(QDialog):
         self.clean_button.setIcon(self.style().standardIcon(QStyle.SP_DialogApplyButton))
         self.clean_button.clicked.connect(self.clean_duplicates)
         quick_layout.addWidget(self.clean_button)
+        self.keep_teacher_only_button = QPushButton("Keep Teacher Answers Only")
+        self.keep_teacher_only_button.setObjectName("Danger")
+        self.keep_teacher_only_button.setToolTip("Delete every answer variant except the first teacher answer for each question")
+        self.keep_teacher_only_button.clicked.connect(self.keep_teacher_answers_only)
+        quick_layout.addWidget(self.keep_teacher_only_button)
         root.addWidget(quick)
 
         review_bar = QHBoxLayout()
@@ -120,7 +159,8 @@ class AnswerKeyDashboard(QDialog):
 
         detail_layout.addWidget(QLabel("Correct answer"))
         self.canonical_input = QLineEdit()
-        self.canonical_input.setPlaceholderText("Enter the correct answer")
+        self.canonical_input.setReadOnly(True)
+        self.canonical_input.setToolTip("Protected teacher answer. The app never edits or deletes this first answer.")
         detail_layout.addWidget(self.canonical_input)
 
         detail_layout.addWidget(QLabel("Accepted answers"))
@@ -128,7 +168,7 @@ class AnswerKeyDashboard(QDialog):
         detail_layout.addWidget(self.answer_list, 1)
 
         detail_actions = QHBoxLayout()
-        self.skip_button = QPushButton("Skip")
+        self.skip_button = QPushButton("Leave for Later")
         self.skip_button.setObjectName("Secondary")
         self.skip_button.clicked.connect(self.skip_question)
         detail_actions.addWidget(self.skip_button)
@@ -166,6 +206,7 @@ class AnswerKeyDashboard(QDialog):
         self.form_data = {}
         self.findings = []
         self.active_finding = None
+        self.processed_item_ids.clear()
         self.backup_path = None
         self.question_list.clear()
         self.answer_list.clear()
@@ -252,6 +293,37 @@ class AnswerKeyDashboard(QDialog):
         finally:
             self.clean_button.setEnabled(True)
 
+    def keep_teacher_answers_only(self):
+        try:
+            self._connect()
+            confirmation = QMessageBox.question(
+                self,
+                "Keep Teacher Answers Only?",
+                "This will remove every added answer variant from this form and keep only "
+                "the first teacher answer for each text question. A backup will be created first.",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if confirmation != QMessageBox.Yes:
+                return
+            self.keep_teacher_only_button.setEnabled(False)
+            self.status.setText("Removing added answer variants...")
+            result = keep_teacher_answers_only(self.service, self.form_id)
+            if result["removed"]:
+                self.backup_path = result["backup"]
+                self.status.setText(
+                    f"Removed {result['removed']} variants from {result['changed_questions']} questions"
+                )
+            else:
+                self.status.setText("Every question already contains only its teacher answer")
+            if self.question_list.count():
+                self.scan()
+        except Exception as exc:
+            QMessageBox.critical(self, "Could not clean answer keys", str(exc))
+            self.status.setText("Teacher-answer cleanup failed")
+        finally:
+            self.keep_teacher_only_button.setEnabled(True)
+
     def scan(self):
         try:
             self._connect()
@@ -262,6 +334,7 @@ class AnswerKeyDashboard(QDialog):
             self.findings = [
                 finding for finding in all_findings
                 if finding.route in {"review", "reject"}
+                and finding.item_id not in self.processed_item_ids
             ]
             self.question_list.clear()
             for index, finding in enumerate(self.findings):
@@ -294,7 +367,8 @@ class AnswerKeyDashboard(QDialog):
         self.canonical_input.setText(finding.canonical)
         self.answer_list.clear()
 
-        proposed_keys = {identity_key(value) for value in finding.proposed_answers}
+        current_keys = {identity_key(value) for value in finding.current_answers}
+        canonical_key = identity_key(finding.canonical)
         values = []
         seen = set()
         for value in finding.current_answers + finding.review_candidates:
@@ -304,10 +378,34 @@ class AnswerKeyDashboard(QDialog):
                 values.append(value)
         for value in values:
             item = QListWidgetItem(value)
-            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-            item.setCheckState(Qt.Checked if identity_key(value) in proposed_keys else Qt.Unchecked)
+            key = identity_key(value)
+            item.setData(Qt.UserRole + 1, key == canonical_key)
+            if key == canonical_key:
+                item.setFlags(item.flags() & ~Qt.ItemIsEditable & ~Qt.ItemIsUserCheckable)
+                item.setToolTip("Protected teacher canonical answer")
+            else:
+                item.setFlags(item.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsEditable)
+                item.setCheckState(Qt.Checked if key in current_keys else Qt.Unchecked)
+                item.setToolTip("Checked answers remain. Uncheck to delete; double-click to edit.")
             self.answer_list.addItem(item)
         self._set_detail_enabled(True)
+
+    def _remove_review_item(self, finding: HealthFinding, status_text: str):
+        self.processed_item_ids.add(str(finding.item_id))
+        row_to_remove = None
+        for row in range(self.question_list.count()):
+            item = self.question_list.item(row)
+            if item.data(Qt.UserRole) == self.findings.index(finding):
+                row_to_remove = row
+                break
+        if row_to_remove is not None:
+            self.question_list.takeItem(row_to_remove)
+        if self.question_list.count():
+            self.question_list.setCurrentRow(min(row_to_remove or 0, self.question_list.count() - 1))
+        else:
+            self.active_finding = None
+            self._set_detail_enabled(False)
+        self.status.setText(status_text)
 
     def _set_detail_enabled(self, enabled: bool):
         self.canonical_input.setEnabled(enabled)
@@ -319,13 +417,13 @@ class AnswerKeyDashboard(QDialog):
         answers = []
         for row in range(self.answer_list.count()):
             item = self.answer_list.item(row)
-            if item.checkState() == Qt.Checked:
+            if not bool(item.data(Qt.UserRole + 1)) and item.checkState() == Qt.Checked:
                 answers.append(item.text())
         return answers
 
     def save_question(self):
         finding = self.active_finding
-        canonical = self.canonical_input.text().strip()
+        canonical = finding.canonical.strip() if finding else ""
         if not finding or not canonical:
             QMessageBox.warning(self, "Correct answer required", "Enter the correct answer first.")
             return
@@ -335,35 +433,46 @@ class AnswerKeyDashboard(QDialog):
                     backup_form_grading(self.service, self.form_id, reason="before answer-key review")
                 )
             answers = self._checked_answers()
-            update_correct_answers(
+            self._set_detail_enabled(False)
+            progress = QProgressDialog("Saving answer key…", "Cancel", 0, 0, self)
+            progress.setWindowTitle("Saving")
+            progress.setWindowModality(Qt.WindowModal)
+            progress.setMinimumDuration(0)
+            progress.setValue(0)
+            progress.show()
+
+            worker = _AnswerKeySaveWorker(
                 self.service,
                 self.form_id,
                 finding.item_id,
                 answers,
                 finding.index,
-                [canonical],
-                dry_run=False,
-                create_backup=False,
-                manual_approval=True,
+                canonical,
+                self,
             )
-            resolve_reviews(self.form_id, finding.item_id, "approved")
-            self.status.setText(f"Saved Q{finding.index + 1}")
-            self.scan()
+            worker.finished.connect(lambda _: self._on_save_finished(progress, finding))
+            worker.failed.connect(lambda error: self._on_save_failed(progress, error))
+            worker.start()
         except Exception as exc:
             QMessageBox.critical(self, "Could not save answer key", str(exc))
+
+    def _on_save_finished(self, progress, finding):
+        progress.close()
+        resolve_reviews(self.form_id, finding.item_id, "approved")
+        self._remove_review_item(finding, f"Saved Q{finding.index + 1}")
+
+    def _on_save_failed(self, progress, error):
+        progress.close()
+        QMessageBox.critical(self, "Could not save answer key", error)
+        self._set_detail_enabled(True)
 
     def skip_question(self):
         item = self.question_list.currentItem()
         if not item:
             return
-        row = self.question_list.row(item)
-        self.question_list.takeItem(row)
-        if self.question_list.count():
-            self.question_list.setCurrentRow(min(row, self.question_list.count() - 1))
-        else:
-            self.active_finding = None
-            self._set_detail_enabled(False)
-        self.status.setText("Question skipped")
+        finding = self.findings[item.data(Qt.UserRole)] if item.data(Qt.UserRole) is not None else None
+        if finding:
+            self._remove_review_item(finding, "Question left for later")
 
     def undo_last_change(self):
         try:

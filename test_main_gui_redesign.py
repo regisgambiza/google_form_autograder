@@ -62,3 +62,33 @@ def test_queue_search_and_status_filter_hide_nonmatches():
     window.form_filter_combo.setCurrentText("Done")
     assert first.isHidden()
     assert not second.isHidden()
+
+
+def test_live_metric_cards_show_accept_review_and_elapsed():
+    window = FormManager()
+    window.update_form_metrics(207, 462, 180, 6, 3723)
+    assert window.metric_responses.text() == "207 / 462"
+    assert window.metric_accepted.text() == "180"
+    assert ">6<" in window.metric_review.text()
+    assert window.metric_elapsed.text() == "01:02:03"
+
+
+def test_review_metric_deep_links_to_current_form(monkeypatch):
+    window = FormManager()
+    window.current_form_url = "https://docs.google.com/forms/d/form-1/edit"
+    calls = []
+    monkeypatch.setattr(
+        window,
+        "open_answer_key_dashboard",
+        lambda target_url=None, auto_scan=False: calls.append((target_url, auto_scan)),
+    )
+    window.open_current_form_review()
+    assert calls == [(window.current_form_url, True)]
+
+
+def test_settings_exposes_cache_and_history_clear_action(monkeypatch):
+    window = FormManager()
+    # Inspecting the source avoids entering the modal settings event loop.
+    source = __import__("pathlib").Path("gui_main.py").read_text(encoding="utf-8")
+    assert "Clear Cache & Grading History" in source
+    assert "clear_grading_cache(reset_history=True)" in source

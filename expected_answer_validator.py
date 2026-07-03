@@ -1,5 +1,8 @@
 import json
 import os
+import threading
+import time
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 import requests
@@ -21,7 +24,7 @@ VALIDATION_PROMPT = (
     "valid, confidence, suggested_answers, reason."
 )
 
-VALIDATION_CACHE_VERSION = "v4-first-teacher-answer"
+VALIDATION_CACHE_VERSION = "v5-bounded-reliable-validator"
 
 
 def _ollama_chat_url() -> str:
@@ -147,10 +150,36 @@ def _call_validator(model: str, question_context: str, expected: List[str], time
             {"role": "user", "content": user_prompt},
         ],
         "format": "json",
+        "options": {
+            "num_ctx": 8192,
+            "num_predict": 512,
+            "temperature": 0.0,
+        },
     }
-    resp = requests.post(_ollama_chat_url(), json=payload, timeout=(connect_timeout, timeout))
-    resp.raise_for_status()
-    content = resp.json().get("message", {}).get("content", "")
+    stop_heartbeat = threading.Event()
+
+    def pulse_heartbeat():
+        while not stop_heartbeat.wait(20.0):
+            try:
+                with open("heartbeat.json", "w", encoding="utf-8") as stream:
+                    json.dump({
+                        "last_update": datetime.now(timezone.utc).isoformat(),
+                        "pid": os.getpid(),
+                        "stage": "expected_answer_validation_inference",
+                        "timestamp_epoch": time.time(),
+                    }, stream, indent=2)
+            except Exception:
+                pass
+
+    heartbeat_thread = threading.Thread(target=pulse_heartbeat, daemon=True)
+    heartbeat_thread.start()
+    try:
+        resp = requests.post(_ollama_chat_url(), json=payload, timeout=(connect_timeout, timeout))
+        resp.raise_for_status()
+        content = resp.json().get("message", {}).get("content", "")
+    finally:
+        stop_heartbeat.set()
+        heartbeat_thread.join(timeout=1.0)
     data = _extract_json(content)
     if not data:
         data = _text_to_validation(content)

@@ -90,6 +90,22 @@ def _strip_units(s: str) -> str:
     return re.sub(r"\s+", " ", out).strip()
 
 
+def _unit_signature(value: str) -> str:
+    """Return a conservative normalized unit; do not equate incompatible units."""
+    text = str(value).strip().casefold()
+    aliases = {"degrees c": "°c", "celsius": "°c", "degrees f": "°f", "fahrenheit": "°f"}
+    for alias, canonical in aliases.items():
+        if alias in text:
+            return canonical
+    for unit in sorted(UNITS, key=len, reverse=True):
+        if unit in {"k", "m"}:
+            if re.search(rf"(?<![a-z]){re.escape(unit)}(?![a-z])", text):
+                return unit
+        elif unit in text:
+            return unit
+    return ""
+
+
 def _to_fraction(value: str) -> Optional[Fraction]:
     s = value.strip().lower().replace("½", "1/2").replace("×", "x")
     if s.endswith("%"):
@@ -190,8 +206,14 @@ def run_deterministic_checks(answer: str, expected: Union[str, List[str]], numer
         af = _to_fraction(answer)
         ef = _to_fraction(exp)
         if af is None or ef is None:
-            af = _to_fraction(_strip_units(answer))
-            ef = _to_fraction(_strip_units(exp))
+            answer_unit = _unit_signature(answer)
+            expected_unit = _unit_signature(exp)
+            # Unit-bearing answers are provable only when both units agree.
+            if answer_unit and expected_unit and answer_unit == expected_unit:
+                af = _to_fraction(_strip_units(answer))
+                ef = _to_fraction(_strip_units(exp))
+            else:
+                af = ef = None
         if af is not None and ef is not None:
             av = float(af)
             ev = float(ef)
@@ -231,11 +253,8 @@ def run_deterministic_checks(answer: str, expected: Union[str, List[str]], numer
             except Exception:
                 pass
 
-        if re.search(r"\(\s*[-\d\.]+\s*,\s*[-\d\.]+\s*\)", exp) and re.search(r"<\s*x\s*<", answer.lower()):
-            duration_ms = (time.perf_counter() - start) * 1000
-            if _DET_LOG_VERBOSITY == "verbose":
-                log("INFO", f"END deterministic_checks duration_ms={duration_ms:.0f} method=interval_equivalence accepted=True")
-            return DeterministicResult(True, 0.96, "interval_equivalence")
+        # Interval notation is deliberately left to review unless exact-normalized;
+        # endpoint and inclusivity mistakes are too important for a shape heuristic.
     
     duration_ms = (time.perf_counter() - start) * 1000
     if _DET_LOG_VERBOSITY == "verbose":

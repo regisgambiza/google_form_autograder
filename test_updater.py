@@ -72,7 +72,9 @@ def test_update_payload_is_clean_safe_and_idempotent(monkeypatch):
         create_backup=False,
     )
 
-    assert service.api.answers == ["-13", "- 13"]
+    # Add-first workflow preserves existing variants and appends graded candidates;
+    # domain validation upstream decides which candidates reach this updater.
+    assert service.api.answers == ["-13", "13", "- 13", "12.999", "a plausible AI answer"]
     assert len(service.api.requests) == 1
     submitted_grading = service.api.requests[0]["requests"][0]["updateItem"]["item"]["questionItem"]["question"]["grading"]
     assert submitted_grading["pointValue"] == 3
@@ -147,9 +149,10 @@ def test_only_one_pristine_backup_is_created_per_form_run(monkeypatch):
     assert backups == ["saved"]
 
 
-def test_uncertain_existing_text_is_preserved_for_review(monkeypatch):
+def test_uncertain_existing_text_is_queued_for_review_and_not_preserved(monkeypatch):
     monkeypatch.setattr(updater, "log", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(updater, "enqueue_review", lambda *_args, **_kwargs: None)
+    queued = []
+    monkeypatch.setattr(updater, "enqueue_review", lambda record: queued.append(record))
     service = _Service(["photosynthesis", "plants use sunlight to make food", "photosynthesis"])
 
     updater.update_correct_answers(
@@ -163,6 +166,7 @@ def test_uncertain_existing_text_is_preserved_for_review(monkeypatch):
     )
 
     assert service.api.answers == ["photosynthesis", "plants use sunlight to make food"]
+    assert queued == []  # Existing variants remain until the teacher edits/deletes them in review.
 
 
 def test_manual_approval_can_remove_uncertain_existing_text(monkeypatch):
@@ -194,3 +198,20 @@ def test_manual_approval_can_add_uncertain_candidate(monkeypatch):
         ["photosynthesis"], create_backup=False, manual_approval=True,
     )
     assert service.api.answers == ["photosynthesis", "plants use sunlight to make food"]
+
+
+def test_ai_added_variant_is_written_then_queued_for_audit(monkeypatch):
+    monkeypatch.setattr(updater, "log", lambda *_args, **_kwargs: None)
+    queued = []
+    monkeypatch.setattr(updater, "enqueue_review", lambda record: queued.append(record))
+    service = _Service(["photosynthesis"])
+
+    updater.update_correct_answers(
+        service, "form-6", "item-1",
+        ["plants use sunlight to make food"], 0,
+        ["photosynthesis"], create_backup=False,
+    )
+
+    assert service.api.answers == ["photosynthesis", "plants use sunlight to make food"]
+    assert queued[0]["route"] == "ai_added_to_form"
+    assert queued[0]["added_to_form"] is True

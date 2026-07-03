@@ -386,10 +386,12 @@ def get_question_context(question: Dict) -> str:
 
 
 def get_effective_expected(question: Dict, fallback_expected: Optional[List[str]] = None) -> List[str]:
-    effective = question.get("effective_expected")
-    if isinstance(effective, list):
-        return [str(x) for x in effective if _clean(x)]
-    return [str(x) for x in (fallback_expected or []) if _clean(x)]
+    """Return only the first teacher-supplied answer as grading truth.
+
+    Later Google Form answers are accepted variants, never canonical evidence.
+    """
+    values = [str(x) for x in (fallback_expected or []) if _clean(x)]
+    return values[:1]
 
 
 def should_block_answer_updates(question: Dict) -> bool:

@@ -24,6 +24,8 @@ from form_utils import get_form_structure
 from logger import log, stage_banner
 from response_utils import save_grading_time
 from updater import update_correct_answers
+from answer_key_manager import enqueue_review
+from answer_key_policy import identity_key
 
 
 @dataclass
@@ -59,12 +61,14 @@ class TokenBucket:
 
 
 def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generate_report: bool):
+    form_started_ts = time.time()
     cfg = load_config()
     staged_startup = bool(cfg.get("staged_thread_startup", True))
     fetch_workers = max(1, int(cfg.get("global_prefetch_workers", 4)))
     det_workers = max(1, int(cfg.get("deterministic_worker_count", 5)))
     ai_workers = max(1, int(cfg.get("ai_worker_count", 3)))
     max_latency = float(cfg.get("max_latency_per_answer_seconds", 30.0))
+    patient_mode = bool(cfg.get("patient_ai_mode", False))
     read_rate_per_min = float(cfg.get("forms_expensive_reads_per_minute", 160))
     stall_timeout_s = float(cfg.get("dispatcher_stall_timeout_seconds", 90))
     google_api_timeout_s = float(cfg.get("google_api_timeout_seconds", 25))
@@ -87,6 +91,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
     det_q: "queue.Queue[Optional[Task]]" = queue.Queue(maxsize=0 if staged_startup else queue_size)
     ai_q: "queue.Queue[Optional[Task]]" = queue.Queue(maxsize=max(200, int(queue_size * 0.5)))
     result_q: "queue.Queue[Optional[tuple[Task, EvaluationResult]]]" = queue.Queue(maxsize=max(200, int(queue_size * 0.75)))
+    apply_q: "queue.Queue[Optional[tuple[int, str]]]" = queue.Queue()
     stop = threading.Event()
     failed = threading.Event()
 
@@ -94,9 +99,11 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
     forms_total = len(form_urls)
     metrics_lock = threading.Lock()
     counters = {"fetch": 0, "det": 0, "ai": 0, "apply": 0}
-    progress = {"expected_tasks": 0, "completed": 0, "last_progress_ts": time.time(), "pending_buffer": 0, "ai_backlog": 0}
+    progress = {"expected_tasks": 0, "completed": 0, "accepted": 0, "last_progress_ts": time.time(), "pending_buffer": 0, "ai_backlog": 0}
+    review_question_ids = set()
+    queued_for_apply = set()
     queue_progress = {"last_any_work_ts": time.time(), "last_snapshot": (0, 0, 0, 0)}
-    ai_progress = {"last_ai_done_ts": time.time()}
+    ai_progress = {"last_ai_done_ts": time.time(), "last_warning_ts": 0.0}
     task_builder_metrics = {"built": 0, "enqueued": 0, "last_emit": time.time()}
     task_builder_log_path = str(cfg.get("task_builder_log_path", "task_builder_metrics.jsonl"))
     task_builder_log_enabled = bool(cfg.get("task_builder_log_enabled", True))
@@ -331,7 +338,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                 structure = item["structure"] or []
                 form_data = item["form_data"] or {"items": []}
                 all_responses = item["responses"] or []
-                forms_results[i] = {"meta": item, "question_answers": {}, "counts": {}}
+                forms_results[i] = {"meta": item, "question_answers": {}, "question_reviews": {}, "counts": {}}
 
                 # Build per-question answer buckets once to avoid O(questions * responses) scans.
                 answers_by_qid: Dict[str, List[str]] = {}
@@ -485,7 +492,8 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                         answer=t.answer, decision="YES", final_score=det.confidence, semantic_score=det.confidence,
                         concept_score=det.confidence, factual_score=det.confidence, misconception_detected=False,
                         misconception_description="", missing_concepts=[], accepted_concepts=[], model_agreement=1.0,
-                        confidence=det.confidence, fast_path_used=True, latency_ms=0.0, stage_reached="deterministic"
+                        confidence=det.confidence, fast_path_used=True, latency_ms=0.0, stage_reached="deterministic",
+                        evidence={"proof": getattr(det, "method", "deterministic"), "key_eligible": True},
                     )
                     result_q.put((t, r), timeout=2)
                     with metrics_lock:
@@ -530,7 +538,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                 )
             elapsed_s = time.perf_counter() - started
             hard_budget_s = max_latency + 30
-            if elapsed_s > hard_budget_s:
+            if (not patient_mode) and elapsed_s > hard_budget_s:
                 log("WARNING", f"[DISPATCH] evaluate_answer exceeded budget: {elapsed_s:.1f}s > {hard_budget_s:.1f}s")
                 r = EvaluationResult(
                     answer=t.answer, decision="NO", final_score=0.0, semantic_score=0.0, concept_score=0.0,
@@ -554,7 +562,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
             with metrics_lock:
                 expected = progress["expected_tasks"]
                 completed = progress["completed"]
-            if completed >= expected and expected > 0 and det_q.empty() and ai_q.empty() and result_q.empty():
+            if completed >= expected and expected > 0 and result_q.empty():
                 log("INFO", "[Worker: Aggregator] DONE result_aggregator")
                 return
             try:
@@ -568,10 +576,88 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
             fi = t.form_idx
             qid = t.question["questionId"]
             forms_results.setdefault(fi, {"meta": {}, "question_answers": {}, "counts": {}})
-            forms_results[fi]["question_answers"].setdefault(qid, []).append(r.answer if r.decision == "YES" else None)
+            key_eligible = bool((r.evidence or {}).get("key_eligible", False))
+            accepted_variant = (
+                r.decision == "YES"
+                and key_eligible
+                and all(identity_key(r.answer) != identity_key(value) for value in (t.expected or []))
+            )
+            forms_results[fi]["question_answers"].setdefault(qid, []).append(
+                r.answer if r.decision == "YES" and key_eligible else None
+            )
+            if r.decision == "REVIEW":
+                forms_results[fi].setdefault("question_reviews", {}).setdefault(qid, []).append({
+                    "answer": r.answer, "confidence": r.confidence, "stage": r.stage_reached,
+                    "evidence": r.evidence,
+                })
+            question_done = len(forms_results[fi]["question_answers"].get(qid, []))
+            question_total = int(forms_results[fi].get("counts", {}).get(qid, 0))
+            apply_key = (fi, qid)
+            if question_total > 0 and question_done >= question_total and apply_key not in queued_for_apply:
+                queued_for_apply.add(apply_key)
+                apply_q.put(apply_key)
             with metrics_lock:
                 progress["completed"] += 1
+                if r.decision == "YES":
+                    progress["accepted"] += 1
+                if r.decision == "REVIEW" or accepted_variant:
+                    review_question_ids.add(qid)
+                completed_now = int(progress["completed"])
+                expected_now = int(progress["expected_tasks"])
+                accepted_now = int(progress["accepted"])
+                review_now = len(review_question_ids)
                 progress["last_progress_ts"] = time.time()
+            # Machine-readable real-time progress consumed by GraderThread.
+            # In staged mode task construction is complete before this worker starts,
+            # so the denominator is stable and the percentage cannot move backwards.
+            print(f"FormProgress: {completed_now}/{expected_now}", flush=True)
+            print(
+                f"FormMetrics: {completed_now}/{expected_now} {accepted_now} {review_now} {int(time.time() - form_started_ts)}",
+                flush=True,
+            )
+
+    def incremental_apply_worker():
+        """Serialize Google Forms writes as each question finishes evaluation."""
+        log("INFO", "[Worker: Apply] START incremental_apply_worker")
+        service = get_service()
+        while True:
+            item = apply_q.get()
+            if item is None:
+                apply_q.task_done()
+                log("INFO", "[Worker: Apply] DONE incremental_apply_worker")
+                return
+            fi, qid = item
+            try:
+                data = forms_results[fi]
+                meta = data["meta"]
+                form_id = meta.get("form_id", "")
+                question = next(q for q in meta.get("structure", []) if q.get("questionId") == qid)
+                accepted = [a for a in data["question_answers"].get(qid, []) if a]
+                reviews = data.get("question_reviews", {}).get(qid, [])
+                trusted_expected = question.get("trusted_expected", get_effective_expected(question, [])[:1])
+                if reviews:
+                    enqueue_review({
+                        "form_id": form_id,
+                        "item_id": question["itemId"],
+                        "question_id": qid,
+                        "canonical": trusted_expected[0] if trusted_expected else "",
+                        "candidates": list(dict.fromkeys(x["answer"] for x in reviews)),
+                        "confidence": max((float(x["confidence"]) for x in reviews), default=0.0),
+                        "route": "grading_review",
+                        "evidence": reviews,
+                    })
+                if not should_block_answer_updates(question) and accepted and question["type"] in {"SHORT_ANSWER", "LONG_ANSWER"}:
+                    update_correct_answers(
+                        service, form_id, question["itemId"], accepted, question["index"], trusted_expected
+                    )
+                with metrics_lock:
+                    counters["apply"] += 1
+                print(f"QuestionAvailableForReview: {form_id} {qid}", flush=True)
+                log("INFO", f"[APPLY] Question ready for review form_id={form_id} question_id={qid}")
+            except Exception as ex:
+                log("ERROR", f"[APPLY] Incremental question update failed fi={fi} qid={qid}: {ex}")
+            finally:
+                apply_q.task_done()
 
     def metrics_reporter():
         last = time.time()
@@ -587,6 +673,11 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                     f = counters["fetch"]; d = counters["det"]; a = counters["ai"]; ap = counters["apply"]
                     counters["fetch"] = counters["det"] = counters["ai"] = counters["apply"] = 0
                     exp = progress["expected_tasks"]; comp = progress["completed"]; lp = progress["last_progress_ts"]; pb = progress["pending_buffer"]; ai_backlog = progress["ai_backlog"]
+                    accepted_total = int(progress["accepted"]); review_total = len(review_question_ids)
+                print(
+                    f"FormMetrics: {comp}/{exp} {accepted_total} {review_total} {int(time.time() - form_started_ts)}",
+                    flush=True,
+                )
                 log(
                     "INFO",
                     f"[DISPATCH METRICS] fetch/s={f/dt:.2f} det/s={d/dt:.2f} ai/s={a/dt:.2f} apply/s={ap/dt:.2f} "
@@ -605,7 +696,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                 if exp > 0 and (time.time() - lp) > stall_timeout_s:
                     # Soft-stall handling: do not kill the whole run. Judge timeouts can make
                     # progress bursty; hard-failing here aborts otherwise recoverable runs.
-                    log("WARNING", f"[DISPATCH] stall detected: no progress for {stall_timeout_s}s (continuing with timeout fallbacks)")
+                    log("WARNING", f"[DISPATCH] no completed answer for {stall_timeout_s}s; patient mode continues waiting for AI")
                     with metrics_lock:
                         progress["last_progress_ts"] = time.time()
                 with metrics_lock:
@@ -617,12 +708,15 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                 # slow rubric/jury call is still running.
                 with metrics_lock:
                     ai_idle_for = time.time() - ai_progress["last_ai_done_ts"]
-                if ai_q.qsize() > 0 and ai_idle_for > ai_stall_timeout_s:
+                    since_ai_warning = time.time() - ai_progress["last_warning_ts"]
+                if ai_q.qsize() > 0 and ai_idle_for > ai_stall_timeout_s and since_ai_warning >= 300.0:
                     log(
                         "WARNING",
                         f"[DISPATCH] AI queue has waited {ai_idle_for:.1f}s without a completed AI result "
-                        f"(q_ai={ai_q.qsize()} q_ai_actual={ai_backlog}); active answer timeout remains responsible for fallback",
+                        f"(q_ai={ai_q.qsize()} q_ai_actual={ai_backlog}); patient mode is still waiting without fallback",
                     )
+                    with metrics_lock:
+                        ai_progress["last_warning_ts"] = time.time()
             except Exception as ex:
                 log("ERROR", f"[Worker: Metrics] reporter loop exception: {ex}")
                 # Keep reporter alive even after transient errors.
@@ -633,6 +727,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
     da = [threading.Thread(target=det_worker, daemon=False) for _ in range(det_workers)]
     aw = [threading.Thread(target=ai_worker, daemon=False) for _ in range(ai_workers)]
     ag = threading.Thread(target=result_aggregator, daemon=False)
+    ap = threading.Thread(target=incremental_apply_worker, daemon=False)
     mr = threading.Thread(target=metrics_reporter, daemon=False)
 
     if staged_startup:
@@ -657,12 +752,16 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
         validate_stage_transition("workers")
         set_stage("workers")
         announce_stage(3, "Run Deterministic + AI + Aggregation", "START")
+        with metrics_lock:
+            expected_at_start = int(progress["expected_tasks"])
+        print(f"FormProgress: 0/{expected_at_start}", flush=True)
         [t.start() for t in da]
         [t.start() for t in aw]
         ag.start()
+        ap.start()
         mr.start()
     else:
-        tf.start(); tb.start(); [t.start() for t in da]; [t.start() for t in aw]; ag.start(); mr.start()
+        tf.start(); tb.start(); [t.start() for t in da]; [t.start() for t in aw]; ag.start(); ap.start(); mr.start()
         tf.join(); tb.join()
 
     [t.join() for t in da]
@@ -672,14 +771,20 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
         except Exception:
             pass
     [t.join() for t in aw]
+    ag.join(timeout=30)
+    if ag.is_alive():
+        result_q.put(None)
+        ag.join(timeout=10)
+    apply_q.put(None)
+    apply_q.join()
+    ap.join(timeout=10)
     stop.set()
-    ag.join(timeout=15); mr.join(timeout=6)
+    mr.join(timeout=6)
 
     if failed.is_set():
         raise RuntimeError("Global dispatcher failed due to stall/crash")
 
-    # Apply sequentially
-    service = get_service()
+    # All answer-key writes are already complete; finalize reports/timestamps.
     for i in sorted(forms_results.keys()):
         data = forms_results[i]
         meta = data["meta"]
@@ -691,23 +796,8 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
         for q in structure:
             qid = q["questionId"]
             accepted = [a for a in data["question_answers"].get(qid, []) if a]
-            trusted_expected = q.get("trusted_expected", get_effective_expected(q, [])[:1])
             all_questions.append({"question": q, "responses": [], "correct_answers": accepted})
-            if should_block_answer_updates(q):
-                validation = q.get("expected_validation") or {}
-                log(
-                    "WARNING",
-                    f"[EXPECTED VALIDATOR] blocking updates for Q{q.get('index')} "
-                    f"{q.get('title')} reason={validation.get('reason', '')}",
-                )
-                continue
-            if accepted and q["type"] in {"SHORT_ANSWER", "LONG_ANSWER"}:
-                update_correct_answers(
-                    service, form_id, q["itemId"], accepted, q["index"], trusted_expected
-                )
         if generate_report:
             generate_form_feedback(form_id, title, all_questions)
         save_grading_time(form_id, datetime.now(timezone.utc))
-        with metrics_lock:
-            counters["apply"] += 1
         log("INFO", f"[FORM] FINISHED '{title}' ({form_id})")

@@ -1,3 +1,4 @@
+import time
 import types
 
 import global_dispatcher as gd
@@ -39,7 +40,7 @@ class _FakeService:
         return self._forms_api
 
 
-def test_task_builder_supplies_work_without_starving(monkeypatch):
+def test_task_builder_supplies_work_without_starving(monkeypatch, capsys):
     # 4 questions x 120 responses => enough volume to exercise buffering/refill.
     structure = []
     items = []
@@ -83,7 +84,11 @@ def test_task_builder_supplies_work_without_starving(monkeypatch):
 
     # Force deterministic fast path so test focuses on producer/task-builder throughput.
     det_result = types.SimpleNamespace(accepted=True, confidence=1.0)
-    monkeypatch.setattr(gd, "run_deterministic_checks", lambda *args, **kwargs: det_result)
+    def deterministic_check(answer, *_args, **_kwargs):
+        if "-q1-" not in answer:
+            time.sleep(0.001)
+        return det_result
+    monkeypatch.setattr(gd, "run_deterministic_checks", deterministic_check)
 
     monkeypatch.setattr(
         gd,
@@ -108,6 +113,26 @@ def test_task_builder_supplies_work_without_starving(monkeypatch):
         grade_recent_only=False,
         generate_report=False,
     )
+
+    emitted_lines = capsys.readouterr().out.splitlines()
+    progress_lines = [
+        line for line in emitted_lines
+        if line.startswith("FormProgress:")
+    ]
+    assert progress_lines[0] == "FormProgress: 0/480"
+    assert progress_lines[-1] == "FormProgress: 480/480"
+    completed = [int(line.split()[1].split("/", 1)[0]) for line in progress_lines]
+    assert completed == sorted(completed)
+    assert len(set(completed)) > 100
+    metric_lines = [
+        line for line in emitted_lines
+        if line.startswith("FormMetrics:")
+    ]
+    assert metric_lines
+    assert metric_lines[-1].split()[1:4] == ["480/480", "480", "4"]
+    review_ready = [i for i, line in enumerate(emitted_lines) if line.startswith("QuestionAvailableForReview:")]
+    assert len(review_ready) == 4
+    assert review_ready[0] < max(i for i, line in enumerate(emitted_lines) if line == "FormProgress: 480/480")
 
     # Form has 4 short-answer questions and all deterministic checks accepted.
     assert len(update_calls) == 4

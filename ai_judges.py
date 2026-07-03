@@ -61,7 +61,7 @@ JUDGE_PROMPTS = {
     "misconception_judge": "You are a misconception analyst. Your job is to detect whether the student's answer reveals a fundamental conceptual misunderstanding, even if parts of the answer sound correct on the surface. A misconception should lower the score significantly.\n\nCRITICAL: Your response MUST be ONLY valid JSON. No explanations, no markdown, no text before or after.",
     "language_filter": "You are a language quality assessor for ESL and Thai learner answers. Your job is to separate language errors (grammar, spelling, word order) from content errors. Report how much of the answer's incorrectness is due to language issues vs actual wrong content.\n\nCRITICAL: Your response MUST be ONLY valid JSON. No explanations, no markdown, no text before or after.",
 }
-REQUIRED_FIELDS = ["semantic_similarity", "concept_coverage", "factual_accuracy", "misconception_detected", "misconception_description", "language_noise_ratio", "confidence", "decision", "reason_short"]
+REQUIRED_FIELDS = ["decision", "confidence", "reason_short"]
 
 
 def _selected_roles(cfg: Dict[str, object]) -> List[str]:
@@ -99,18 +99,31 @@ def prewarm_judge_runtime():
 
 
 def _abstain(reason: str = "judge unavailable") -> Dict[str, object]:
-    """Return a default abstain response."""
+    """Return an internal failure response; never a grading verdict."""
     return {
-        "semantic_similarity": 0.0,
-        "concept_coverage": 0.0,
-        "factual_accuracy": 0.0,
-        "misconception_detected": False,
-        "misconception_description": "",
-        "language_noise_ratio": 0.0,
         "confidence": 0.0,
-        "decision": "ABSTAIN",
+        "decision": "ERROR",
         "reason_short": reason
     }
+
+
+def _failure_category(raw: str) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return "empty_response"
+    if text.count("{") > text.count("}") or text.endswith((":", ",")):
+        return "truncated_json"
+    try:
+        obj = json.loads(text)
+    except Exception:
+        return "invalid_json"
+    if not isinstance(obj, dict):
+        return "non_object_json"
+    if "decision" not in obj:
+        return "missing_decision"
+    if str(obj.get("decision", "")).strip().upper() not in {"YES", "NO"}:
+        return "non_binary_decision"
+    return "missing_required_field"
 
 
 def _ollama_chat_url() -> str:
@@ -193,7 +206,7 @@ def _map_response_to_required_fields(obj: Dict[str, object]) -> Dict[str, object
                 else:
                     decision = "YES" if val in [True, 1, "true", "YES"] else "NO"
             elif isinstance(val, str):
-                decision = val.upper() if val.upper() in ["YES", "NO", "ABSTAIN"] else None
+                decision = val.upper() if val.upper() in ["YES", "NO"] else None
 
     if decision:
         result["decision"] = decision
@@ -221,14 +234,14 @@ def _map_response_to_required_fields(obj: Dict[str, object]) -> Dict[str, object
 
 
 def _normalize_decision(d: Dict[str, object]) -> Dict[str, object]:
-    """Normalize decision field to YES/NO/ABSTAIN."""
-    decision = str(d.get("decision", "ABSTAIN")).strip().upper()
+    """Normalize to a binary verdict or an internal retryable ERROR."""
+    decision = str(d.get("decision", "ERROR")).strip().upper()
     if decision in {"0", "FALSE", "INCORRECT", "FAIL", "WRONG", "NO"}:
         d["decision"] = "NO"
     elif decision in {"1", "TRUE", "CORRECT", "PASS", "YES"}:
         d["decision"] = "YES"
     else:
-        d["decision"] = "ABSTAIN"
+        d["decision"] = "ERROR"
     return d
 
 
@@ -239,20 +252,15 @@ def _fill_judge_defaults(data: Dict[str, object]) -> Dict[str, object]:
         if key not in data:
             data[key] = defaults[key]
     
-    # Clamp numeric fields to [0.0, 1.0]
-    for nf in ["semantic_similarity", "concept_coverage", "factual_accuracy", "language_noise_ratio", "confidence"]:
+    # Clamp confidence to [0.0, 1.0].
+    for nf in ["confidence"]:
         try:
             val = float(data[nf])
             data[nf] = max(0.0, min(1.0, val))
         except (TypeError, ValueError):
             data[nf] = 0.0
     
-    # Normalize misconception_detected to boolean
-    if isinstance(data.get("misconception_detected"), str):
-        data["misconception_detected"] = data["misconception_detected"].lower() in {"true", "yes", "1"}
-    elif not isinstance(data.get("misconception_detected"), bool):
-        data["misconception_detected"] = bool(data.get("misconception_detected", False))
-    
+    data["reason_short"] = str(data.get("reason_short", ""))[:500]
     return data
 
 
@@ -260,18 +268,31 @@ def _valid(d: Dict[str, object]) -> bool:
     """Check if judge result has all required fields and valid decision."""
     return (
         all(k in d for k in REQUIRED_FIELDS) 
-        and str(d.get("decision")) in {"YES", "NO", "ABSTAIN"}
+        and str(d.get("decision")) in {"YES", "NO"}
     )
 
 
 def _make_judge_prompt(question: str, expected: str, answer: str, rubric: Dict[str, object]) -> str:
     """Create prompt for judge."""
+    def compact(value: object, limit: int) -> str:
+        text = str(value or "")
+        if len(text) <= limit:
+            return text
+        head = int(limit * 0.75)
+        return text[:head] + "\n...[irrelevant context omitted]...\n" + text[-(limit - head):]
+
+    compact_question = compact(question, 8000)
+    compact_rubric = compact(json.dumps(rubric, ensure_ascii=True), 4000)
     return (
-        f"Question: {question}\n"
+        f"Question: {compact_question}\n"
         f"Expected: {expected}\n"
         f"Answer: {answer}\n\n"
-        f"Rubric for reference:\n{json.dumps(rubric)}\n\n"
-        "Provide your evaluation as a JSON object with these fields:"
+        f"Rubric for reference:\n{compact_rubric}\n\n"
+        "You MUST make a binary decision. Choose YES if the answer is correct, otherwise choose NO. "
+        "Never abstain, defer, or return an uncertain verdict. Uncertainty must be expressed only in "
+        "the numeric confidence field while decision remains YES or NO. "
+        "Return ONLY one compact JSON object in this exact shape: "
+        '{"decision":"YES","confidence":0.95,"reason_short":"brief reason"}'
     )
 
 
@@ -280,15 +301,9 @@ def _get_judge_format() -> Dict[str, object]:
     return {
         "type": "object",
         "properties": {
-            "semantic_similarity": {"type": "number", "minimum": 0.0, "maximum": 1.0},
-            "concept_coverage": {"type": "number", "minimum": 0.0, "maximum": 1.0},
-            "factual_accuracy": {"type": "number", "minimum": 0.0, "maximum": 1.0},
-            "misconception_detected": {"type": "boolean"},
-            "misconception_description": {"type": "string"},
-            "language_noise_ratio": {"type": "number", "minimum": 0.0, "maximum": 1.0},
             "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
-            "decision": {"type": "string", "enum": ["YES", "NO", "ABSTAIN"]},
-            "reason_short": {"type": "string"}
+            "decision": {"type": "string", "enum": ["YES", "NO"]},
+            "reason_short": {"type": "string", "maxLength": 500}
         },
         "required": REQUIRED_FIELDS
     }
@@ -325,11 +340,12 @@ async def call_judge_async(
     start = time.perf_counter()
     log("INFO", f"START judge_{role} (model={model})")
 
+    base_prompt = _make_judge_prompt(question, expected, answer, rubric)
     payload = {
         "model": model,
         "messages": [
             {"role": "system", "content": JUDGE_PROMPTS[role]},
-            {"role": "user", "content": _make_judge_prompt(question, expected, answer, rubric)}
+            {"role": "user", "content": base_prompt}
         ],
         "stream": False,
         "options": _get_ollama_options(role),
@@ -341,6 +357,10 @@ async def call_judge_async(
     sem_wait = max(3, int(cfg.get("judge_http_semaphore_wait_seconds", judge_timeout_s)))
 
     for attempt in range(retries):
+        if attempt:
+            payload["messages"][1]["content"] = (
+                base_prompt + "\n\nREPAIR: Your previous response was invalid. Output only the three-field JSON object."
+            )
         if not sem.acquire(timeout=sem_wait):
             log("WARNING", f"Judge {role} semaphore wait timeout ({sem_wait}s)")
             continue
@@ -367,11 +387,14 @@ async def call_judge_async(
             obj = _normalize_decision(obj)
             obj = _fill_judge_defaults(obj)
             if _valid(obj):
+                obj["role"] = role
+                obj["model"] = model
                 duration_ms = (time.perf_counter() - start) * 1000
                 log_post_inference_gpu_probe_once("judge_async")
-                _log_judge_result(role, model, duration_ms, obj.get("decision", "ABSTAIN"), obj.get("confidence", 0.0))
+                _log_judge_result(role, model, duration_ms, obj.get("decision", "ERROR"), obj.get("confidence", 0.0))
                 _write_heartbeat_if_needed()
                 return obj
+            log("WARNING", f"Judge {role} invalid output category={_failure_category(content)} raw={repr(content)[:1000]}")
 
         except json.JSONDecodeError as ex:
             content = data.get("message", {}).get("content", "") if 'data' in locals() else ""
@@ -387,7 +410,9 @@ async def call_judge_async(
             except Exception:
                 pass
 
-    return _abstain("retries_exhausted")
+    out = _abstain("retries_exhausted")
+    out.update({"role": role, "model": model})
+    return out
 
 
 def _log_judge_result(role: str, model: str, duration_ms: float, decision: str, confidence: float):
@@ -433,7 +458,7 @@ async def run_all_judges_with_early_exit(
             try:
                 r = await asyncio.wait_for(done, timeout=judge_timeout_s)
             except asyncio.TimeoutError:
-                log("WARNING", "Judge call timed out, using ABSTAIN")
+                log("WARNING", "Judge call timed out without a binary verdict; retry state recorded")
                 r = _abstain("timeout")
             results.append(r)
             
@@ -472,16 +497,19 @@ def _run_judges_sync(
     ee_min = max(1, int(ee.get("min_judges", 3)))
     ee_agree = float(ee.get("agreement_confidence", 0.90))
 
-    def _call_one(role: str) -> Dict[str, object]:
+    def _call_one_once(role: str, repair: bool = False) -> Dict[str, object]:
         _write_heartbeat_if_needed()
         role_model = jury_models.get(role)
         start = time.perf_counter()
         log("INFO", f"START judge_{role} (model={role_model})")
+        user_prompt = _make_judge_prompt(question, expected, answer, rubric)
+        if repair:
+            user_prompt += "\n\nREPAIR: Your previous response was invalid. Output only the three-field JSON object."
         payload = {
             "model": role_model,
             "messages": [
                 {"role": "system", "content": JUDGE_PROMPTS[role]},
-                {"role": "user", "content": _make_judge_prompt(question, expected, answer, rubric)},
+                {"role": "user", "content": user_prompt},
             ],
             "stream": False,
             "options": _get_ollama_options(role),
@@ -491,10 +519,10 @@ def _run_judges_sync(
         sem = _get_judge_http_semaphore()
         sem_wait = max(3, int(cfg.get("judge_http_semaphore_wait_seconds", TIMEOUT_SECONDS)))
         if not sem.acquire(timeout=sem_wait):
-            log("WARNING", f"Judge {role} semaphore wait timeout ({sem_wait}s), falling back to ABSTAIN")
+            log("WARNING", f"Judge {role} semaphore wait timeout ({sem_wait}s); no verdict produced")
             duration_ms = (time.perf_counter() - start) * 1000
-            _log_judge_result(role, role_model, duration_ms, "ABSTAIN", 0.0)
-            return _abstain("semaphore_timeout")
+            _log_judge_result(role, role_model, duration_ms, "ERROR", 0.0)
+            out = _abstain("semaphore_timeout"); out.update({"role": role, "model": role_model}); return out
 
         try:
             resp = requests.post(
@@ -505,15 +533,15 @@ def _run_judges_sync(
             resp.raise_for_status()
             response = resp.json()
         except requests.Timeout:
-            log("WARNING", f"Judge {role} timed out after {TIMEOUT_SECONDS}s, falling back to ABSTAIN")
+            log("WARNING", f"Judge {role} timed out after {TIMEOUT_SECONDS}s without a binary verdict")
             duration_ms = (time.perf_counter() - start) * 1000
-            _log_judge_result(role, role_model, duration_ms, "ABSTAIN", 0.0)
-            return _abstain("timeout")
+            _log_judge_result(role, role_model, duration_ms, "ERROR", 0.0)
+            out = _abstain("timeout"); out.update({"role": role, "model": role_model}); return out
         except Exception as ex:
             log("WARNING", f"Judge {role} sync attempt failed: {ex}")
             duration_ms = (time.perf_counter() - start) * 1000
-            _log_judge_result(role, role_model, duration_ms, "ABSTAIN", 0.0)
-            return _abstain("exception")
+            _log_judge_result(role, role_model, duration_ms, "ERROR", 0.0)
+            out = _abstain("exception"); out.update({"role": role, "model": role_model}); return out
         finally:
             try:
                 sem.release()
@@ -526,20 +554,69 @@ def _run_judges_sync(
         obj = _fill_judge_defaults(obj)
         duration_ms = (time.perf_counter() - start) * 1000
         if _valid(obj):
+            obj["role"] = role
+            obj["model"] = role_model
             log_post_inference_gpu_probe_once("judge_sync")
-            _log_judge_result(role, role_model, duration_ms, obj.get("decision", "ABSTAIN"), obj.get("confidence", 0.0))
+            _log_judge_result(role, role_model, duration_ms, obj.get("decision", "ERROR"), obj.get("confidence", 0.0))
             _write_heartbeat_if_needed()
             return obj
-        _log_judge_result(role, role_model, duration_ms, "ABSTAIN", 0.0)
+        _log_judge_result(role, role_model, duration_ms, "ERROR", 0.0)
+        log("WARNING", f"Judge {role} invalid output category={_failure_category(raw)} raw={repr(raw)[:1000]}")
         _write_heartbeat_if_needed()
-        return _abstain("invalid_response")
+        out = _abstain("invalid_response"); out.update({"role": role, "model": role_model}); return out
+
+    def _call_one(role: str) -> Dict[str, object]:
+        """Retry abstentions so transient/invalid model output is not final."""
+        last = None
+        for attempt in range(max(1, retries)):
+            last = _call_one_once(role, repair=attempt > 0)
+            if str(last.get("decision", "ERROR")).upper() in {"YES", "NO"}:
+                return last
+            log("WARNING", f"Judge {role} returned no binary verdict on attempt {attempt + 1}/{max(1, retries)}; retrying")
+        return last or _abstain("retries_exhausted")
 
     out: List[Dict[str, object]] = []
+    adaptive_cfg = cfg.get("adaptive_math_jury", {})
+    if bool(adaptive_cfg.get("enabled", False)):
+        primary_roles = [
+            role for role in adaptive_cfg.get("primary_roles", ["semantic_judge", "factual_judge"])
+            if role in roles
+        ]
+        adjudicator_role = str(adaptive_cfg.get("adjudicator_role", "strict_judge"))
+        threshold = float(adaptive_cfg.get("minimum_primary_confidence", 0.90))
+        ambiguity_words = tuple(str(x).casefold() for x in adaptive_cfg.get(
+            "ambiguity_markers", ["ambiguous", "uncertain", "unclear", "insufficient", "depends"]
+        ))
+        for role in primary_roles:
+            out.append(_call_one(role))
+
+        valid_primary = all(str(j.get("decision", "ERROR")) in {"YES", "NO"} for j in out)
+        decisions = [str(j.get("decision", "ERROR")) for j in out]
+        confidences = [float(j.get("confidence", 0.0) or 0.0) for j in out]
+        ambiguous = any(
+            any(marker in str(j.get("reason_short", "")).casefold() for marker in ambiguity_words)
+            for j in out
+        )
+        needs_adjudicator = (
+            len(out) != 2
+            or not valid_primary
+            or len(set(decisions)) != 1
+            or min(confidences, default=0.0) < threshold
+            or ambiguous
+        )
+        if needs_adjudicator and adjudicator_role in roles:
+            reason = "invalid" if not valid_primary else "disagreement" if len(set(decisions)) != 1 else "low-confidence/ambiguous"
+            log("INFO", f"[JUDGES] Escalating to {adjudicator_role}: {reason}")
+            out.append(_call_one(adjudicator_role))
+        else:
+            log("INFO", "[JUDGES] Two primary judges agree confidently; adjudicator skipped")
+        return out
+
     if sync_parallelism <= 1:
         for role in roles:
             out.append(_call_one(role))
             if ee_enabled and len(out) >= ee_min:
-                decisions = [str(x.get("decision", "ABSTAIN")) for x in out]
+                decisions = [str(x.get("decision", "ERROR")) for x in out]
                 confs = [float(x.get("confidence", 0.0)) for x in out]
                 avg_conf = (sum(confs) / len(confs)) if confs else 0.0
                 if len(set(decisions)) == 1 and avg_conf >= ee_agree:
@@ -559,7 +636,7 @@ def _run_judges_sync(
                     out.append(_abstain("future_exception"))
 
                 if ee_enabled and len(out) >= ee_min:
-                    decisions = [str(x.get("decision", "ABSTAIN")) for x in out]
+                    decisions = [str(x.get("decision", "ERROR")) for x in out]
                     confs = [float(x.get("confidence", 0.0)) for x in out]
                     avg_conf = (sum(confs) / len(confs)) if confs else 0.0
                     if len(set(decisions)) == 1 and avg_conf >= ee_agree:
@@ -567,7 +644,7 @@ def _run_judges_sync(
                             pf.cancel()
                         break
         except FuturesTimeoutError:
-            log("WARNING", "Synchronous judge batch timed out; unresolved judges will ABSTAIN")
+            log("WARNING", "Synchronous judge batch timed out; unresolved judges produced no verdict")
         finally:
             for pf in pending:
                 pf.cancel()

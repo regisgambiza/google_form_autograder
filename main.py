@@ -158,6 +158,7 @@ def _prepare_form(service, idx: int, total_forms: int, form_url: str, grade_rece
         responses = get_responses(service, form_id, q["questionId"], grade_recent_only=grade_recent_only)
 
         correct_answers_fetched = get_effective_expected(q, expected_by_item_id.get(q["itemId"], []))
+        trusted_teacher_answer = correct_answers_fetched[:1]
 
         if q["type"] in text_types:
             evaluated = evaluate_answers(q, responses, expected=correct_answers_fetched or None)
@@ -168,7 +169,7 @@ def _prepare_form(service, idx: int, total_forms: int, form_url: str, grade_rece
             "question": q,
             "responses": responses,
             "correct_answers": evaluated,
-            "trusted_expected": correct_answers_fetched[:1],
+            "trusted_expected": trusted_teacher_answer,
         })
 
     all_questions.sort(key=lambda x: x["question"]["index"])

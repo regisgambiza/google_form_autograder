@@ -34,7 +34,8 @@ def _progress_bar(yes_count: int, total: int, width: int = 20) -> str:
 def _print_pretty_block(question: Dict[str, object], results: List[object]) -> None:
     total = len(results)
     yes = sum(1 for r in results if r.decision == "YES")
-    no = total - yes
+    review = sum(1 for r in results if r.decision == "REVIEW")
+    no = total - yes - review
     fast_yes = sum(1 for r in results if r.fast_path_used and r.decision == "YES")
     fast_no = sum(1 for r in results if r.fast_path_used and r.decision == "NO")
     sent_semantic = total - (fast_yes + fast_no)
@@ -53,14 +54,14 @@ def _print_pretty_block(question: Dict[str, object], results: List[object]) -> N
     log("INFO", f"[PIPELINE]   Deterministic rejected: {fast_no}")
     log("INFO", f"[PIPELINE]   Sent to semantic stages: {sent_semantic}")
     log("INFO", "[PIPELINE] Consensus Summary")
-    log("INFO", f"[PIPELINE]   YES: {yes}   NO: {no}")
+    log("INFO", f"[PIPELINE]   YES: {yes}   NO: {no}   REVIEW: {review}")
     log("INFO", f"[PIPELINE]   Avg confidence: {avg_conf:.2f}")
     log("INFO", f"[PIPELINE]   Misconceptions flagged: {misconceptions}")
     log("INFO", f"[PIPELINE]   Avg latency/answer: {avg_lat_ms/1000.0:.1f}s   Max: {max_lat_ms/1000.0:.1f}s (budget: 30.0s)")
     log("INFO", "[PIPELINE] Progress")
     log("INFO", f"[PIPELINE]   Question progress: {_progress_bar(yes, total)}")
     log("INFO", "[PIPELINE] ------------------------------------------------------------")
-    log("INFO", f"[PIPELINE] DONE Question {q_title} | YES={yes} NO={no}")
+    log("INFO", f"[PIPELINE] DONE Question {q_title} | YES={yes} NO={no} REVIEW={review}")
 
 
 def evaluate_answers(question: Dict[str, object], answers: List[str], expected: Optional[List[str]] = None) -> List[str]:
@@ -75,4 +76,7 @@ def evaluate_answers(question: Dict[str, object], answers: List[str], expected: 
     else:
         results = semantic_evaluate_answers(answers, expected_values, qtext)
     _print_pretty_block(question, results)
-    return [r.answer for r in results if r.decision == "YES"]
+    return [
+        r.answer for r in results
+        if r.decision == "YES" and bool((r.evidence or {}).get("key_eligible", False))
+    ]

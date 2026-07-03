@@ -9,6 +9,7 @@ class GraderThread(QThread):
     finished = pyqtSignal(bool, str)
     progress = pyqtSignal(int, int)
     overall_progress = pyqtSignal(int, int)
+    form_metrics = pyqtSignal(int, int, int, int, int)
     debug_message = pyqtSignal(str)
     current_form = pyqtSignal(str)
     finished_form = pyqtSignal(str)
@@ -42,13 +43,14 @@ class GraderThread(QThread):
         if os.name != "nt":
             return
         current_pid = os.getpid()
+        main_path = os.path.abspath("main.py").replace("'", "''")
         script = (
-            f"$self={current_pid}; "
+            f"$self={current_pid}; $main='{main_path}'; "
             "Get-CimInstance Win32_Process | "
             "Where-Object { "
             "($_.Name -in @('python.exe','pythonw.exe')) -and "
             "$_.ProcessId -ne $self -and "
-            "$_.CommandLine -match '(^|[\\\\/\\s\"''])(main\\.py)([\"''\\s]|$)' "
+            "$_.CommandLine -like ('*' + $main + '*') "
             "} | ForEach-Object { "
             "try { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop } catch {} "
             "}"
@@ -70,10 +72,16 @@ class GraderThread(QThread):
 
     def run(self):
         try:
-            self._stop_requested = False
+            if self._stop_requested:
+                self.finished.emit(False, "Grading stopped.")
+                return
             self.terminate_existing_graders()
+            if self._stop_requested:
+                self.finished.emit(False, "Grading stopped.")
+                return
             my_env = os.environ.copy()
             my_env["PYTHONIOENCODING"] = "utf-8"
+            my_env["PYTHONUNBUFFERED"] = "1"
 
             # Pass grading mode to main.py via environment variable
             my_env["GRADE_RECENT_ONLY"] = str(self.grade_recent_only).lower()
@@ -135,6 +143,15 @@ class GraderThread(QThread):
                     except:
                         pass
 
+                if ls.startswith("FormMetrics:"):
+                    try:
+                        payload = ls.split(":", 1)[1].strip().split()
+                        completed, total = map(int, payload[0].split("/", 1))
+                        accepted, review_questions, elapsed = map(int, payload[1:4])
+                        self.form_metrics.emit(completed, total, accepted, review_questions, elapsed)
+                    except Exception:
+                        pass
+
                 if "[FORM] FINISHED" in ls and "(" in ls and ")" in ls:
                     try:
                         form_id = ls.rsplit("(", 1)[1].split(")", 1)[0].strip()
@@ -158,6 +175,16 @@ class GraderThread(QThread):
         except Exception as e:
             self.finished.emit(False, f"Thread crashed: {str(e)}")
         finally:
-            if self._stop_requested and self.process and self.process.poll() is None:
-                self._terminate_process_tree(self.process.pid)
+            if self.process:
+                if self.process.poll() is None:
+                    self._terminate_process_tree(self.process.pid)
+                    try:
+                        self.process.wait(timeout=5)
+                    except Exception:
+                        pass
+                try:
+                    if self.process.stdout:
+                        self.process.stdout.close()
+                except Exception:
+                    pass
             self.process = None
