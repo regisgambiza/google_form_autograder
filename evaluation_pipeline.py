@@ -370,6 +370,9 @@ def evaluate_answer(answer: str, expected: Union[str, List[str]], question: str)
                 required_roles=accuracy_cfg.get("required_accept_roles", ["semantic_judge", "factual_judge", "strict_judge"]),
                 require_distinct_models=bool(accuracy_cfg.get("require_distinct_models", True)),
             )
+        if domain.status == "PROVEN" and domain.domain == "formatting_equivalence":
+            decision, confidence, reason = "YES", 1.0, "proven_formatting_equivalence"
+            policy_evidence["formatting_override"] = domain.to_dict()
         stage = "jury" if decision in {"YES", "NO"} else "review"
         policy_evidence["policy_reason"] = reason
         factual = float(agg["factual_accuracy"])
@@ -380,7 +383,9 @@ def evaluate_answer(answer: str, expected: Union[str, List[str]], question: str)
 
     votes = [1.0 if j.get("decision") == decision else 0.0 for j in active]
     agree = (sum(votes) / len(votes)) if votes else 0.0
-    key_eligible = decision == "YES" and domain.domain in {"natural_language", "multipart_list"}
+    key_eligible = decision == "YES" and domain.domain in {
+        "natural_language", "multipart_list", "formatting_equivalence"
+    }
     evidence = {"question": question, "expected": expected, "answer": answer, "embedding_similarity": emb_score, "rubric": jury_rubric, "policy": policy_evidence, "domain_validation": domain.to_dict(), "key_eligible": key_eligible}
     res = EvaluationResult(answer, decision, float(final_score), float(concept["semantic_score"]), float(concept["concept_score"]), factual, bool(misconception["misconception_detected"]), str(misconception["misconception_description"]), list(concept["missing_concepts"]), list(concept["accepted_concepts"]), agree, float(confidence), False, lat, stage, evidence)
     record_decision(asdict(res), str(cfg.get("decision_audit_path", "logs/grading_decisions.jsonl")))

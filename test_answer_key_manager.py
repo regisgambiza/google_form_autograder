@@ -113,6 +113,20 @@ def test_review_queue_deduplicates_pending_records(tmp_path, monkeypatch):
     assert len(data["items"]) == 1
 
 
+def test_rerun_refreshes_stale_answer_classifications(tmp_path, monkeypatch):
+    path = tmp_path / "reviews.json"
+    monkeypatch.setattr(manager, "REVIEW_QUEUE_PATH", path)
+    base = {"form_id": "f", "item_id": "i", "candidates": ["50,9 cm"]}
+    manager.enqueue_review({**base, "accepted": [], "rejected": ["50,9 cm"]})
+    manager.enqueue_review({**base, "accepted": ["50,9 cm"], "rejected": []})
+
+    data = json.loads(path.read_text(encoding="utf-8"))
+
+    assert len(data["items"]) == 1
+    assert data["items"][0]["accepted"] == ["50,9 cm"]
+    assert data["items"][0]["rejected"] == []
+
+
 def test_pending_review_records_preserve_answer_categories(tmp_path, monkeypatch):
     path = tmp_path / "reviews.json"
     monkeypatch.setattr(manager, "REVIEW_QUEUE_PATH", path)

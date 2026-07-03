@@ -9,6 +9,7 @@ from typing import Dict, List, Optional, Sequence
 from sympy import Ge, Gt, Interval, Le, Lt, simplify, solve_univariate_inequality, sympify
 
 from normalization import normalize
+from format_equivalence import compare_formatting
 
 
 @dataclass(frozen=True)
@@ -232,6 +233,14 @@ def validate_answer_domain(answer: str, expected_values: Sequence[str], question
         return DomainValidation("PROVEN", "exact", 1.0, "exact normalized match", True, base)
     if normalize(candidate) == normalize(question) or len(re.sub(r"\W", "", candidate)) < 1:
         return DomainValidation("CONTRADICTED", "irrelevant", 0.99, "copied question or nonsensical answer", False, base)
+
+    formatting = compare_formatting(candidate, expected, question)
+    if formatting.equivalent:
+        return DomainValidation(
+            "PROVEN", "formatting_equivalence", 1.0,
+            "candidate differs from the teacher answer only in harmless formatting",
+            True, {**base, "formatting": formatting.to_dict()},
+        )
 
     numeric_spec = _allowed_numeric_spec(expected)
     cnum, enum = _number_without_unit(candidate), _number_without_unit(expected)

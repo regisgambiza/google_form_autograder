@@ -363,17 +363,22 @@ def enqueue_review(record: Dict) -> None:
             except (OSError, ValueError):
                 pass
         key = (record.get("form_id"), record.get("item_id"), tuple(record.get("candidates", [])))
-        existing = {
-            (item.get("form_id"), item.get("item_id"), tuple(item.get("candidates", [])))
-            for item in data.get("items", [])
-            if item.get("status", "pending") == "pending"
-        }
-        if key not in existing:
-            saved = dict(record)
-            saved.setdefault("status", "pending")
-            saved.setdefault("created_at", datetime.now(timezone.utc).isoformat())
+        saved = dict(record)
+        saved.setdefault("status", "pending")
+        now = datetime.now(timezone.utc).isoformat()
+        replaced = False
+        for index, item in enumerate(data.get("items", [])):
+            item_key = (item.get("form_id"), item.get("item_id"), tuple(item.get("candidates", [])))
+            if item.get("status", "pending") == "pending" and item_key == key:
+                saved["created_at"] = item.get("created_at", now)
+                saved["updated_at"] = now
+                data["items"][index] = saved
+                replaced = True
+                break
+        if not replaced:
+            saved.setdefault("created_at", now)
             data.setdefault("items", []).append(saved)
-            REVIEW_QUEUE_PATH.write_text(json.dumps(data, indent=2, ensure_ascii=True), encoding="utf-8")
+        REVIEW_QUEUE_PATH.write_text(json.dumps(data, indent=2, ensure_ascii=True), encoding="utf-8")
 
 
 def resolve_reviews(form_id: str, item_id: str, status: str) -> int:

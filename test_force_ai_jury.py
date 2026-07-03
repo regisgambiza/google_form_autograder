@@ -59,3 +59,19 @@ def test_exact_answer_still_reaches_full_ai_jury_when_forced(monkeypatch):
     assert result.decision == "YES"
     assert result.stage_reached == "jury"
     assert result.fast_path_used is False
+
+    def mistaken_formatting_rejections(*_args, **_kwargs):
+        calls.append(True)
+        return [
+            {"role": role, "decision": "NO", "confidence": 0.99, "reason_short": "format mismatch"}
+            for role in ("semantic_judge", "factual_judge", "concept_judge")
+        ]
+
+    monkeypatch.setattr(pipeline, "run_judges", mistaken_formatting_rejections)
+    formatted = pipeline.evaluate_answer(
+        "50,9 cm", ["50.9 (cm)"],
+        "Find the diameter. Give your answer to 1 decimal place.",
+    )
+
+    assert formatted.decision == "YES"
+    assert formatted.evidence["policy"]["policy_reason"] == "proven_formatting_equivalence"

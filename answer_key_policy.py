@@ -3,6 +3,7 @@ import unicodedata
 from dataclasses import dataclass
 from fractions import Fraction
 from typing import List, Optional, Sequence
+from format_equivalence import compare_formatting
 
 
 _UNICODE_MINUSES = "\u2212\u2012\u2013\u2014\ufe63\uff0d"
@@ -47,6 +48,8 @@ def _numeric_value(value: object) -> Optional[Fraction]:
 def safely_equivalent(candidate: object, canonical: object) -> bool:
     """Prove equivalence without semantic AI or numeric tolerances."""
     if identity_key(candidate) == identity_key(canonical):
+        return True
+    if compare_formatting(candidate, canonical).equivalent:
         return True
     candidate_number = _numeric_value(candidate)
     canonical_number = _numeric_value(canonical)
