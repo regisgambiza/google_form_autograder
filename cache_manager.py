@@ -44,3 +44,10 @@ def clear_grading_cache(root: Path = Path("."), reset_history: bool = True) -> D
         "removed_bytes": removed_bytes,
         "history_removed": history_removed,
     }
+
+
+def prepare_fresh_grading_run(config: Dict, root: Path = Path(".")) -> Dict[str, int]:
+    """Discard data from earlier runs when cache reuse is disabled."""
+    if not bool(config.get("ignore_grading_cache", False)):
+        return {"removed_files": 0, "removed_bytes": 0, "history_removed": 0}
+    return clear_grading_cache(root=root, reset_history=True)

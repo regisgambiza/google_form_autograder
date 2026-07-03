@@ -25,6 +25,7 @@ from answer_key_manager import (
     backup_form_grading,
     list_backups,
     keep_teacher_answers_only,
+    load_pending_review_records,
     remove_form_duplicates,
     resolve_reviews,
     restore_backup,
@@ -137,6 +138,11 @@ class AnswerKeyDashboard(QDialog):
         review_title.setObjectName("Section")
         review_bar.addWidget(review_title)
         review_bar.addStretch()
+        self.review_filter = QComboBox()
+        self.review_filter.addItems(["Needs review", "All questions"])
+        self.review_filter.setToolTip("Show only questions awaiting a decision, or every text question")
+        self.review_filter.currentIndexChanged.connect(self._review_filter_changed)
+        review_bar.addWidget(self.review_filter)
         self.scan_button = QPushButton("Review Possible Mistakes")
         self.scan_button.setObjectName("Secondary")
         self.scan_button.setIcon(self.style().standardIcon(QStyle.SP_FileDialogContentsView))
@@ -163,7 +169,7 @@ class AnswerKeyDashboard(QDialog):
         self.canonical_input.setToolTip("Protected teacher answer. The app never edits or deletes this first answer.")
         detail_layout.addWidget(self.canonical_input)
 
-        detail_layout.addWidget(QLabel("Accepted answers"))
+        detail_layout.addWidget(QLabel("Answer classifications"))
         self.answer_list = QListWidget()
         detail_layout.addWidget(self.answer_list, 1)
 
@@ -219,6 +225,10 @@ class AnswerKeyDashboard(QDialog):
             raise ValueError("Add a form to the queue first.")
         self.form_id = _form_id(url)
         self.service = self.service or get_service()
+
+    def _review_filter_changed(self):
+        if self.form_data:
+            self.scan()
 
     def add_source(self):
         text, accepted = QInputDialog.getMultiLineText(
@@ -331,11 +341,33 @@ class AnswerKeyDashboard(QDialog):
             self.status.setText("Checking answer keys...")
             self.form_data = self.service.forms().get(formId=self.form_id).execute()
             all_findings = scan_form_data(self.form_id, self.form_data)
-            self.findings = [
-                finding for finding in all_findings
-                if finding.route in {"review", "reject"}
-                and finding.item_id not in self.processed_item_ids
-            ]
+            pending_by_item = load_pending_review_records(self.form_id)
+            show_all = self.review_filter.currentText() == "All questions"
+            self.findings = []
+            for finding in all_findings:
+                if finding.item_id in self.processed_item_ids:
+                    continue
+                records = pending_by_item.get(str(finding.item_id), [])
+                categories = {}
+                for value in finding.current_answers:
+                    categories[identity_key(value)] = "Accepted"
+                for record in records:
+                    for value in record.get("accepted", []):
+                        categories[identity_key(value)] = "Accepted"
+                    for value in record.get("needs_approval", []):
+                        categories[identity_key(value)] = "Needs approval"
+                    for value in record.get("rejected", []):
+                        categories[identity_key(value)] = "Rejected"
+                    if not any(key in record for key in ("accepted", "needs_approval", "rejected")):
+                        legacy_category = "Needs approval" if record.get("source") == "grading_review" else "Accepted"
+                        for value in record.get("candidates", []):
+                            categories[identity_key(value)] = legacy_category
+                finding.answer_categories = categories
+                finding.review_records = records
+                needs_review = finding.route in {"review", "reject"} or bool(records)
+                if show_all or needs_review:
+                    self.findings.append(finding)
+            reject_count = sum(1 for finding in self.findings if finding.route == "reject")
             self.question_list.clear()
             for index, finding in enumerate(self.findings):
                 item = QListWidgetItem(f"Q{finding.index + 1}  {finding.title}")
@@ -343,11 +375,19 @@ class AnswerKeyDashboard(QDialog):
                 self.question_list.addItem(item)
             if self.findings:
                 self.question_list.setCurrentRow(0)
-                self.status.setText(f"{len(self.findings)} questions need review")
+                if reject_count:
+                    self.status.setText(
+                        f"{len(self.findings)} questions need review, {reject_count} questions clearly wrong"
+                    )
+                else:
+                    self.status.setText(f"{len(self.findings)} questions need review")
             else:
                 self._set_detail_enabled(False)
                 self.question_title.setText("No possible mistakes found")
-                self.status.setText("Answer keys look clean")
+                if reject_count:
+                    self.status.setText(f"{reject_count} questions were rejected as obviously wrong")
+                else:
+                    self.status.setText("Answer keys look clean")
         except Exception as exc:
             QMessageBox.critical(self, "Could not review answer keys", str(exc))
             self.status.setText("Answer-key review failed")
@@ -369,6 +409,7 @@ class AnswerKeyDashboard(QDialog):
 
         current_keys = {identity_key(value) for value in finding.current_answers}
         canonical_key = identity_key(finding.canonical)
+        categories = getattr(finding, "answer_categories", {})
         values = []
         seen = set()
         for value in finding.current_answers + finding.review_candidates:
@@ -376,17 +417,29 @@ class AnswerKeyDashboard(QDialog):
             if key not in seen:
                 seen.add(key)
                 values.append(value)
+        for record in getattr(finding, "review_records", []):
+            for value in record.get("candidates", []):
+                key = identity_key(value)
+                if key not in seen:
+                    seen.add(key)
+                    values.append(value)
         for value in values:
-            item = QListWidgetItem(value)
             key = identity_key(value)
+            category = categories.get(key, "Accepted" if key in current_keys else "Needs approval")
+            label = "Accepted (teacher)" if key == canonical_key else category
+            item = QListWidgetItem(f"{label} — {value}")
             item.setData(Qt.UserRole + 1, key == canonical_key)
+            item.setData(Qt.UserRole + 2, label)
             if key == canonical_key:
                 item.setFlags(item.flags() & ~Qt.ItemIsEditable & ~Qt.ItemIsUserCheckable)
                 item.setToolTip("Protected teacher canonical answer")
             else:
                 item.setFlags(item.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsEditable)
-                item.setCheckState(Qt.Checked if key in current_keys else Qt.Unchecked)
-                item.setToolTip("Checked answers remain. Uncheck to delete; double-click to edit.")
+                item.setCheckState(Qt.Unchecked if category == "Rejected" else Qt.Checked)
+                if category == "Rejected":
+                    item.setToolTip("Rejected by grading and not entered in the form. Check to approve it manually.")
+                else:
+                    item.setToolTip("Currently entered in the form. Uncheck to remove; double-click to edit.")
             self.answer_list.addItem(item)
         self._set_detail_enabled(True)
 
@@ -418,7 +471,9 @@ class AnswerKeyDashboard(QDialog):
         for row in range(self.answer_list.count()):
             item = self.answer_list.item(row)
             if not bool(item.data(Qt.UserRole + 1)) and item.checkState() == Qt.Checked:
-                answers.append(item.text())
+                text = item.text().strip()
+                prefix = f"{item.data(Qt.UserRole + 2)} — "
+                answers.append(text[len(prefix):].strip() if text.startswith(prefix) else text)
         return answers
 
     def save_question(self):

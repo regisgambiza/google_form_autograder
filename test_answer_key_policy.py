@@ -24,6 +24,7 @@ def test_numeric_equivalence_is_exact_not_tolerant():
     assert not safely_equivalent("13", "-13")
     assert equivalence_confidence("13", "-13") == 0.0
     assert equivalence_confidence("negative thirteen", "-13") == 0.60
+    assert equivalence_confidence("20p+4q+4", "56") == 0.0
 
 
 def test_ai_semantic_match_cannot_mutate_key():

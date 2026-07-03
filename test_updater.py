@@ -60,6 +60,11 @@ class _Service:
 def test_update_payload_is_clean_safe_and_idempotent(monkeypatch):
     monkeypatch.setattr(updater, "log", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(updater, "enqueue_review", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        updater,
+        "load_config",
+        lambda *args, **kwargs: {**__import__("evaluator_config").DEFAULT_CONFIG, "answer_key_auto_add_proven_equivalents": False},
+    )
     service = _Service(["-13", "-13", "13"])
 
     updater.update_correct_answers(
@@ -72,9 +77,8 @@ def test_update_payload_is_clean_safe_and_idempotent(monkeypatch):
         create_backup=False,
     )
 
-    # Add-first workflow preserves existing variants and appends graded candidates;
-    # domain validation upstream decides which candidates reach this updater.
-    assert service.api.answers == ["-13", "13", "- 13", "12.999", "a plausible AI answer"]
+    # With conservative auto-add disabled, only existing verified variants are preserved.
+    assert service.api.answers == ["-13", "13"]
     assert len(service.api.requests) == 1
     submitted_grading = service.api.requests[0]["requests"][0]["updateItem"]["item"]["questionItem"]["question"]["grading"]
     assert submitted_grading["pointValue"] == 3
@@ -200,10 +204,15 @@ def test_manual_approval_can_add_uncertain_candidate(monkeypatch):
     assert service.api.answers == ["photosynthesis", "plants use sunlight to make food"]
 
 
-def test_ai_added_variant_is_written_then_queued_for_audit(monkeypatch):
+def test_ai_added_variant_is_entered_and_queued_for_audit_when_auto_add_enabled(monkeypatch):
     monkeypatch.setattr(updater, "log", lambda *_args, **_kwargs: None)
-    queued = []
     monkeypatch.setattr(updater, "enqueue_review", lambda record: queued.append(record))
+    monkeypatch.setattr(
+        updater,
+        "load_config",
+        lambda *args, **kwargs: {**__import__("evaluator_config").DEFAULT_CONFIG, "answer_key_auto_add_proven_equivalents": True},
+    )
+    queued = []
     service = _Service(["photosynthesis"])
 
     updater.update_correct_answers(

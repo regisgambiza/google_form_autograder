@@ -7,7 +7,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
-from answer_key_policy import clean_display, identity_key, prepare_answer_key, safely_equivalent
+from answer_key_policy import (
+    clean_display,
+    equivalence_confidence,
+    identity_key,
+    prepare_answer_key,
+    safely_equivalent,
+)
 
 
 BACKUP_DIR = Path("backups") / "answer_keys"
@@ -72,7 +78,7 @@ def analyze_question(
 
     trusted = [canonical_source] if canonical_source else []
     queued = [clean_display(value) for value in (review_candidates or []) if clean_display(value)]
-    plan = prepare_answer_key(current, queued, trusted, max_variants)
+    plan = prepare_answer_key(current, [], trusted, max_variants)
     if plan.duplicates:
         issues.append(f"{len(plan.duplicates)} duplicate entries")
     if len(current) > unreasonable_count:
@@ -85,6 +91,9 @@ def analyze_question(
     rejected = [value for value in plan.rejected if clean_display(value)]
     if rejected:
         issues.append(f"{len(rejected)} unverified or contradictory entries")
+    queued_rejected = [value for value in queued if equivalence_confidence(value, canonical) == 0.0]
+    if queued_rejected:
+        issues.append(f"{len(queued_rejected)} queued candidate(s) clearly incorrect")
     if queued:
         issues.append(f"{len(queued)} queued candidate(s) awaiting decision")
 
@@ -97,7 +106,9 @@ def analyze_question(
 
     if not canonical:
         confidence, route = 0.0, "reject"
-    elif queued or rejected or sign_errors:
+    elif rejected or queued_rejected or sign_errors:
+        confidence, route = 0.0, "reject"
+    elif queued:
         confidence, route = 0.60, "review"
     elif plan.changed:
         confidence, route = 0.99, "auto"
@@ -136,6 +147,22 @@ def load_pending_reviews(form_id: str) -> Dict[str, List[str]]:
         if item.get("form_id") != form_id or item.get("status", "pending") != "pending":
             continue
         result.setdefault(str(item.get("item_id", "")), []).extend(item.get("candidates", []))
+    return result
+
+
+def load_pending_review_records(form_id: str) -> Dict[str, List[Dict]]:
+    """Return full pending review records grouped by item id."""
+    if not REVIEW_QUEUE_PATH.exists():
+        return {}
+    try:
+        data = json.loads(REVIEW_QUEUE_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    result: Dict[str, List[Dict]] = {}
+    for item in data.get("items", []):
+        if item.get("form_id") != form_id or item.get("status", "pending") != "pending":
+            continue
+        result.setdefault(str(item.get("item_id", "")), []).append(dict(item))
     return result
 
 

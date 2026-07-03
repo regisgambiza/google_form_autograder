@@ -29,6 +29,7 @@ def update_correct_answers(
     dry_run=None,
     create_backup=True,
     manual_approval=False,
+    enqueue_added_review=True,
 ):
     review_record = None
     log("DEBUG", f"Entering update_correct_answers for QID {question_id} "
@@ -142,7 +143,7 @@ def update_correct_answers(
                         "confidence": 1.0,
                         "route": "ai_added_to_form",
                         "added_to_form": True,
-                        "reason": "AI-approved variants added pending teacher audit",
+                        "reason": "AI-classified variants added pending teacher audit",
                     }
 
         changed = updated_answers != existing_clean
@@ -152,7 +153,7 @@ def update_correct_answers(
         if auto_threshold > 1.0:
             log("INFO", f"Answer-key automation disabled by confidence threshold for QID {question_id}.")
             return duplicates
-        if not changed:
+        if not changed and review_record is None:
             log("INFO", f"Answer key for QID {question_id} is already clean; skipping update.")
             return duplicates
         if dry_run:
@@ -198,15 +199,19 @@ def update_correct_answers(
     }
     
     try:
-        if create_backup:
-            backup_path = _ensure_form_backup(service, form_id, reason=f"before update {question_id}")
-            if backup_path:
-                log("INFO", f"Answer-key backup saved: {backup_path}")
-        log("DEBUG", f"Executing batch update for form ID {form_id}")
-        service.forms().batchUpdate(formId=form_id, body=update_request).execute()
-        if review_record:
+        if changed:
+            if create_backup:
+                backup_path = _ensure_form_backup(service, form_id, reason=f"before update {question_id}")
+                if backup_path:
+                    log("INFO", f"Answer-key backup saved: {backup_path}")
+            log("DEBUG", f"Executing batch update for form ID {form_id}")
+            service.forms().batchUpdate(formId=form_id, body=update_request).execute()
+        if review_record and enqueue_added_review:
             enqueue_review(review_record)
-        log("INFO", f"Updated QID {question_id} successfully with {len(updated_answers)} verified answers.")
+        if changed:
+            log("INFO", f"Updated QID {question_id} successfully with {len(updated_answers)} verified answers.")
+        else:
+            log("INFO", f"Queued AI review for QID {question_id} without changing existing answers.")
     except Exception as e:
         log("ERROR", f"Failed to update QID {question_id}: {str(e)}")
         raise

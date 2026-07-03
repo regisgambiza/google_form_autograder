@@ -45,6 +45,8 @@
     "answer_key_dry_run": false,
     "answer_key_auto_apply_confidence": 0.95,
     "answer_key_auto_add_proven_equivalents": true,
+    "ignore_grading_cache": true,
+    "force_ai_jury_for_all_answers": true,
     "decision_audit_path": "logs/grading_decisions.jsonl",
     "teacher_benchmark_path": "teacher_benchmark.jsonl",
     "accuracy_policy": {

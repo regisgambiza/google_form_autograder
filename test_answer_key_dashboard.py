@@ -150,6 +150,58 @@ def test_review_locks_canonical_and_allows_variant_edit_delete():
     assert dialog._checked_answers() == ["AI variant"]
 
 
+def test_answer_categories_are_labelled_and_rejected_is_not_selected():
+    dialog = dashboard.AnswerKeyDashboard({})
+    finding = SimpleNamespace(
+        index=0, item_id="item-1", title="Question 1", canonical="teacher",
+        current_answers=["teacher", "accepted", "approval"], review_candidates=[],
+        answer_categories={
+            dashboard.identity_key("teacher"): "Accepted",
+            dashboard.identity_key("accepted"): "Accepted",
+            dashboard.identity_key("approval"): "Needs approval",
+            dashboard.identity_key("wrong"): "Rejected",
+        },
+        review_records=[{"candidates": ["accepted", "approval", "wrong"]}],
+    )
+    dialog.findings = [finding]
+    row = QListWidgetItem("Q1 Question 1")
+    row.setData(Qt.UserRole, 0)
+
+    dialog._show_question(row, None)
+
+    assert dialog.answer_list.item(0).text().startswith("Accepted (teacher) —")
+    assert dialog.answer_list.item(1).text() == "Accepted — accepted"
+    assert dialog.answer_list.item(2).text() == "Needs approval — approval"
+    assert dialog.answer_list.item(3).text() == "Rejected — wrong"
+    assert dialog.answer_list.item(3).checkState() == Qt.Unchecked
+    assert dialog._checked_answers() == ["accepted", "approval"]
+
+
+def test_filter_switches_between_review_and_all_questions(monkeypatch):
+    dialog = dashboard.AnswerKeyDashboard({})
+    dialog.form_id = "form-1"
+    dialog.form_data = {}
+
+    class _Forms:
+        def get(self, formId):
+            return self
+        def execute(self):
+            return {"items": []}
+
+    dialog.service = SimpleNamespace(forms=lambda: _Forms())
+    monkeypatch.setattr(dialog, "_connect", lambda: None)
+    monkeypatch.setattr(dashboard, "load_pending_review_records", lambda _form_id: {})
+    monkeypatch.setattr(dashboard, "scan_form_data", lambda *_a, **_k: [
+        SimpleNamespace(index=0, item_id="clean", title="Clean", route="clean", canonical="a", current_answers=["a"], review_candidates=[]),
+        SimpleNamespace(index=1, item_id="review", title="Review", route="review", canonical="b", current_answers=["b"], review_candidates=[]),
+    ])
+
+    dialog.scan()
+    assert dialog.question_list.count() == 1
+    dialog.review_filter.setCurrentText("All questions")
+    assert dialog.question_list.count() == 2
+
+
 def test_keep_teacher_only_button_confirms_and_runs_cleanup(monkeypatch):
     dialog = dashboard.AnswerKeyDashboard({})
     dialog.form_id = "form-1"

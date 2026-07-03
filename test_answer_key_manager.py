@@ -51,14 +51,24 @@ class _Service:
         return self.api
 
 
-def test_health_scan_routes_duplicates_to_auto_and_conflicts_to_review():
+def test_health_scan_routes_duplicates_to_auto_and_conflicts_to_reject():
     duplicate = manager.analyze_question("form", _item(["-13", "-13", "- 13"]), 0)
     assert duplicate.route == "auto"
     assert duplicate.proposed_answers == ["-13", "- 13"]
 
     conflict = manager.analyze_question("form", _item(["-13", "13", "-13"]), 0)
-    assert conflict.route == "review"
+    assert conflict.route == "reject"
     assert any("sign contradiction" in issue for issue in conflict.issues)
+
+
+def test_health_scan_routes_wrong_answers_to_reject():
+    finding = manager.analyze_question(
+        "form",
+        _item(["photosynthesis", "plants use sunlight to make food"]),
+        0,
+    )
+    assert finding.route == "reject"
+    assert any("unverified or contradictory entries" in issue for issue in finding.issues)
 
 
 def test_health_scan_detects_missing_and_unreasonable_keys():
@@ -103,6 +113,21 @@ def test_review_queue_deduplicates_pending_records(tmp_path, monkeypatch):
     assert len(data["items"]) == 1
 
 
+def test_pending_review_records_preserve_answer_categories(tmp_path, monkeypatch):
+    path = tmp_path / "reviews.json"
+    monkeypatch.setattr(manager, "REVIEW_QUEUE_PATH", path)
+    manager.enqueue_review({
+        "form_id": "f", "item_id": "i", "candidates": ["yes", "maybe", "no"],
+        "accepted": ["yes"], "needs_approval": ["maybe"], "rejected": ["no"],
+    })
+
+    records = manager.load_pending_review_records("f")
+
+    assert records["i"][0]["accepted"] == ["yes"]
+    assert records["i"][0]["needs_approval"] == ["maybe"]
+    assert records["i"][0]["rejected"] == ["no"]
+
+
 def test_scan_attaches_pending_candidates_to_question():
     form = {"items": [_item(["photosynthesis"], title="Process")]} 
     findings = manager.scan_form_data(
@@ -110,6 +135,15 @@ def test_scan_attaches_pending_candidates_to_question():
     )
     assert findings[0].route == "review"
     assert findings[0].review_candidates == ["plants use sunlight to make food"]
+
+
+def test_queued_wrong_candidate_is_rejected():
+    form = {"items": [_item(["-13"], title="Process")]}
+    findings = manager.scan_form_data(
+        "form", form, pending_reviews={"item-1": ["13"]}
+    )
+    assert findings[0].route == "reject"
+    assert any("clearly incorrect" in issue for issue in findings[0].issues)
 
 
 def test_review_decisions_are_persistent(tmp_path, monkeypatch):

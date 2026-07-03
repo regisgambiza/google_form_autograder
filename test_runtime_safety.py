@@ -23,12 +23,20 @@ def test_patient_ai_mode_avoids_short_timeout_fallbacks():
     assert cfg["retry_attempts"] >= 5
 
 
-def test_math_jury_uses_two_primary_models_and_conditional_adjudicator():
+def test_every_answer_is_forced_through_ai_jury():
+    cfg = json.loads(Path("config.json").read_text(encoding="utf-8"))
+    assert cfg["force_ai_jury_for_all_answers"] is True
+
+
+def test_jury_uses_llama_evaluator_gemma_verifier_and_gpt_adjudicator():
     cfg = json.loads(Path("config.json").read_text(encoding="utf-8"))
     adaptive = cfg["adaptive_math_jury"]
     assert adaptive["enabled"] is True
     assert adaptive["primary_roles"] == ["semantic_judge", "factual_judge"]
     assert adaptive["adjudicator_role"] == "strict_judge"
+    assert cfg["jury_models"][adaptive["primary_roles"][0]] == "llama3.1:8b"
+    assert cfg["jury_models"][adaptive["primary_roles"][1]] == "gemma3:12b"
+    assert cfg["jury_models"][adaptive["adjudicator_role"]] == "gpt-oss:latest"
 
 
 def test_teacher_key_validator_is_bounded_and_avoids_deepseek():

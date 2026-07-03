@@ -24,6 +24,7 @@ from updater import update_correct_answers
 from global_prefetch import prefetch_all_forms
 from global_dispatcher import run_global_dispatcher
 from ai_judges import prewarm_judge_runtime
+from cache_manager import prepare_fresh_grading_run
 
 _GRADER_LOCK_FH = None
 
@@ -187,6 +188,13 @@ def _prepare_form(service, idx: int, total_forms: int, form_url: str, grade_rece
 def main():
     acquire_grader_lock()
     log("INFO", "=== Google Form Autograder Started ===")
+    fresh = prepare_fresh_grading_run(config)
+    if bool(config.get("ignore_grading_cache", False)):
+        log(
+            "INFO",
+            f"[CACHE] Fresh-run mode: ignored prior cache/history and removed "
+            f"{fresh['removed_files']} cached files",
+        )
     log("INFO", f"Execution Mode: {config.get('execution_mode', 'Balanced')}")
     prewarm_judge_runtime()
     write_heartbeat("initialization")

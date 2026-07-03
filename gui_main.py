@@ -8,7 +8,8 @@ from PyQt5.QtWidgets import (
     QPushButton, QLineEdit, QListWidget, QListWidgetItem, QMessageBox,
     QTextEdit, QLabel, QComboBox, QCheckBox,
     QProgressDialog, QSplitter, QSpinBox, QDialog, QFormLayout, QTabWidget,
-    QSystemTrayIcon, QMenu, QAction, QStyle, QFrame, QProgressBar, QDoubleSpinBox
+    QSystemTrayIcon, QMenu, QAction, QStyle, QFrame, QProgressBar, QDoubleSpinBox,
+    QScrollArea
 )
 
 from PyQt5.QtCore import Qt, QDate, QTimer, QSize
@@ -886,7 +887,20 @@ class FormManager(QMainWindow):
         dialog.resize(760, 520)
         dialog.setMinimumSize(680, 480)
         dialog.setSizeGripEnabled(True)
-        form = QFormLayout(dialog)
+
+        main_layout = QVBoxLayout(dialog)
+        main_layout.setContentsMargins(12, 12, 12, 12)
+        main_layout.setSpacing(10)
+
+        scroll_area = QScrollArea(dialog)
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QFrame.NoFrame)
+
+        scroll_widget = QWidget()
+        form = QFormLayout(scroll_widget)
+        scroll_widget.setLayout(form)
+        scroll_area.setWidget(scroll_widget)
+        main_layout.addWidget(scroll_area)
 
         evaluator_combo = QComboBox(dialog)
         evaluator_combo.addItems([
@@ -1039,18 +1053,37 @@ class FormManager(QMainWindow):
         def refresh_jury_status(mode_name=None):
             mode = mode_name or execution_mode_combo.currentText()
             active_roles = active_roles_for_mode(mode)
+            preset = EXECUTION_MODE_PRESETS.get(normalize_execution_mode(mode), {})
+            adaptive = preset.get("adaptive_math_jury", cfg.get("adaptive_math_jury", {}))
+            primary_roles = list(adaptive.get("primary_roles", [])) if adaptive.get("enabled", False) else []
+            adjudicator_role = str(adaptive.get("adjudicator_role", ""))
             total_roles = len(jury_defaults)
-            jury_status_label.setText(
+            status_text = (
                 f"{len(active_roles)} active jury roles for {mode}; "
                 f"{total_roles} role models configured."
             )
+            if len(primary_roles) >= 2 and adjudicator_role:
+                status_text += (
+                    f" Flow: {jury_combos[primary_roles[0]].currentText()} evaluates; "
+                    f"{jury_combos[primary_roles[1]].currentText()} verifies; "
+                    f"{jury_combos[adjudicator_role].currentText()} adjudicates when needed."
+                )
+            jury_status_label.setText(status_text)
             for role, label in jury_role_labels.items():
                 active = role in active_roles
+                assignment = ""
+                if role in primary_roles:
+                    assignment = "primary evaluator" if role == primary_roles[0] else "independent verifier"
+                elif role == adjudicator_role:
+                    assignment = "conditional adjudicator"
                 label.setText(
                     f"{role.replace('_', ' ').title()} "
-                    f"({'active' if active else 'inactive'}):"
+                    f"({assignment or ('active' if active else 'inactive')}):"
                 )
                 label.setStyleSheet("" if active else "color: #777;")
+
+        for combo in jury_combos.values():
+            combo.currentTextChanged.connect(lambda _text: refresh_jury_status())
 
         # Heartbeat monitor settings
         heartbeat_timeout_spin = QSpinBox(dialog)
@@ -1157,6 +1190,22 @@ class FormManager(QMainWindow):
         execution_mode_combo.currentTextChanged.connect(refresh_jury_status)
         refresh_jury_status()
 
+        ignore_cache_checkbox = QCheckBox("Always grade from fresh data (ignore previous-run cache)", dialog)
+        ignore_cache_checkbox.setChecked(bool(cfg.get("ignore_grading_cache", True)))
+        ignore_cache_checkbox.setToolTip(
+            "Before every grading run, remove cached results, rubrics, embeddings, context, "
+            "validation data, and Recent Only history. Caching is still allowed within that run."
+        )
+        form.addRow("Cache Reuse:", ignore_cache_checkbox)
+
+        force_ai_checkbox = QCheckBox("Send every answer through the full AI jury", dialog)
+        force_ai_checkbox.setChecked(bool(cfg.get("force_ai_jury_for_all_answers", True)))
+        force_ai_checkbox.setToolTip(
+            "Llama evaluates and Gemma verifies every answer. GPT-OSS adjudicates disagreements, "
+            "ambiguity, or low confidence. Deterministic checks become evidence only."
+        )
+        form.addRow("AI Evaluation:", force_ai_checkbox)
+
         # Heartbeat settings section
         heartbeat_section = QWidget(dialog)
         heartbeat_layout = QHBoxLayout(heartbeat_section)
@@ -1190,6 +1239,7 @@ class FormManager(QMainWindow):
             if answer != QMessageBox.Yes:
                 return
             try:
+                self.clear_all_forms(confirm=False)
                 result = clear_grading_cache(reset_history=True)
                 megabytes = result["removed_bytes"] / (1024 * 1024)
                 QMessageBox.information(
@@ -1254,6 +1304,8 @@ class FormManager(QMainWindow):
             })
             config_data["accuracy_policy"] = accuracy_policy
             config_data["answer_key_auto_add_proven_equivalents"] = key_auto_add_checkbox.isChecked()
+            config_data["ignore_grading_cache"] = ignore_cache_checkbox.isChecked()
+            config_data["force_ai_jury_for_all_answers"] = force_ai_checkbox.isChecked()
             config_data["patient_ai_mode"] = patient_ai_checkbox.isChecked()
             config_data["enable_jury_circuit_breaker"] = not patient_ai_checkbox.isChecked()
             config_data["decision_audit_path"] = audit_path_edit.text().strip() or "logs/grading_decisions.jsonl"
@@ -1292,6 +1344,8 @@ class FormManager(QMainWindow):
             if isinstance(config_data.get("adaptive_math_jury"), dict):
                 config_data["adaptive_math_jury"]["minimum_primary_confidence"] = float(minimum_judge_confidence_spin.value())
             config_data["answer_key_auto_add_proven_equivalents"] = key_auto_add_checkbox.isChecked()
+            config_data["ignore_grading_cache"] = ignore_cache_checkbox.isChecked()
+            config_data["force_ai_jury_for_all_answers"] = force_ai_checkbox.isChecked()
             config_data["patient_ai_mode"] = patient_ai_checkbox.isChecked()
             config_data["enable_jury_circuit_breaker"] = not patient_ai_checkbox.isChecked()
             # Prevent stale mode-only knobs from previous selection.

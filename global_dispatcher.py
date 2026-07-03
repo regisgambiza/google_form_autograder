@@ -338,7 +338,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                 structure = item["structure"] or []
                 form_data = item["form_data"] or {"items": []}
                 all_responses = item["responses"] or []
-                forms_results[i] = {"meta": item, "question_answers": {}, "question_reviews": {}, "counts": {}}
+                forms_results[i] = {"meta": item, "question_answers": {}, "question_reviews": {}, "question_rejected": {}, "counts": {}}
 
                 # Build per-question answer buckets once to avoid O(questions * responses) scans.
                 answers_by_qid: Dict[str, List[str]] = {}
@@ -474,6 +474,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
 
     def det_worker():
         log("INFO", "[Worker: Deterministic] START det_worker")
+        force_ai_for_all = bool(cfg.get("force_ai_jury_for_all_answers", False))
         while not stop.is_set():
             try:
                 t = det_q.get(timeout=1)
@@ -484,6 +485,9 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                 log("INFO", "[Worker: Deterministic] DONE det_worker")
                 return
             try:
+                if force_ai_for_all:
+                    enqueue_ai_task(t)
+                    continue
                 det = run_deterministic_checks(
                     t.answer, t.expected, float(cfg.get("numeric_tolerance", 0.01))
                 )
@@ -590,6 +594,11 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                     "answer": r.answer, "confidence": r.confidence, "stage": r.stage_reached,
                     "evidence": r.evidence,
                 })
+            if r.decision == "NO":
+                forms_results[fi].setdefault("question_rejected", {}).setdefault(qid, []).append({
+                    "answer": r.answer, "confidence": r.confidence, "stage": r.stage_reached,
+                    "evidence": r.evidence,
+                })
             question_done = len(forms_results[fi]["question_answers"].get(qid, []))
             question_total = int(forms_results[fi].get("counts", {}).get(qid, 0))
             apply_key = (fi, qid)
@@ -600,7 +609,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                 progress["completed"] += 1
                 if r.decision == "YES":
                     progress["accepted"] += 1
-                if r.decision == "REVIEW" or accepted_variant:
+                if r.decision in {"REVIEW", "NO"} or accepted_variant:
                     review_question_ids.add(qid)
                 completed_now = int(progress["completed"])
                 expected_now = int(progress["expected_tasks"])
@@ -632,23 +641,35 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                 meta = data["meta"]
                 form_id = meta.get("form_id", "")
                 question = next(q for q in meta.get("structure", []) if q.get("questionId") == qid)
-                accepted = [a for a in data["question_answers"].get(qid, []) if a]
                 reviews = data.get("question_reviews", {}).get(qid, [])
+                rejected = data.get("question_rejected", {}).get(qid, [])
+                approval_answers = list(dict.fromkeys(x["answer"] for x in reviews))
+                rejected_answers = list(dict.fromkeys(x["answer"] for x in rejected))
                 trusted_expected = question.get("trusted_expected", get_effective_expected(question, [])[:1])
-                if reviews:
+                expected_keys = {identity_key(value) for value in trusted_expected}
+                accepted = list(dict.fromkeys(
+                    answer for answer in data["question_answers"].get(qid, [])
+                    if answer and identity_key(answer) not in expected_keys
+                ))
+                categorized_candidates = list(dict.fromkeys(accepted + approval_answers))
+                if accepted or approval_answers or rejected_answers:
                     enqueue_review({
                         "form_id": form_id,
                         "item_id": question["itemId"],
                         "question_id": qid,
                         "canonical": trusted_expected[0] if trusted_expected else "",
-                        "candidates": list(dict.fromkeys(x["answer"] for x in reviews)),
+                        "candidates": list(dict.fromkeys(categorized_candidates + rejected_answers)),
+                        "accepted": list(dict.fromkeys(accepted)),
+                        "needs_approval": approval_answers,
+                        "rejected": rejected_answers,
                         "confidence": max((float(x["confidence"]) for x in reviews), default=0.0),
                         "route": "grading_review",
                         "evidence": reviews,
                     })
-                if not should_block_answer_updates(question) and accepted and question["type"] in {"SHORT_ANSWER", "LONG_ANSWER"}:
+                if not should_block_answer_updates(question) and categorized_candidates and question["type"] in {"SHORT_ANSWER", "LONG_ANSWER"}:
                     update_correct_answers(
-                        service, form_id, question["itemId"], accepted, question["index"], trusted_expected
+                        service, form_id, question["itemId"], categorized_candidates, question["index"], trusted_expected,
+                        enqueue_added_review=False,
                     )
                 with metrics_lock:
                     counters["apply"] += 1

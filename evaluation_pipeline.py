@@ -177,6 +177,7 @@ def evaluate_answer(answer: str, expected: Union[str, List[str]], question: str)
     start = time.perf_counter()
     log("DEBUG", f"START evaluate_answer (answer_len={len(answer)}, question_hash={_qhash(question, expected)[:8]})")
     max_latency_ms = float(cfg.get("max_latency_per_answer_seconds", 30.0)) * 1000.0
+    force_ai_for_all = bool(cfg.get("force_ai_jury_for_all_answers", False))
     qh = _qhash(question, expected)
     ck = _cache_key(answer, qh)
 
@@ -190,7 +191,7 @@ def evaluate_answer(answer: str, expected: Union[str, List[str]], question: str)
     _write_heartbeat_if_needed(hang_stage="deterministic_checks")
 
     det = run_deterministic_checks(answer, expected, float(cfg.get("numeric_tolerance", 0.01)))
-    if det.accepted and det.confidence >= 0.95:
+    if not force_ai_for_all and det.accepted and det.confidence >= 0.95:
         lat = (time.perf_counter() - start) * 1000.0
         evidence = {"question": question, "expected": expected, "answer": answer, "proof": det.method, "key_eligible": True}
         res = EvaluationResult(answer, "YES", det.confidence, det.confidence, det.confidence, det.confidence, False, "", [], [], 1.0, det.confidence, True, lat, "deterministic", evidence)
@@ -201,7 +202,7 @@ def evaluate_answer(answer: str, expected: Union[str, List[str]], question: str)
         return res
 
     domain = validate_answer_domain(answer, expected if isinstance(expected, list) else [expected], question)
-    if domain.status in {"PROVEN", "CONTRADICTED", "REVIEW"}:
+    if not force_ai_for_all and domain.status in {"PROVEN", "CONTRADICTED", "REVIEW"}:
         lat = (time.perf_counter() - start) * 1000.0
         decision = {"PROVEN": "YES", "CONTRADICTED": "NO", "REVIEW": "REVIEW"}[domain.status]
         evidence = {
@@ -237,7 +238,7 @@ def evaluate_answer(answer: str, expected: Union[str, List[str]], question: str)
     misconception = detect_misconception(answer, rubric)
 
     # Embeddings and concept coverage route work; they never prove correctness.
-    if emb_score < float(emb_th.get("auto_reject", 0.35)):
+    if not force_ai_for_all and emb_score < float(emb_th.get("auto_reject", 0.35)):
         lat = (time.perf_counter() - start) * 1000.0
         res = EvaluationResult(answer, "NO", emb_score, float(concept["semantic_score"]), float(concept["concept_score"]), float(concept["semantic_score"]), False, "", list(concept["missing_concepts"]), list(concept["accepted_concepts"]), 1.0, emb_score, False, lat, "embedding")
         with RESULT_CACHE_LOCK:

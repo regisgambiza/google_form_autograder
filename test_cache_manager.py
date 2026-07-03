@@ -1,4 +1,4 @@
-from cache_manager import CACHE_GROUPS, clear_grading_cache
+from cache_manager import CACHE_GROUPS, clear_grading_cache, prepare_fresh_grading_run
 
 
 def test_clear_grading_cache_removes_only_regenerated_data(tmp_path):
@@ -25,3 +25,27 @@ def test_clear_cache_can_preserve_recent_grading_history(tmp_path):
     history.write_text("{}", encoding="utf-8")
     clear_grading_cache(tmp_path, reset_history=False)
     assert history.exists()
+
+
+def test_fresh_run_mode_automatically_discards_previous_run_cache(tmp_path):
+    cached = tmp_path / "cache" / "results" / "old.json"
+    cached.parent.mkdir(parents=True)
+    cached.write_text("{}", encoding="utf-8")
+    history = tmp_path / ".grading_timestamps.json"
+    history.write_text("{}", encoding="utf-8")
+
+    result = prepare_fresh_grading_run({"ignore_grading_cache": True}, tmp_path)
+
+    assert result["removed_files"] == 1
+    assert not cached.exists()
+    assert not history.exists()
+
+
+def test_cache_is_preserved_when_fresh_run_mode_is_disabled(tmp_path):
+    cached = tmp_path / "cache" / "results" / "old.json"
+    cached.parent.mkdir(parents=True)
+    cached.write_text("{}", encoding="utf-8")
+
+    prepare_fresh_grading_run({"ignore_grading_cache": False}, tmp_path)
+
+    assert cached.exists()
