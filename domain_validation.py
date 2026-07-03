@@ -257,11 +257,8 @@ def validate_answer_domain(answer: str, expected_values: Sequence[str], question
         )
     if cnum is not None and enum is not None:
         cu, eu = _unit(candidate), _unit(expected)
-        if cu != eu and (cu or eu):
+        if cu and eu and cu != eu:
             return DomainValidation("CONTRADICTED", "numeric", 1.0, "unit mismatch", False, {**base, "candidate_unit": cu, "canonical_unit": eu})
-        places = _required_decimal_places(question)
-        if places is not None and _decimal_places(candidate) != places:
-            return DomainValidation("CONTRADICTED", "rounding", 0.99, f"answer must be given to {places} decimal place(s)", False, {**base, "required_decimal_places": places})
         if cnum == enum:
             return DomainValidation("PROVEN", "numeric", 1.0, "exact numeric equivalence", True, base)
         return DomainValidation("CONTRADICTED", "numeric", 1.0, "numeric value contradicts canonical", False, base)
@@ -306,9 +303,6 @@ def validate_answer_domain(answer: str, expected_values: Sequence[str], question
             return DomainValidation("CONTRADICTED", "mathematics", 0.99, "mathematical contradiction or answer-type mismatch", False, base)
         if equivalent is None:
             return DomainValidation("REVIEW", "mathematics", 0.0, "mathematical equivalence could not be proven", False, base)
-        q = question.casefold()
-        if "factor" in q and not ("(" in candidate and ")" in candidate):
-            return DomainValidation("CONTRADICTED", "mathematics", 0.98, "equivalent but not in requested factorised form", False, base)
         return DomainValidation("PROVEN", "mathematics", 0.99, "symbolic equivalence proven", True, base)
 
     if _LIST_HINT.search(question):

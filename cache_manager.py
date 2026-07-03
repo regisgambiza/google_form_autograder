@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Dict
 
 
-CACHE_GROUPS = ("embeddings", "expected_validation", "form_context", "rubrics", "vision", "results")
+CACHE_GROUPS = ("embeddings", "form_context", "vision", "results")
 
 
 def clear_grading_cache(root: Path = Path("."), reset_history: bool = True) -> Dict[str, int]:
@@ -43,9 +43,8 @@ def clear_grading_cache(root: Path = Path("."), reset_history: bool = True) -> D
     # Clear process-local caches when this action is invoked in a process that
     # has imported the evaluator. New grader subprocesses start empty anyway.
     try:
-        from evaluation_pipeline import QUESTION_RUBRIC_CACHE, RESULT_CACHE
+        from evaluation_pipeline import RESULT_CACHE
         RESULT_CACHE.clear()
-        QUESTION_RUBRIC_CACHE.clear()
     except Exception:
         pass
 

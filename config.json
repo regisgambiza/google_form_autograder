@@ -6,8 +6,8 @@
     },
     "jury_models": {
         "semantic_judge": "mistral-nemo:12b",
-        "concept_judge": "phi4:14b",
         "factual_judge": "gemma3:12b",
+        "concept_judge": "phi4:14b",
         "strict_judge": "gpt-oss:latest",
         "misconception_judge": "llama3.1:8b",
         "language_filter": "gpt-oss:latest"
@@ -38,7 +38,7 @@
     "validate_expected_answers": true,
     "expected_answer_validation_optional": true,
     "expected_answer_validator_model": "llama3.1:8b",
-    "expected_answer_validator_fallback_model": "gemma3:12b",
+    "expected_answer_validator_fallback_model": "gemma3:4b",
     "expected_answer_validator_timeout_seconds": 180,
     "expected_answer_validator_fallback_timeout_seconds": 300,
     "expected_answer_validator_connect_timeout_seconds": 10,
@@ -57,7 +57,7 @@
     "accuracy_policy": {
         "enabled": true,
         "minimum_judge_confidence": 0.9,
-        "required_accept_roles": ["semantic_judge", "factual_judge", "concept_judge", "strict_judge"],
+        "required_accept_roles": ["semantic_judge", "factual_judge", "concept_judge"],
         "require_distinct_models": true,
         "embeddings_can_accept": false,
         "ambiguous_outcome": "REVIEW"

@@ -58,7 +58,7 @@ EXECUTION_MODE_PRESETS = {
         "accuracy_policy": {
             "enabled": True,
             "minimum_judge_confidence": 0.90,
-            "required_accept_roles": ["semantic_judge", "factual_judge", "concept_judge", "strict_judge"],
+            "required_accept_roles": ["semantic_judge", "factual_judge", "concept_judge"],
             "require_distinct_models": True,
             "embeddings_can_accept": False,
             "ambiguous_outcome": "REVIEW",
@@ -909,11 +909,8 @@ class FormManager(QMainWindow):
         leniency_combo.addItems(["extreme", "lenient", "balanced", "strict"])
 
         model_combo = QComboBox(dialog)
-        rubric_model_combo = QComboBox(dialog)
         embedding_model_combo = QComboBox(dialog)
         reasoning_model_combo = QComboBox(dialog)
-        expected_validator_model_combo = QComboBox(dialog)
-        expected_validator_fallback_combo = QComboBox(dialog)
         minimum_judge_confidence_spin = QDoubleSpinBox(dialog)
         minimum_judge_confidence_spin.setRange(0.50, 1.00)
         minimum_judge_confidence_spin.setSingleStep(0.01)
@@ -967,18 +964,12 @@ class FormManager(QMainWindow):
 
         # Prefer configured spelling, then append locally installed Ollama models.
         models = cfg.get("models", {}).get("judge", [])
-        rubric_model = cfg.get("rubric_model")
         embedding_model = cfg.get("embedding_model")
         reasoning_model = cfg.get("reasoning_model")
-        expected_validator_model = cfg.get("expected_answer_validator_model")
-        expected_validator_fallback = cfg.get("expected_answer_validator_fallback_model")
         if models:
             add_model_choice(available_models, seen_model_keys, models[0])
-        add_model_choice(available_models, seen_model_keys, rubric_model)
         add_model_choice(available_models, seen_model_keys, embedding_model)
         add_model_choice(available_models, seen_model_keys, reasoning_model)
-        add_model_choice(available_models, seen_model_keys, expected_validator_model)
-        add_model_choice(available_models, seen_model_keys, expected_validator_fallback)
 
         cfg_jury = cfg.get("jury_models", {}) if cfg else {}
         for configured_model in cfg_jury.values():
@@ -1004,11 +995,8 @@ class FormManager(QMainWindow):
 
         if available_models:
             model_combo.addItems(available_models)
-            rubric_model_combo.addItems(available_models)
             embedding_model_combo.addItems(available_models)
             reasoning_model_combo.addItems(available_models)
-            expected_validator_model_combo.addItems(available_models)
-            expected_validator_fallback_combo.addItems(available_models)
 
         # Jury model selectors (one combobox per jury role)
         jury_combos = {}
@@ -1054,7 +1042,6 @@ class FormManager(QMainWindow):
             primary_roles = list(adaptive.get("primary_roles", [])) if adaptive.get("enabled", False) else []
             adjudicator_role = str(adaptive.get("adjudicator_role", ""))
             visible_jury_roles = {"semantic_judge", "factual_judge", "concept_judge", "strict_judge"}
-            total_roles = len(visible_jury_roles)
             status_text = (
                 f"{len(active_roles & visible_jury_roles)} active jury roles."
             )
@@ -1105,23 +1092,14 @@ class FormManager(QMainWindow):
         judge_num_predict_spin = QSpinBox(dialog)
         judge_num_predict_spin.setRange(64, 4096)
         judge_num_predict_spin.setValue(cfg.get("ollama_options", {}).get("judge_num_predict", 256))
-        rubric_num_ctx_spin = QSpinBox(dialog)
-        rubric_num_ctx_spin.setRange(512, 4096)
-        rubric_num_ctx_spin.setValue(cfg.get("ollama_options", {}).get("rubric_num_ctx", 512))
-        rubric_num_predict_spin = QSpinBox(dialog)
-        rubric_num_predict_spin.setRange(64, 4096)
-        rubric_num_predict_spin.setValue(cfg.get("ollama_options", {}).get("rubric_num_predict", 512))
 
         ev = cfg.get("evaluator", "ai_evaluator")
         evaluator_combo.setCurrentIndex(0 if ev == "ai_evaluator" else (2 if ev == "ai_evaluator_semantic" else 1))
         leniency_combo.setCurrentText(cfg.get("leniency", "lenient"))
         if models:
             model_combo.setCurrentText(models[0])
-        rubric_model_combo.setCurrentText(cfg.get("rubric_model", cfg.get("models", {}).get("judge", [""])[0] if models else ""))
         embedding_model_combo.setCurrentText(cfg.get("embedding_model", DEFAULT_CONFIG.get("embedding_model", "")))
         reasoning_model_combo.setCurrentText(cfg.get("reasoning_model", DEFAULT_CONFIG.get("reasoning_model", "")))
-        expected_validator_model_combo.setCurrentText(cfg.get("expected_answer_validator_model", "llama3.1:8b"))
-        expected_validator_fallback_combo.setCurrentText(cfg.get("expected_answer_validator_fallback_model", "gemma3:12b"))
         accuracy_cfg = cfg.get("accuracy_policy", {})
         minimum_judge_confidence_spin.setValue(float(accuracy_cfg.get("minimum_judge_confidence", 0.90)))
         distinct_models_checkbox.setChecked(bool(accuracy_cfg.get("require_distinct_models", True)))
@@ -1145,17 +1123,14 @@ class FormManager(QMainWindow):
             normalize_execution_mode(cfg.get("execution_mode", DEFAULT_EXECUTION_MODE))
         )
 
-        form.addRow("Teacher-Key Validator:", expected_validator_model_combo)
-        form.addRow("Validator Fallback:", expected_validator_fallback_combo)
+        form.addRow("Model Choices:", model_status_label)
+        # Keep every active model assignment together; disabled/internal roles stay hidden.
+        for role in ("semantic_judge", "factual_judge", "concept_judge", "strict_judge"):
+            form.addRow(jury_role_labels[role], jury_combos[role])
+        form.addRow("Jury Roles:", jury_status_label)
         form.addRow("Minimum Judge Confidence:", minimum_judge_confidence_spin)
         form.addRow("Answer-Key Automation:", key_auto_add_checkbox)
         form.addRow("Slow Model Handling:", patient_ai_checkbox)
-        form.addRow("Model Choices:", model_status_label)
-        # Only the three roles used by the active grading workflow belong in the everyday UI.
-        for role, combo in jury_combos.items():
-            if role in {"semantic_judge", "factual_judge", "concept_judge", "strict_judge"}:
-                form.addRow(jury_role_labels[role], combo)
-        form.addRow("Jury Roles:", jury_status_label)
         form.addRow("", report_checkbox)
         form.addRow("Grade Mode:", grading_mode_combo)
         execution_mode_combo.currentTextChanged.connect(refresh_jury_status)
@@ -1174,7 +1149,7 @@ class FormManager(QMainWindow):
         force_ai_checkbox.setChecked(bool(cfg.get("force_ai_jury_for_all_answers", True)))
         force_ai_checkbox.setToolTip(
             "Mistral NeMo evaluates meaning, Gemma verifies facts/mathematics, and Phi-4 "
-            "challenges rubric completeness. GPT-OSS adjudicates disagreements, ambiguity, or low confidence."
+            "challenges completeness. GPT-OSS adjudicates disagreements, ambiguity, invalid output, or low confidence."
         )
         form.addRow("AI Evaluation:", force_ai_checkbox)
 
@@ -1244,21 +1219,24 @@ class FormManager(QMainWindow):
 
             if model_combo.currentText():
                 config_data["models"] = {"judge": [model_combo.currentText()]}
-            if rubric_model_combo.currentText():
-                config_data["rubric_model"] = rubric_model_combo.currentText()
             if embedding_model_combo.currentText():
                 config_data["embedding_model"] = embedding_model_combo.currentText()
             if reasoning_model_combo.currentText():
                 config_data["reasoning_model"] = reasoning_model_combo.currentText()
-            if expected_validator_model_combo.currentText():
-                config_data["expected_answer_validator_model"] = expected_validator_model_combo.currentText()
-            if expected_validator_fallback_combo.currentText():
-                config_data["expected_answer_validator_fallback_model"] = expected_validator_fallback_combo.currentText()
+            for obsolete_key in (
+                "rubric_model", "validate_expected_answers", "expected_answer_validation_optional",
+                "expected_answer_validator_model", "expected_answer_validator_fallback_model",
+                "expected_answer_validator_timeout_seconds", "expected_answer_validator_fallback_timeout_seconds",
+                "expected_answer_validator_connect_timeout_seconds", "expected_answer_validator_min_confidence",
+                "use_validated_expected_for_grading", "auto_replace_invalid_expected",
+                "invalid_expected_blocks_updates", "rubric_timeout_seconds",
+            ):
+                config_data.pop(obsolete_key, None)
             accuracy_policy = dict(config_data.get("accuracy_policy", {}))
             accuracy_policy.update({
                 "enabled": True,
                 "minimum_judge_confidence": float(minimum_judge_confidence_spin.value()),
-                "required_accept_roles": ["semantic_judge", "factual_judge", "concept_judge", "strict_judge"],
+                "required_accept_roles": ["semantic_judge", "factual_judge", "concept_judge"],
                 "require_distinct_models": distinct_models_checkbox.isChecked(),
                 "embeddings_can_accept": False,
                 "ambiguous_outcome": "REVIEW",
@@ -1313,8 +1291,8 @@ class FormManager(QMainWindow):
             if "active_judge_roles" not in preset:
                 config_data["active_judge_roles"] = [
                     "semantic_judge",
-                    "concept_judge",
                     "factual_judge",
+                    "concept_judge",
                     "strict_judge",
                     "misconception_judge",
                     "language_filter",
@@ -1331,8 +1309,8 @@ class FormManager(QMainWindow):
             ollama_options = config_data.get("ollama_options", {})
             ollama_options["judge_num_ctx"] = judge_num_ctx_spin.value()
             ollama_options["judge_num_predict"] = judge_num_predict_spin.value()
-            ollama_options["rubric_num_ctx"] = rubric_num_ctx_spin.value()
-            ollama_options["rubric_num_predict"] = rubric_num_predict_spin.value()
+            ollama_options.pop("rubric_num_ctx", None)
+            ollama_options.pop("rubric_num_predict", None)
             config_data["ollama_options"] = ollama_options
 
             # Save the updated grading mode to self

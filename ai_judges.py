@@ -55,7 +55,7 @@ def _write_heartbeat_if_needed():
 
 JUDGE_PROMPTS = {
     "semantic_judge": "You are a semantic meaning evaluator. Your ONLY job is to determine whether the student's answer conveys the same MEANING as the expected answer, regardless of wording, grammar, or spelling. Ignore surface form completely. Focus only on whether the core idea is the same.\n\nCRITICAL: Your response MUST be ONLY valid JSON. No explanations, no markdown, no text before or after.",
-    "concept_judge": "You are an adversarial rubric-completeness judge. Independently check every required result, concept, unit, rounding rule, working step, and explanation. Try to disprove acceptance by finding omissions, contradictions, or lucky guesses. Do not see or infer other judges' verdicts.\n\nCRITICAL: Your response MUST be ONLY valid JSON. No explanations, no markdown, no text before or after.",
+    "concept_judge": "You are an independent answer-equivalence challenger. The teacher answer is authoritative. Look only for a substantive difference in value or meaning; do not invent a replacement answer or extra requirements. Ignore missing units, working, explanation, rounding presentation, factorisation form, spelling, grammar, and harmless formatting when the core answer matches.\n\nCRITICAL: Your response MUST be ONLY valid JSON. No explanations, no markdown, no text before or after.",
     "factual_judge": "You are a factual accuracy checker for science and mathematics. Determine whether the student's answer is scientifically or mathematically correct, ignoring grammar and spelling. Flag anything factually wrong even if it sounds similar to the correct answer.\n\nCRITICAL: Your response MUST be ONLY valid JSON. No explanations, no markdown, no text before or after.",
     "strict_judge": "You are a strict but fair human examiner. Grade as you would in a real classroom. Do not accept vague or incomplete answers. Require the student to have demonstrated genuine understanding, not just a lucky guess.\n\nCRITICAL: Your response MUST be ONLY valid JSON. No explanations, no markdown, no text before or after.",
     "misconception_judge": "You are a misconception analyst. Your job is to detect whether the student's answer reveals a fundamental conceptual misunderstanding, even if parts of the answer sound correct on the surface. A misconception should lower the score significantly.\n\nCRITICAL: Your response MUST be ONLY valid JSON. No explanations, no markdown, no text before or after.",
@@ -283,7 +283,7 @@ def _valid(d: Dict[str, object]) -> bool:
     )
 
 
-def _make_judge_prompt(question: str, expected: str, answer: str, rubric: Dict[str, object]) -> str:
+def _make_judge_prompt(question: str, expected: str, answer: str, comparison_evidence: Dict[str, object]) -> str:
     """Create prompt for judge."""
     def compact(value: object, limit: int) -> str:
         text = str(value or "")
@@ -293,15 +293,18 @@ def _make_judge_prompt(question: str, expected: str, answer: str, rubric: Dict[s
         return text[:head] + "\n...[irrelevant context omitted]...\n" + text[-(limit - head):]
 
     compact_question = compact(question, 8000)
-    compact_rubric = compact(json.dumps(rubric, ensure_ascii=True), 4000)
     return (
-        f"Question: {compact_question}\n"
-        f"Expected: {expected}\n"
-        f"Answer: {answer}\n\n"
-        f"Rubric for reference:\n{compact_rubric}\n\n"
-        "Formatting rule: if deterministic_math_evidence proves formatting_equivalence, treat decimal separators, "
-        "unit spacing/parentheses, Unicode symbols, case, whitespace, and surrounding punctuation as harmless. "
-        "Do not reject an answer solely for a proven formatting difference.\n\n"
+        f"Whole-paper context (interpretation only): {compact_question}\n"
+        f"AUTHORITATIVE TEACHER ANSWER: {expected}\n"
+        f"STUDENT ANSWER: {answer}\n\n"
+        "The first teacher answer is the sole source of truth. Never recalculate it, correct it, replace it, "
+        "or invent another expected answer. Decide only whether the student's core value or meaning is close "
+        "enough to the teacher answer in this question's context. Accept equivalent algebra, decimal commas, "
+        "equivalent fractions/percentages, capitalization, spelling, grammar, punctuation, Unicode symbols, "
+        "and harmless whitespace. Accept a correct core answer when units, working, explanation, requested "
+        "rounding presentation, or requested algebraic form are missing. Accept harmless extra compatible units. "
+        "Reject units only when they are explicitly incompatible and materially change the answer. "
+        "Do not borrow requirements from nearby questions in the whole-paper context.\n\n"
         "You MUST make a binary decision. Choose YES if the answer is correct, otherwise choose NO. "
         "Never abstain, defer, or return an uncertain verdict. Uncertainty must be expressed only in "
         "the numeric confidence field while decision remains YES or NO. "

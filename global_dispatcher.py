@@ -19,7 +19,6 @@ from form_context_builder import (
     build_form_context,
     get_effective_expected,
     get_question_context,
-    should_block_answer_updates,
 )
 from form_utils import get_form_structure
 from logger import gui_event, log, runtime_snapshot, stage_banner, update_runtime_state
@@ -767,7 +766,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                         "route": "grading_review",
                         "evidence": reviews,
                     })
-                if not should_block_answer_updates(question) and categorized_candidates and question["type"] in {"SHORT_ANSWER", "LONG_ANSWER"}:
+                if categorized_candidates and question["type"] in {"SHORT_ANSWER", "LONG_ANSWER"}:
                     update_correct_answers(
                         service, form_id, question["itemId"], categorized_candidates, question["index"], trusted_expected,
                         enqueue_added_review=False,

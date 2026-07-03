@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Union
 
 from deterministic_checks import run_deterministic_checks
-from evaluation_pipeline import EvaluationResult, evaluate_answer, get_or_generate_rubric
+from evaluation_pipeline import EvaluationResult, evaluate_answer
 from evaluator_config import load_config
 from logger import log
 
@@ -47,14 +47,6 @@ def evaluate_answers_worker_pipeline(
     lock = threading.Lock()
     stop_event = threading.Event()
     pipeline_id = f"{int(time.time() * 1000)}-{threading.get_ident()}"
-
-    # Warm rubric cache once for this question before workers begin.
-    try:
-        log("INFO", f"[Worker Pipeline {pipeline_id}] Rubric warm-up started.")
-        _ = get_or_generate_rubric(question, expected)
-        log("INFO", f"[Worker Pipeline {pipeline_id}] Rubric warm-up complete.")
-    except Exception as ex:
-        log("WARNING", f"[Worker Pipeline {pipeline_id}] Rubric warm-up failed, continuing with lazy generation: {ex}")
 
     def producer() -> None:
         if stop_event.is_set():

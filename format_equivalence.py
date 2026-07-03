@@ -141,14 +141,12 @@ def compare_formatting(candidate: object, expected: object, question: str = "") 
     if cq and eq:
         cvalue, cunit, cplaces, _ = cq
         evalue, eunit, eplaces, eunit_parenthetical = eq
-        units_compatible = cunit == eunit or (
-            not cunit and bool(eunit) and (
-                eunit_parenthetical
-                or (_question_supplies_unit(question, eunit) and not _requires_written_unit(question))
-            )
-        )
-        required_places = _required_places(question)
-        precision_ok = required_places is None or cplaces == required_places
+        # Units and written precision are presentation details. Missing units,
+        # harmless extra units, and equivalent numeric formatting are accepted;
+        # only two explicit incompatible units remain a substantive mismatch.
+        units_compatible = not (cunit and eunit and cunit != eunit)
+        required_places = None
+        precision_ok = True
         equivalent = cvalue == evalue and units_compatible and precision_ok
         return FormatEquivalence(
             equivalent,

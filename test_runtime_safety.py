@@ -8,10 +8,11 @@ def test_current_jury_models_use_reliability_first_independent_roles():
     cfg = json.loads(Path("config.json").read_text(encoding="utf-8"))
     assert cfg["jury_models"]["semantic_judge"] == "mistral-nemo:12b"
     assert cfg["jury_models"]["factual_judge"] == "gemma3:12b"
-    assert cfg["jury_models"]["strict_judge"] == "gpt-oss:latest"
     assert cfg["jury_models"]["concept_judge"] == "phi4:14b"
+    assert cfg["jury_models"]["strict_judge"] == "gpt-oss:latest"
     assert len(set(cfg["jury_models"][role] for role in ("semantic_judge", "factual_judge", "concept_judge", "strict_judge"))) == 4
     assert cfg["rubric_model"] == "mistral-nemo:12b"
+    assert cfg["reasoning_model"] == "phi4:14b"
 
 
 def test_patient_ai_mode_avoids_short_timeout_fallbacks():
@@ -30,12 +31,13 @@ def test_every_answer_is_forced_through_ai_jury():
     assert cfg["force_ai_jury_for_all_answers"] is True
 
 
-def test_jury_uses_three_blind_roles_and_gpt_adjudicator():
+def test_jury_uses_three_blind_roles_and_conditional_gpt_adjudicator():
     cfg = json.loads(Path("config.json").read_text(encoding="utf-8"))
     adaptive = cfg["adaptive_math_jury"]
     assert adaptive["enabled"] is True
     assert adaptive["primary_roles"] == ["semantic_judge", "factual_judge", "concept_judge"]
     assert adaptive["adjudicator_role"] == "strict_judge"
+    assert cfg["active_judge_roles"] == ["semantic_judge", "factual_judge", "concept_judge", "strict_judge"]
     assert cfg["jury_models"][adaptive["primary_roles"][0]] == "mistral-nemo:12b"
     assert cfg["jury_models"][adaptive["primary_roles"][1]] == "gemma3:12b"
     assert cfg["jury_models"][adaptive["primary_roles"][2]] == "phi4:14b"
@@ -45,7 +47,7 @@ def test_jury_uses_three_blind_roles_and_gpt_adjudicator():
 def test_teacher_key_validator_is_bounded_and_avoids_deepseek():
     cfg = json.loads(Path("config.json").read_text(encoding="utf-8"))
     assert cfg["expected_answer_validator_model"] == "llama3.1:8b"
-    assert cfg["expected_answer_validator_fallback_model"] == "gemma3:12b"
+    assert cfg["expected_answer_validator_fallback_model"] == "gemma3:4b"
     assert cfg["expected_answer_validator_timeout_seconds"] <= 180
     assert cfg["expected_answer_validator_fallback_timeout_seconds"] <= 300
 

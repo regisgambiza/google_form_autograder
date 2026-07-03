@@ -9,15 +9,11 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional, Union
 
 from ai_judges import run_judges
-from confidence_router import route_decision
 from consensus_engine import combine_scores
 from deterministic_checks import run_deterministic_checks
 from evaluator_config import load_config
 from logger import log
-from misconception_detector import detect_misconception
 from normalization import normalize, semantic_deduplicate
-from rubric_generator import generate_rubric
-from semantic_scoring import score_concepts
 from accuracy_policy import adaptive_math_jury_decision, conservative_jury_decision
 from decision_audit import record_decision
 from domain_validation import validate_answer_domain
@@ -40,11 +36,7 @@ def _write_heartbeat_if_needed(hang_stage: str = "unknown"):
 
 # === Global caches for optimization ===
 RESULT_CACHE: Dict[str, "EvaluationResult"] = {}
-# Cache rubrics per question (one rubric reused for all students)
-QUESTION_RUBRIC_CACHE: Dict[str, Dict] = {}
 RESULT_CACHE_LOCK = threading.Lock()
-RUBRIC_CACHE_LOCK = threading.Lock()
-RUBRIC_KEY_LOCKS: Dict[str, threading.Lock] = {}
 JURY_SEMAPHORE_LOCK = threading.Lock()
 JURY_SEMAPHORE: Optional[threading.Semaphore] = None
 JURY_CIRCUIT_LOCK = threading.Lock()
@@ -93,62 +85,6 @@ def _expected_text(expected: Union[str, List[str]]) -> str:
 
 def _qhash(question: str, expected: Union[str, List[str]]) -> str:
     return hashlib.sha256(f"{question}:{_expected_text(expected)}".encode()).hexdigest()
-
-
-def _question_cache_key(question: str, expected: Union[str, List[str]]) -> str:
-    """Cache key for question-level rubric caching."""
-    return _qhash(question, expected)
-
-
-def get_or_generate_rubric(question: str, expected: Union[str, List[str]], question_id: Optional[str] = None) -> Dict:
-    """Get rubric from cache or generate and cache it.
-
-    One rubric per question is reused for all students, dramatically reducing LLM calls.
-    """
-    qkey = _question_cache_key(question, expected)
-
-    with RUBRIC_CACHE_LOCK:
-        if qkey in QUESTION_RUBRIC_CACHE:
-            log("DEBUG", f"rubric_cache_hit=True (question_id={question_id})")
-            return QUESTION_RUBRIC_CACHE[qkey]
-
-    # Prevent duplicate concurrent rubric generation for the same question key.
-    with RUBRIC_CACHE_LOCK:
-        key_lock = RUBRIC_KEY_LOCKS.get(qkey)
-        if key_lock is None:
-            key_lock = threading.Lock()
-            RUBRIC_KEY_LOCKS[qkey] = key_lock
-
-    with key_lock:
-        with RUBRIC_CACHE_LOCK:
-            if qkey in QUESTION_RUBRIC_CACHE:
-                log("DEBUG", f"rubric_cache_hit=True (question_id={question_id})")
-                return QUESTION_RUBRIC_CACHE[qkey]
-    
-        start = time.perf_counter()
-        cfg = load_config()
-        log("INFO", f"START rubric_generate (model={cfg.get('rubric_model', 'default')}, question_id={question_id})")
-
-        # Generate new rubric
-        exp_text = _expected_text(expected)
-        rubric = generate_rubric(question, exp_text)
-
-        duration_ms = (time.perf_counter() - start) * 1000
-        log("INFO", f"END rubric_generate duration_ms={duration_ms:.0f} (question_id={question_id})")
-        log("INFO", f"rubric_cache_miss=True generated_for={question_id}")
-
-        # Add expected values to acceptable paraphrases
-        if isinstance(expected, list) and expected:
-            rubric["acceptable_paraphrases"] = list(dict.fromkeys(
-                [str(x) for x in rubric.get("acceptable_paraphrases", [])] + [str(x) for x in expected]
-            ))
-
-        # Cache for future use
-        with RUBRIC_CACHE_LOCK:
-            QUESTION_RUBRIC_CACHE[qkey] = rubric
-        log("DEBUG", f"rubric_cache_miss=True generated_for={question_id or 'unknown'}")
-    
-        return rubric
 
 
 def _cache_key(answer: str, question_hash: str) -> str:
@@ -223,30 +159,11 @@ def evaluate_answer(answer: str, expected: Union[str, List[str]], question: str)
         record_decision(asdict(res), str(cfg.get("decision_audit_path", "logs/grading_decisions.jsonl")))
         return res
 
-    # Get rubric from cache (one rubric per question reused for all students)
-    # Write heartbeat before rubric generation
-    _write_heartbeat_if_needed(hang_stage="rubric_generation")
     exp_text = _expected_text(expected)
-    rubric = get_or_generate_rubric(question, exp_text, question_id=qh)
-    jury_rubric = dict(rubric)
-    jury_rubric["deterministic_math_evidence"] = domain.to_dict()
-
-    _write_heartbeat_if_needed(hang_stage="concept_scoring")
-    concept = score_concepts(normalize(answer), rubric)
-    emb_score = float(concept["embedding_score"])
-    emb_th = cfg.get("embedding_thresholds", {})
-    
-    _write_heartbeat_if_needed(hang_stage="misconception_detection")
-    misconception = detect_misconception(answer, rubric)
-
-    # Embeddings and concept coverage route work; they never prove correctness.
-    if not force_ai_for_all and emb_score < float(emb_th.get("auto_reject", 0.35)):
-        lat = (time.perf_counter() - start) * 1000.0
-        res = EvaluationResult(answer, "NO", emb_score, float(concept["semantic_score"]), float(concept["concept_score"]), float(concept["semantic_score"]), False, "", list(concept["missing_concepts"]), list(concept["accepted_concepts"]), 1.0, emb_score, False, lat, "embedding")
-        with RESULT_CACHE_LOCK:
-            RESULT_CACHE[ck] = res
-        log("INFO", f"stage=embedding auto_reject=True score={emb_score:.3f} latency_ms={lat:.0f}")
-        return res
+    comparison_evidence = {"teacher_answer_is_authoritative": True, "deterministic_comparison": domain.to_dict()}
+    emb_score = 0.0
+    concept = {"semantic_score": 0.0, "concept_score": 0.0, "missing_concepts": [], "accepted_concepts": []}
+    misconception = {"misconception_detected": False, "misconception_description": ""}
 
     # Write heartbeat before judges (most time-consuming step)
     _write_heartbeat_if_needed(hang_stage="jury_consensus")
@@ -299,7 +216,7 @@ def evaluate_answer(answer: str, expected: Union[str, List[str]], question: str)
         err = {}
         def _runner():
             try:
-                holder["judges"] = run_judges(answer, question, exp_text, jury_rubric, retries=int(cfg.get("retry_attempts", 3)))
+                holder["judges"] = run_judges(answer, question, exp_text, comparison_evidence, retries=int(cfg.get("retry_attempts", 3)))
             except Exception as ex:
                 err["ex"] = ex
         t = threading.Thread(target=_runner, daemon=True)
@@ -370,9 +287,9 @@ def evaluate_answer(answer: str, expected: Union[str, List[str]], question: str)
                 required_roles=accuracy_cfg.get("required_accept_roles", ["semantic_judge", "factual_judge", "strict_judge"]),
                 require_distinct_models=bool(accuracy_cfg.get("require_distinct_models", True)),
             )
-        if domain.status == "PROVEN" and domain.domain == "formatting_equivalence":
-            decision, confidence, reason = "YES", 1.0, "proven_formatting_equivalence"
-            policy_evidence["formatting_override"] = domain.to_dict()
+        if domain.status == "PROVEN":
+            decision, confidence, reason = "YES", 1.0, "proven_teacher_answer_equivalence"
+            policy_evidence["teacher_answer_equivalence_override"] = domain.to_dict()
         stage = "jury" if decision in {"YES", "NO"} else "review"
         policy_evidence["policy_reason"] = reason
         factual = float(agg["factual_accuracy"])
@@ -386,7 +303,7 @@ def evaluate_answer(answer: str, expected: Union[str, List[str]], question: str)
     key_eligible = decision == "YES" and domain.domain in {
         "natural_language", "multipart_list", "formatting_equivalence"
     }
-    evidence = {"question": question, "expected": expected, "answer": answer, "embedding_similarity": emb_score, "rubric": jury_rubric, "policy": policy_evidence, "domain_validation": domain.to_dict(), "key_eligible": key_eligible}
+    evidence = {"question": question, "expected": expected, "answer": answer, "policy": policy_evidence, "domain_validation": domain.to_dict(), "teacher_answer_is_authoritative": True, "key_eligible": key_eligible}
     res = EvaluationResult(answer, decision, float(final_score), float(concept["semantic_score"]), float(concept["concept_score"]), factual, bool(misconception["misconception_detected"]), str(misconception["misconception_description"]), list(concept["missing_concepts"]), list(concept["accepted_concepts"]), agree, float(confidence), False, lat, stage, evidence)
     record_decision(asdict(res), str(cfg.get("decision_audit_path", "logs/grading_decisions.jsonl")))
     with RESULT_CACHE_LOCK:

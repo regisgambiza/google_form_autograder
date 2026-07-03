@@ -197,20 +197,6 @@ def _compose_question_context(
     return "\n".join(line for line in lines if line)
 
 
-def _effective_expected(original_expected: List[str], validation: Dict) -> List[str]:
-    cfg = load_config()
-    if not bool(cfg.get("use_validated_expected_for_grading", True)):
-        return original_expected
-    if bool(validation.get("valid", True)):
-        return original_expected
-    confidence = float(validation.get("confidence", 0.0) or 0.0)
-    min_conf = float(cfg.get("expected_answer_validator_min_confidence", 0.85))
-    suggested = [str(x) for x in validation.get("suggested_answers", []) if _clean(x)]
-    if suggested and confidence >= min_conf:
-        return suggested
-    return original_expected
-
-
 def _cache_path(form_id: str) -> str:
     return os.path.join("cache", "form_context", f"{form_id}.json")
 
@@ -286,10 +272,8 @@ def build_form_context(
             question_section[q["questionId"]] = current_key
 
     questions: Dict[str, Dict] = {}
-    if bool(load_config().get("validate_expected_answers", False)):
-        stage_banner("Validating Expected Answers", f"{len(structure)} questions", color="blue")
     for q in structure:
-        _write_heartbeat("expected_answer_validation")
+        _write_heartbeat("form_context_questions")
         qid = q.get("questionId")
         if not qid:
             continue
@@ -299,36 +283,6 @@ def build_form_context(
         expected = expected_by_item_id.get(q.get("itemId"), [])
         teacher_expected = expected[:1]
         enriched = _compose_question_context(form_title, section, q, nearby, teacher_expected)
-        try:
-            from expected_answer_validator import validate_expected_answer
-
-            if bool(load_config().get("validate_expected_answers", False)):
-                log(
-                    "INFO",
-                    f"[EXPECTED VALIDATOR] checking Q{q.get('index')} "
-                    f"{q.get('title')} teacher_expected={teacher_expected}",
-                )
-                _write_heartbeat(f"expected_answer_validation:{q.get('title')}")
-            validation = validate_expected_answer(enriched, teacher_expected)
-            _write_heartbeat(f"expected_answer_validation_done:{q.get('title')}")
-            if validation.get("validation_status") == "ok":
-                log(
-                    "INFO",
-                    f"[EXPECTED VALIDATOR] Q{q.get('index')} {q.get('title')} "
-                    f"valid={validation.get('valid')} confidence={validation.get('confidence')} "
-                    f"model={validation.get('model_used')}",
-                )
-        except Exception as ex:
-            log("WARNING", f"[FORM CONTEXT] expected validation skipped for qid={qid}: {ex}")
-            validation = {
-                "validation_status": "failed",
-                "valid": True,
-                "confidence": 0.0,
-                "suggested_answers": [],
-                "reason": "validation failed; keeping original expected answer",
-                "original_expected": [str(x) for x in expected],
-            }
-        effective_expected = _effective_expected(expected, validation)
         questions[qid] = {
             "question_id": qid,
             "item_id": q.get("itemId"),
@@ -342,9 +296,7 @@ def build_form_context(
             "has_vision_context": bool(section.vision_notes),
             "vision_status": "ok" if section.vision_notes else "not_found",
             "mapped_textbook_question": section.question_map.get(_normalize_question_label(q.get("title")), ""),
-            "expected_validation": validation,
-            "effective_expected": effective_expected,
-            "expected_was_replaced_for_grading": effective_expected != expected,
+            "teacher_answer": teacher_expected,
         }
 
     out = {
@@ -374,9 +326,7 @@ def apply_question_context(structure: List[Dict], context: Dict) -> List[Dict]:
             q2["has_image_context"] = bool(qctx.get("has_image_context"))
             q2["has_vision_context"] = bool(qctx.get("has_vision_context"))
             q2["mapped_textbook_question"] = qctx.get("mapped_textbook_question", "")
-            q2["expected_validation"] = qctx.get("expected_validation")
-            q2["effective_expected"] = qctx.get("effective_expected")
-            q2["expected_was_replaced_for_grading"] = bool(qctx.get("expected_was_replaced_for_grading"))
+            q2["teacher_answer"] = qctx.get("teacher_answer", [])[:1]
         enriched_structure.append(q2)
     return enriched_structure
 
@@ -393,18 +343,3 @@ def get_effective_expected(question: Dict, fallback_expected: Optional[List[str]
     values = [str(x) for x in (fallback_expected or []) if _clean(x)]
     return values[:1]
 
-
-def should_block_answer_updates(question: Dict) -> bool:
-    cfg = load_config()
-    if not bool(cfg.get("invalid_expected_blocks_updates", True)):
-        return False
-    validation = question.get("expected_validation") or {}
-    if not isinstance(validation, dict):
-        return False
-    confidence = float(validation.get("confidence", 0.0) or 0.0)
-    min_conf = float(cfg.get("expected_answer_validator_min_confidence", 0.85))
-    return (
-        validation.get("validation_status") == "ok"
-        and not bool(validation.get("valid", True))
-        and confidence >= min_conf
-    )

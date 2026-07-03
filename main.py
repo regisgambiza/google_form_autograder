@@ -16,7 +16,6 @@ from form_context_builder import (
     apply_question_context,
     build_form_context,
     get_effective_expected,
-    should_block_answer_updates,
 )
 from form_utils import get_form_structure
 from hang_diagnostics import start_hang_diagnostics
@@ -201,8 +200,7 @@ def main():
     )
     log(
         "INFO",
-        f"[RUN MODELS] jury={config.get('jury_models', {})!r} rubric={config.get('rubric_model')!r} "
-        f"validator={config.get('expected_answer_validator_model')!r} "
+        f"[RUN MODELS] jury={config.get('jury_models', {})!r} "
         f"force_ai_all={bool(config.get('force_ai_jury_for_all_answers', False))} "
         f"fresh_cache={bool(config.get('ignore_grading_cache', False))}",
     )
@@ -312,14 +310,6 @@ def main():
                     print(f"FormProgress: {processed_responses}/{total_responses}")
                     if processed_responses % 10 == 0:
                         write_heartbeat("answer_evaluation")
-                    if should_block_answer_updates(q):
-                        validation = q.get("expected_validation") or {}
-                        log(
-                            "WARNING",
-                            f"[EXPECTED VALIDATOR] blocking updates for Q{q.get('index')} "
-                            f"{q.get('title')} reason={validation.get('reason', '')}",
-                        )
-                        continue
                     if correct and q["type"] in text_types:
                         dups = update_correct_answers(
                             service, form_id, q["itemId"], correct, q["index"], pq.expected[:1]
@@ -420,14 +410,6 @@ def main():
                 print(f"FormProgress: {processed_responses}/{total_responses}")
                 if processed_responses % 10 == 0:
                     write_heartbeat("answer_evaluation")
-                if should_block_answer_updates(q):
-                    validation = q.get("expected_validation") or {}
-                    log(
-                        "WARNING",
-                        f"[EXPECTED VALIDATOR] blocking updates for Q{q.get('index')} "
-                        f"{q.get('title')} reason={validation.get('reason', '')}",
-                    )
-                    continue
                 if correct and q["type"] in text_types:
                     dups = update_correct_answers(
                         service,
