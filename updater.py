@@ -1,5 +1,6 @@
 import copy
 import threading
+import time
 
 from answer_key_manager import backup_form_grading, enqueue_review
 from answer_key_policy import clean_display, equivalence_confidence, identity_key, prepare_answer_key, safely_equivalent
@@ -205,7 +206,14 @@ def update_correct_answers(
                 if backup_path:
                     log("INFO", f"Answer-key backup saved: {backup_path}")
             log("DEBUG", f"Executing batch update for form ID {form_id}")
+            api_started = time.perf_counter()
             service.forms().batchUpdate(formId=form_id, body=update_request).execute()
+            log(
+                "INFO",
+                f"[GOOGLE API] operation=batchUpdate form_id={form_id} item_id={question_id} "
+                f"duration_ms={(time.perf_counter() - api_started) * 1000:.0f} status=success "
+                f"answer_count={len(updated_answers)}",
+            )
         if review_record and enqueue_added_review:
             enqueue_review(review_record)
         if changed:

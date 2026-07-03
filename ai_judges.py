@@ -17,7 +17,7 @@ import requests
 import ollama
 
 from evaluator_config import load_config
-from logger import log
+from logger import log, update_runtime_state
 from ollama_diagnostics import log_post_inference_gpu_probe_once
 from ollama_options import build_ollama_options
 
@@ -359,6 +359,7 @@ async def call_judge_async(
     judge_http_timeout_s = max(judge_timeout_s, int(cfg.get("judge_http_timeout_seconds", 60)))
     start = time.perf_counter()
     log("INFO", f"START judge_{role} (model={model})")
+    update_runtime_state(active_model=model, active_role=role, active_since=time.time())
 
     base_prompt = _make_judge_prompt(question, expected, answer, rubric)
     payload = {
@@ -411,7 +412,7 @@ async def call_judge_async(
                 obj["model"] = model
                 duration_ms = (time.perf_counter() - start) * 1000
                 log_post_inference_gpu_probe_once("judge_async")
-                _log_judge_result(role, model, duration_ms, obj.get("decision", "ERROR"), obj.get("confidence", 0.0))
+                _log_judge_result(role, model, duration_ms, obj.get("decision", "ERROR"), obj.get("confidence", 0.0), obj)
                 _write_heartbeat_if_needed()
                 return obj
             log("WARNING", f"Judge {role} invalid output category={_failure_category(content)} raw={repr(content)[:1000]}")
@@ -435,9 +436,16 @@ async def call_judge_async(
     return out
 
 
-def _log_judge_result(role: str, model: str, duration_ms: float, decision: str, confidence: float):
+def _log_judge_result(role: str, model: str, duration_ms: float, decision: str, confidence: float, evidence=None):
     """Log judge completion with timing and result."""
     log("INFO", f"END judge_{role} duration_ms={duration_ms:.0f} decision={decision} confidence={confidence:.2f} (model={model})")
+    if isinstance(evidence, dict):
+        log(
+            "INFO",
+            f"[JUDGE EVIDENCE] role={role} model={model} reason={evidence.get('reason_short', '')!r} "
+            f"met={evidence.get('requirements_met', [])!r} missing={evidence.get('requirements_missing', [])!r} "
+            f"contradictions={evidence.get('contradictions', [])!r} calculation={evidence.get('calculation_check', '')!r}",
+        )
 
 
 async def run_all_judges_with_early_exit(
@@ -522,6 +530,7 @@ def _run_judges_sync(
         role_model = jury_models.get(role)
         start = time.perf_counter()
         log("INFO", f"START judge_{role} (model={role_model})")
+        update_runtime_state(active_model=role_model, active_role=role, active_since=time.time())
         user_prompt = _make_judge_prompt(question, expected, answer, rubric)
         if repair:
             user_prompt += "\n\nREPAIR: Your previous response was invalid. Output only the required JSON object."
@@ -577,7 +586,7 @@ def _run_judges_sync(
             obj["role"] = role
             obj["model"] = role_model
             log_post_inference_gpu_probe_once("judge_sync")
-            _log_judge_result(role, role_model, duration_ms, obj.get("decision", "ERROR"), obj.get("confidence", 0.0))
+            _log_judge_result(role, role_model, duration_ms, obj.get("decision", "ERROR"), obj.get("confidence", 0.0), obj)
             _write_heartbeat_if_needed()
             return obj
         _log_judge_result(role, role_model, duration_ms, "ERROR", 0.0)

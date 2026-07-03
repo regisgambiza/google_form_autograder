@@ -6,10 +6,12 @@ import grader_thread
 
 def test_current_jury_models_use_reliability_first_independent_roles():
     cfg = json.loads(Path("config.json").read_text(encoding="utf-8"))
-    assert cfg["jury_models"]["semantic_judge"] == "llama3.1:8b"
+    assert cfg["jury_models"]["semantic_judge"] == "mistral-nemo:12b"
     assert cfg["jury_models"]["factual_judge"] == "gemma3:12b"
     assert cfg["jury_models"]["strict_judge"] == "gpt-oss:latest"
-    assert len(set(cfg["jury_models"][role] for role in ("semantic_judge", "factual_judge", "strict_judge"))) == 3
+    assert cfg["jury_models"]["concept_judge"] == "phi4:14b"
+    assert len(set(cfg["jury_models"][role] for role in ("semantic_judge", "factual_judge", "concept_judge", "strict_judge"))) == 4
+    assert cfg["rubric_model"] == "mistral-nemo:12b"
 
 
 def test_patient_ai_mode_avoids_short_timeout_fallbacks():
@@ -34,9 +36,9 @@ def test_jury_uses_three_blind_roles_and_gpt_adjudicator():
     assert adaptive["enabled"] is True
     assert adaptive["primary_roles"] == ["semantic_judge", "factual_judge", "concept_judge"]
     assert adaptive["adjudicator_role"] == "strict_judge"
-    assert cfg["jury_models"][adaptive["primary_roles"][0]] == "llama3.1:8b"
+    assert cfg["jury_models"][adaptive["primary_roles"][0]] == "mistral-nemo:12b"
     assert cfg["jury_models"][adaptive["primary_roles"][1]] == "gemma3:12b"
-    assert cfg["jury_models"][adaptive["primary_roles"][2]] == "llama3.1:8b"
+    assert cfg["jury_models"][adaptive["primary_roles"][2]] == "phi4:14b"
     assert cfg["jury_models"][adaptive["adjudicator_role"]] == "gpt-oss:latest"
 
 

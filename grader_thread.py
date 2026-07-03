@@ -2,6 +2,8 @@
 import sys
 import os
 import subprocess
+import json
+import html
 from PyQt5.QtCore import QThread, pyqtSignal
 
 
@@ -70,6 +72,70 @@ class GraderThread(QThread):
         if self.process and self.process.poll() is None:
             self._terminate_process_tree(self.process.pid)
 
+    @staticmethod
+    def _format_gui_event(event):
+        kind = event.get("type")
+        esc = lambda value: html.escape(str(value or ""))
+        if kind == "run_start":
+            return (
+                f"<b>Grading: {esc(event.get('form_title'))}</b><br>"
+                f"Answers to evaluate: {int(event.get('total', 0))}<br>"
+                "────────────────────────────────────"
+            )
+        if kind == "answer_result":
+            decision = str(event.get("decision", "REVIEW")).upper()
+            icon = {"YES": "✓", "NO": "✗", "REVIEW": "?"}.get(decision, "?")
+            label = {"YES": "ACCEPTED", "NO": "REJECTED", "REVIEW": "NEEDS REVIEW"}.get(decision, decision)
+            lines = [
+                f"<b>Answer {int(event.get('current', 0))} / {int(event.get('total', 0))}</b>",
+                f"<b>Question {int(event.get('question_number', 0))}:</b> {esc(event.get('question'))}",
+                f"Expected: {esc(event.get('expected'))}",
+                f"Student answer: {esc(event.get('answer'))}",
+            ]
+            formatting = event.get("formatting") or {}
+            if formatting:
+                ficon = "✓" if formatting.get("proven") else "•"
+                lines.extend(["", "<b>Formatting check:</b>", f"{ficon} {esc(formatting.get('reason'))}"])
+                for detail in formatting.get("details", []):
+                    lines.append(f"  {esc(detail)}")
+            judges = event.get("judges") or []
+            if judges:
+                lines.extend(["", "<b>AI evaluation:</b>"])
+                for judge in judges:
+                    verdict = str(judge.get("decision", "ERROR")).upper()
+                    jicon = "✓" if verdict == "YES" else "✗" if verdict == "NO" else "?"
+                    confidence = float(judge.get("confidence", 0.0) or 0.0) * 100
+                    lines.append(
+                        f"{jicon} {esc(judge.get('model') or judge.get('role'))}: "
+                        f"{esc(verdict)} ({confidence:.0f}%) — {esc(judge.get('reason'))}"
+                    )
+                    missing = judge.get("requirements_missing") or []
+                    contradictions = judge.get("contradictions") or []
+                    if missing:
+                        lines.append(f"  Missing: {esc('; '.join(map(str, missing)))}")
+                    if contradictions:
+                        lines.append(f"  Contradictions: {esc('; '.join(map(str, contradictions)))}")
+            lines.extend([
+                "",
+                f"<b>Final decision: {icon} {esc(label)}</b>",
+                esc(event.get("action")),
+                "",
+                f"Progress: {int(event.get('current', 0))}/{int(event.get('total', 0))} | "
+                f"Accepted: {int(event.get('accepted', 0))} | "
+                f"Needs review: {int(event.get('review', 0))} | "
+                f"Rejected: {int(event.get('rejected', 0))} | "
+                f"Elapsed: {esc(event.get('elapsed'))}",
+                "────────────────────────────────────",
+            ])
+            return "<br>".join(lines)
+        if kind == "run_complete":
+            return (
+                f"<b>Grading finished</b><br>Accepted: {int(event.get('accepted', 0))} | "
+                f"Needs review: {int(event.get('review', 0))} | Rejected: {int(event.get('rejected', 0))}<br>"
+                f"Elapsed: {esc(event.get('elapsed'))}"
+            )
+        return esc(event.get("message", ""))
+
     def run(self):
         try:
             if self._stop_requested:
@@ -112,7 +178,19 @@ class GraderThread(QThread):
                 if not line:
                     continue
                 ls = line.strip()
-                self.debug_message.emit(ls)
+                if ls.startswith("GUI_EVENT:"):
+                    try:
+                        event = json.loads(ls.split(":", 1)[1])
+                        self.debug_message.emit(self._format_gui_event(event))
+                    except Exception:
+                        pass
+                else:
+                    # Mirror detailed child diagnostics to the terminal that
+                    # launched the GUI; do not send them to the teacher console.
+                    try:
+                        print(ls, flush=True)
+                    except Exception:
+                        pass
 
                 # Parse progress messages from main.py
                 if ls.startswith("FormProgress:"):

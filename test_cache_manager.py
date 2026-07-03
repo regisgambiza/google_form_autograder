@@ -16,7 +16,8 @@ def test_clear_grading_cache_removes_only_regenerated_data(tmp_path):
     assert result["history_removed"] == 1
     assert not (tmp_path / ".grading_timestamps.json").exists()
     assert (tmp_path / "token.json").read_text(encoding="utf-8") == "credential"
-    assert (tmp_path / "answer_key_review_queue.json").read_text(encoding="utf-8") == "review"
+    assert not (tmp_path / "answer_key_review_queue.json").exists()
+    assert result["review_records_removed"] == 1
     assert all((tmp_path / "cache" / group).is_dir() for group in CACHE_GROUPS)
 
 
@@ -25,6 +26,16 @@ def test_clear_cache_can_preserve_recent_grading_history(tmp_path):
     history.write_text("{}", encoding="utf-8")
     clear_grading_cache(tmp_path, reset_history=False)
     assert history.exists()
+
+
+def test_fresh_run_removes_pending_answer_key_reviews(tmp_path):
+    queue = tmp_path / "answer_key_review_queue.json"
+    queue.write_text('{"items": [{"item_id": "1"}, {"item_id": "2"}]}', encoding="utf-8")
+
+    result = prepare_fresh_grading_run({"ignore_grading_cache": True}, tmp_path)
+
+    assert not queue.exists()
+    assert result["review_records_removed"] == 2
 
 
 def test_fresh_run_mode_automatically_discards_previous_run_cache(tmp_path):

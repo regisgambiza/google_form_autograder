@@ -16,6 +16,8 @@ _CONSOLE_MIN_LEVEL = "INFO"
 _CONSOLE_ENABLED = True
 _CONSOLE_STAGE_BANNERS = True
 _CONSOLE_COLOR_ENABLED = True
+_RUNTIME_STATE = {}
+_RUNTIME_STATE_LOCK = threading.Lock()
 _LEVEL_ORDER = {
     "DEBUG": 10,
     "INFO": 20,
@@ -124,6 +126,26 @@ def log(level, message):
             print(log_message, flush=True)
         except Exception:
             pass
+    except Exception:
+        pass
+
+
+def update_runtime_state(**values):
+    """Publish compact process state for external heartbeat diagnostics."""
+    with _RUNTIME_STATE_LOCK:
+        _RUNTIME_STATE.update(values)
+
+
+def runtime_snapshot():
+    with _RUNTIME_STATE_LOCK:
+        return dict(_RUNTIME_STATE)
+
+
+def gui_event(event_type: str, **payload):
+    """Emit one machine-readable event intended exclusively for the GUI terminal."""
+    record = {"type": str(event_type), **payload}
+    try:
+        print("GUI_EVENT:" + json.dumps(record, ensure_ascii=True), flush=True)
     except Exception:
         pass
 

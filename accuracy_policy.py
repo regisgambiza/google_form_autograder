@@ -43,6 +43,11 @@ def conservative_jury_decision(
                 "decision": str(j.get("decision", "ERROR")).upper(),
                 "confidence": float(j.get("confidence", 0.0) or 0.0),
                 "reason": str(j.get("reason_short", "")),
+                "model": str(j.get("model", jury_models.get(role, ""))),
+                "requirements_met": list(j.get("requirements_met", []) or []),
+                "requirements_missing": list(j.get("requirements_missing", []) or []),
+                "contradictions": list(j.get("contradictions", []) or []),
+                "calculation_check": str(j.get("calculation_check", "")),
             }
             for role, j in by_role.items()
         },
@@ -88,6 +93,11 @@ def adaptive_math_jury_decision(
                 "decision": str(j.get("decision", "ERROR")).upper(),
                 "confidence": float(j.get("confidence", 0.0) or 0.0),
                 "reason": str(j.get("reason_short", "")),
+                "model": str(j.get("model", jury_models.get(role, ""))),
+                "requirements_met": list(j.get("requirements_met", []) or []),
+                "requirements_missing": list(j.get("requirements_missing", []) or []),
+                "contradictions": list(j.get("contradictions", []) or []),
+                "calculation_check": str(j.get("calculation_check", "")),
             }
             for role, j in by_role.items()
         },

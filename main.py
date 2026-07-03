@@ -1,6 +1,8 @@
 # main.py - Hybrid prep/apply pipeline (prefetch + sequential apply)
 import json
+import hashlib
 import os
+import platform
 import queue
 import sys
 import threading
@@ -18,7 +20,7 @@ from form_context_builder import (
 )
 from form_utils import get_form_structure
 from hang_diagnostics import start_hang_diagnostics
-from logger import log
+from logger import log, update_runtime_state
 from response_utils import get_responses, save_grading_time
 from updater import update_correct_answers
 from global_prefetch import prefetch_all_forms
@@ -187,7 +189,23 @@ def _prepare_form(service, idx: int, total_forms: int, form_url: str, grade_rece
 
 def main():
     acquire_grader_lock()
+    run_id = datetime.now(timezone.utc).strftime("run-%Y%m%dT%H%M%SZ") + f"-{os.getpid()}"
+    config_hash = hashlib.sha256(json.dumps(config, sort_keys=True).encode("utf-8")).hexdigest()[:12]
+    update_runtime_state(run_id=run_id, active_model="initializing", active_since=time.time())
     log("INFO", "=== Google Form Autograder Started ===")
+    log(
+        "INFO",
+        f"[RUN] id={run_id} pid={os.getpid()} python={platform.python_version()} "
+        f"platform={platform.platform()} config_hash={config_hash} "
+        f"mode={config.get('execution_mode', 'unknown')!r}",
+    )
+    log(
+        "INFO",
+        f"[RUN MODELS] jury={config.get('jury_models', {})!r} rubric={config.get('rubric_model')!r} "
+        f"validator={config.get('expected_answer_validator_model')!r} "
+        f"force_ai_all={bool(config.get('force_ai_jury_for_all_answers', False))} "
+        f"fresh_cache={bool(config.get('ignore_grading_cache', False))}",
+    )
     fresh = prepare_fresh_grading_run(config)
     if bool(config.get("ignore_grading_cache", False)):
         log(

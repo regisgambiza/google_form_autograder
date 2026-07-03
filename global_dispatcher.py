@@ -2,9 +2,10 @@ import queue
 import threading
 import time
 import json
+import re
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError, as_completed
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
@@ -21,7 +22,7 @@ from form_context_builder import (
     should_block_answer_updates,
 )
 from form_utils import get_form_structure
-from logger import log, stage_banner
+from logger import gui_event, log, runtime_snapshot, stage_banner, update_runtime_state
 from response_utils import save_grading_time
 from updater import update_correct_answers
 from answer_key_manager import enqueue_review
@@ -37,6 +38,7 @@ class Task:
     answer_idx: int
     answer: str
     expected: List[str]
+    queued_monotonic: float = field(default_factory=time.monotonic)
 
 
 class TokenBucket:
@@ -99,7 +101,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
     forms_total = len(form_urls)
     metrics_lock = threading.Lock()
     counters = {"fetch": 0, "det": 0, "ai": 0, "apply": 0}
-    progress = {"expected_tasks": 0, "completed": 0, "accepted": 0, "last_progress_ts": time.time(), "pending_buffer": 0, "ai_backlog": 0}
+    progress = {"expected_tasks": 0, "completed": 0, "accepted": 0, "review_answers": 0, "rejected": 0, "last_progress_ts": time.time(), "pending_buffer": 0, "ai_backlog": 0}
     review_question_ids = set()
     queued_for_apply = set()
     queue_progress = {"last_any_work_ts": time.time(), "last_snapshot": (0, 0, 0, 0)}
@@ -109,6 +111,18 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
     task_builder_log_enabled = bool(cfg.get("task_builder_log_enabled", True))
     stage_lock = threading.Lock()
     stage_state = {"current": "init", "fetch_done": False, "build_done": False}
+
+    def task_id(t: Task) -> str:
+        return f"f{t.form_idx}:q{t.question.get('questionId', 'unknown')}:a{t.answer_idx}"
+
+    def safe_text(value: object, limit: int = 500) -> str:
+        text = str(value or "")
+        text = re.sub(r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b", "[redacted-email]", text)
+        return text if len(text) <= limit else text[:limit] + "…"
+
+    def elapsed_text(seconds: float) -> str:
+        seconds = max(0, int(seconds))
+        return f"{seconds // 3600:02d}:{(seconds % 3600) // 60:02d}:{seconds % 60:02d}"
 
     def announce_stage(stage_no: int, title: str, status: str):
         line = "=" * 90
@@ -530,6 +544,20 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                 return
 
             started = time.perf_counter()
+            tid = task_id(t)
+            queue_wait_s = max(0.0, time.monotonic() - t.queued_monotonic)
+            update_runtime_state(
+                active_task=tid, active_form=t.form_id,
+                active_question=t.question.get("questionId", ""),
+                active_model="jury", active_since=time.time(),
+            )
+            answer_for_log = safe_text(t.answer) if bool(cfg.get("external_log_student_answers", True)) else "[hidden]"
+            log(
+                "INFO",
+                f"[TASK START] task={tid} form_id={t.form_id} question_id={t.question.get('questionId')} "
+                f"answer_index={t.answer_idx} queue_wait_s={queue_wait_s:.2f} "
+                f"answer={answer_for_log!r} expected={safe_text((t.expected or [''])[0])!r}",
+            )
             try:
                 r = evaluate_answer_bounded(t)
             except Exception as exx:
@@ -559,6 +587,13 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                     progress["ai_backlog"] = max(0, progress["ai_backlog"] - 1)
             except Exception:
                 pass
+            policy_reason = str((r.evidence or {}).get("policy", {}).get("policy_reason", ""))
+            log(
+                "INFO",
+                f"[TASK END] task={tid} decision={r.decision} confidence={r.confidence:.3f} "
+                f"stage={r.stage_reached} policy={policy_reason or 'n/a'} duration_s={elapsed_s:.2f}",
+            )
+            update_runtime_state(active_task="", active_model="idle", active_since=0.0)
 
     def result_aggregator():
         log("INFO", "[Worker: Aggregator] START result_aggregator")
@@ -609,11 +644,17 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                 progress["completed"] += 1
                 if r.decision == "YES":
                     progress["accepted"] += 1
+                elif r.decision == "REVIEW":
+                    progress["review_answers"] += 1
+                elif r.decision == "NO":
+                    progress["rejected"] += 1
                 if r.decision in {"REVIEW", "NO"} or accepted_variant:
                     review_question_ids.add(qid)
                 completed_now = int(progress["completed"])
                 expected_now = int(progress["expected_tasks"])
                 accepted_now = int(progress["accepted"])
+                review_answers_now = int(progress["review_answers"])
+                rejected_now = int(progress["rejected"])
                 review_now = len(review_question_ids)
                 progress["last_progress_ts"] = time.time()
             # Machine-readable real-time progress consumed by GraderThread.
@@ -623,6 +664,64 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
             print(
                 f"FormMetrics: {completed_now}/{expected_now} {accepted_now} {review_now} {int(time.time() - form_started_ts)}",
                 flush=True,
+            )
+            evidence = r.evidence or {}
+            policy = evidence.get("policy", {}) if isinstance(evidence, dict) else {}
+            judge_map = policy.get("judge_decisions", {}) if isinstance(policy, dict) else {}
+            judges = [
+                {"role": role, **details}
+                for role, details in judge_map.items()
+                if isinstance(details, dict)
+            ]
+            domain = evidence.get("domain_validation", {}) if isinstance(evidence, dict) else {}
+            formatting = {}
+            if isinstance(domain, dict) and domain:
+                domain_evidence = domain.get("evidence", {}) if isinstance(domain.get("evidence"), dict) else {}
+                format_data = domain_evidence.get("formatting", {}) if isinstance(domain_evidence, dict) else {}
+                format_evidence = format_data.get("evidence", {}) if isinstance(format_data, dict) else {}
+                details = []
+                if format_evidence:
+                    if format_evidence.get("candidate_value") is not None:
+                        details.append(
+                            f"Value {format_evidence.get('candidate_value')} compared with {format_evidence.get('expected_value')}"
+                        )
+                    if format_evidence.get("expected_unit"):
+                        details.append(
+                            f"Unit {format_evidence.get('candidate_unit') or '(implied)'} compared with {format_evidence.get('expected_unit')}"
+                        )
+                    if format_evidence.get("required_decimal_places") is not None:
+                        details.append(
+                            f"Required precision: {format_evidence.get('required_decimal_places')} decimal place(s)"
+                        )
+                formatting = {
+                    "proven": domain.get("status") == "PROVEN",
+                    "reason": domain.get("reason", ""),
+                    "details": details,
+                }
+            if r.decision == "YES":
+                action = "Answer accepted; queued for the answer key audit." if accepted_variant else "Answer accepted; it matches an existing accepted form."
+            elif r.decision == "REVIEW":
+                action = "Not added to Google Forms; teacher approval is required."
+            else:
+                action = "Rejected and not added to Google Forms."
+            shown_answer = safe_text(t.answer) if bool(cfg.get("gui_show_student_answers", True)) else "[hidden]"
+            gui_event(
+                "answer_result",
+                current=completed_now, total=expected_now,
+                question_number=int(t.question.get("index", 0)) + 1,
+                question=safe_text(t.question.get("title", "Untitled Question"), 1000),
+                expected=safe_text(" | ".join(t.expected or [])),
+                answer=shown_answer,
+                formatting=formatting,
+                judges=judges,
+                decision=r.decision,
+                confidence=r.confidence,
+                policy_reason=policy.get("policy_reason", ""),
+                action=action,
+                accepted=accepted_now,
+                review=review_answers_now,
+                rejected=rejected_now,
+                elapsed=elapsed_text(time.time() - form_started_ts),
             )
 
     def incremental_apply_worker():
@@ -651,7 +750,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                     answer for answer in data["question_answers"].get(qid, [])
                     if answer and identity_key(answer) not in expected_keys
                 ))
-                # Only confident agreement between the two primary judges may
+                # Only confident agreement between all primary roles may
                 # change the live Form automatically. REVIEW stays queued.
                 categorized_candidates = list(dict.fromkeys(accepted))
                 if accepted or approval_answers or rejected_answers:
@@ -685,10 +784,15 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
     def metrics_reporter():
         last = time.time()
         ai_stall_timeout_s = float(cfg.get("ai_stall_timeout_seconds", 90))
+        heartbeat_interval_s = max(10.0, float(cfg.get("external_heartbeat_interval_seconds", 20)))
+        first_report = True
         log("INFO", "[Worker: Metrics] START metrics_reporter")
         while not stop.is_set():
             try:
-                time.sleep(5.0)
+                if first_report:
+                    first_report = False
+                elif stop.wait(heartbeat_interval_s):
+                    break
                 now = time.time()
                 dt = max(0.001, now - last)
                 last = now
@@ -707,10 +811,24 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                     f"q_fetch={fetch_out.qsize()} q_det={det_q.qsize()} q_ai={ai_q.qsize()} q_ai_actual={ai_backlog} q_result={result_q.qsize()} "
                     f"pending={pb} wm={det_q_low_wm}/{det_q_high_wm} done={comp}/{exp}",
                 )
-                log("INFO", f"[Worker: Producer] heartbeat q_fetch={fetch_out.qsize()} pending={pb}")
-                log("INFO", f"[Worker: Deterministic] heartbeat q_det={det_q.qsize()} det_s={d/dt:.2f}")
-                log("INFO", f"[Worker: AI] heartbeat q_ai_actual={ai_backlog} q_ai_buffer={ai_q.qsize()} ai_s={a/dt:.2f}")
-                log("INFO", f"[Worker: Aggregator] heartbeat q_result={result_q.qsize()} done={comp}/{exp}")
+                runtime = runtime_snapshot()
+                active_for = max(0.0, now - float(runtime.get("active_since", 0.0) or now))
+                resource_text = ""
+                try:
+                    import psutil
+                    proc = psutil.Process()
+                    resource_text = f" rss_mb={proc.memory_info().rss / (1024 * 1024):.0f} cpu_pct={proc.cpu_percent():.1f}"
+                except Exception:
+                    pass
+                log(
+                    "INFO",
+                    f"[HEARTBEAT] stage={stage_state.get('current')} producer={'done' if stage_state.get('build_done') else 'running'} "
+                    f"deterministic={'done' if det_q.empty() else 'running'} ai={'running' if ai_backlog else 'idle'} "
+                    f"active_task={runtime.get('active_task') or 'none'} active_model={runtime.get('active_model') or 'none'} "
+                    f"active_for_s={active_for:.1f} aggregator={'waiting' if result_q.empty() else 'draining'} "
+                    f"apply={'idle' if apply_q.empty() else 'pending'} progress={comp}/{exp} q_ai={ai_backlog}"
+                    f"{resource_text}",
+                )
                 snapshot = (fetch_out.qsize(), det_q.qsize(), ai_q.qsize(), result_q.qsize())
                 with metrics_lock:
                     if snapshot != queue_progress["last_snapshot"] or (f + d + a + ap) > 0:
@@ -778,6 +896,8 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
         with metrics_lock:
             expected_at_start = int(progress["expected_tasks"])
         print(f"FormProgress: 0/{expected_at_start}", flush=True)
+        first_meta = next((data.get("meta", {}) for data in forms_results.values()), {})
+        gui_event("run_start", form_title=first_meta.get("title", "Google Form"), total=expected_at_start)
         [t.start() for t in da]
         [t.start() for t in aw]
         ag.start()
@@ -786,6 +906,10 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
     else:
         tf.start(); tb.start(); [t.start() for t in da]; [t.start() for t in aw]; ag.start(); ap.start(); mr.start()
         tf.join(); tb.join()
+        with metrics_lock:
+            expected_at_start = int(progress["expected_tasks"])
+        first_meta = next((data.get("meta", {}) for data in forms_results.values()), {})
+        gui_event("run_start", form_title=first_meta.get("title", "Google Form"), total=expected_at_start)
 
     [t.join() for t in da]
     for _ in range(ai_workers):
@@ -806,6 +930,15 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
 
     if failed.is_set():
         raise RuntimeError("Global dispatcher failed due to stall/crash")
+
+    with metrics_lock:
+        gui_accepted = int(progress["accepted"])
+        gui_review = int(progress["review_answers"])
+        gui_rejected = int(progress["rejected"])
+    gui_event(
+        "run_complete", accepted=gui_accepted, review=gui_review, rejected=gui_rejected,
+        elapsed=elapsed_text(time.time() - form_started_ts),
+    )
 
     # All answer-key writes are already complete; finalize reports/timestamps.
     for i in sorted(forms_results.keys()):

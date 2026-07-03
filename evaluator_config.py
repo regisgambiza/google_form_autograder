@@ -5,20 +5,23 @@ import os
 from typing import Any, Dict
 
 DEFAULT_CONFIG: Dict[str, Any] = {
-    "models": {"judge": ["llama3.1:8b"]},
+    "models": {"judge": ["mistral-nemo:12b"]},
     "jury_models": {
-        "semantic_judge": "llama3.1:8b",
-        "concept_judge": "gemma3:12b",
+        "semantic_judge": "mistral-nemo:12b",
+        "concept_judge": "phi4:14b",
         "factual_judge": "gemma3:12b",
         "strict_judge": "gpt-oss:latest",
         "misconception_judge": "llama3.1:8b",
         "language_filter": "llama3.1:8b",
     },
-    "rubric_model": "llama3.1:8b",
+    "rubric_model": "mistral-nemo:12b",
     "embedding_model": "mxbai-embed-large",
-    "reasoning_model": "llama3.1:8b",
+    "reasoning_model": "phi4:14b",
     "console_stage_banners": True,
     "console_color_enabled": True,
+    "external_heartbeat_interval_seconds": 20,
+    "external_log_student_answers": True,
+    "gui_show_student_answers": True,
     "enable_form_context": True,
     "enable_vision_context": False,
     "vision_context_optional": True,

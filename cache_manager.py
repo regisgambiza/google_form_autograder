@@ -1,4 +1,5 @@
 """Safe cleanup for regenerated grading caches and recent-run history."""
+import json
 import shutil
 from pathlib import Path
 from typing import Dict
@@ -24,11 +25,20 @@ def clear_grading_cache(root: Path = Path("."), reset_history: bool = True) -> D
         target.mkdir(parents=True, exist_ok=True)
 
     history_removed = 0
+    review_records_removed = 0
     if reset_history:
         history = (root / ".grading_timestamps.json").resolve()
         if history.parent == root and history.exists():
             history.unlink()
             history_removed = 1
+        review_queue = (root / "answer_key_review_queue.json").resolve()
+        if review_queue.parent == root and review_queue.exists():
+            try:
+                payload = json.loads(review_queue.read_text(encoding="utf-8"))
+                review_records_removed = len(payload.get("items", []))
+            except (OSError, ValueError, TypeError):
+                review_records_removed = 1
+            review_queue.unlink()
 
     # Clear process-local caches when this action is invoked in a process that
     # has imported the evaluator. New grader subprocesses start empty anyway.
@@ -43,11 +53,12 @@ def clear_grading_cache(root: Path = Path("."), reset_history: bool = True) -> D
         "removed_files": removed_files,
         "removed_bytes": removed_bytes,
         "history_removed": history_removed,
+        "review_records_removed": review_records_removed,
     }
 
 
 def prepare_fresh_grading_run(config: Dict, root: Path = Path(".")) -> Dict[str, int]:
     """Discard data from earlier runs when cache reuse is disabled."""
     if not bool(config.get("ignore_grading_cache", False)):
-        return {"removed_files": 0, "removed_bytes": 0, "history_removed": 0}
+        return {"removed_files": 0, "removed_bytes": 0, "history_removed": 0, "review_records_removed": 0}
     return clear_grading_cache(root=root, reset_history=True)

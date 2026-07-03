@@ -698,13 +698,13 @@ class FormManager(QMainWindow):
         self.terminal_toggle_button.setProperty("noAutoIcon", True)
         self.terminal_toggle_button.clicked.connect(self.toggle_terminal)
         terminal_bar.addWidget(self.terminal_toggle_button)
-        terminal_status = QLabel("Aggregator - live")
+        terminal_status = QLabel("AI grading - live")
         terminal_status.setObjectName("TerminalMuted")
         terminal_bar.addWidget(terminal_status)
         terminal_bar.addStretch()
         self.timing_only_checkbox = QCheckBox("Timing only")
         self.timing_only_checkbox.stateChanged.connect(self.on_timing_filter_changed)
-        terminal_bar.addWidget(self.timing_only_checkbox)
+        self.timing_only_checkbox.hide()
         clear_terminal_button = QPushButton("Clear")
         clear_terminal_button.setObjectName("TerminalAction")
         clear_terminal_button.setMaximumWidth(70)
@@ -733,11 +733,7 @@ class FormManager(QMainWindow):
         self.det_output = self._make_log_textedit()
         self.ai_output = self._make_log_textedit()
         self.agg_output = self._make_log_textedit()
-        self.log_tabs.addTab(self.debug_output, "All")
-        self.log_tabs.addTab(self.producer_output, "Producer")
-        self.log_tabs.addTab(self.det_output, "Det Workers")
-        self.log_tabs.addTab(self.ai_output, "AI Workers")
-        self.log_tabs.addTab(self.agg_output, "Aggregator")
+        self.log_tabs.addTab(self.debug_output, "AI grading")
         self._reset_worker_tab_titles()
         terminal_layout.addWidget(self.log_tabs, 1)
         self.terminal_state = "collapsed"
@@ -1169,14 +1165,15 @@ class FormManager(QMainWindow):
         ignore_cache_checkbox.setChecked(bool(cfg.get("ignore_grading_cache", True)))
         ignore_cache_checkbox.setToolTip(
             "Before every grading run, remove cached results, rubrics, embeddings, context, "
-            "validation data, and Recent Only history. Caching is still allowed within that run."
+            "validation data, Recent Only history, and pending Answer Keys reviews. "
+            "Caching is still allowed within that run."
         )
         form.addRow("Cache Reuse:", ignore_cache_checkbox)
 
         force_ai_checkbox = QCheckBox("Send every answer through the full AI jury", dialog)
         force_ai_checkbox.setChecked(bool(cfg.get("force_ai_jury_for_all_answers", True)))
         force_ai_checkbox.setToolTip(
-            "Llama evaluates meaning, Gemma verifies facts/mathematics, and a blind Llama role "
+            "Mistral NeMo evaluates meaning, Gemma verifies facts/mathematics, and Phi-4 "
             "challenges rubric completeness. GPT-OSS adjudicates disagreements, ambiguity, or low confidence."
         )
         form.addRow("AI Evaluation:", force_ai_checkbox)
@@ -1193,9 +1190,9 @@ class FormManager(QMainWindow):
             answer = QMessageBox.question(
                 dialog,
                 "Clear grading cache?",
-                "This clears regenerated model/context caches and Recent Only grading history. "
-                "The next run will fetch and grade everything again. Credentials, backups, reviews, "
-                "configuration, and form lists are preserved.",
+                "This clears regenerated model/context caches, Recent Only grading history, and all "
+                "pending Answer Keys review candidates. The next run will fetch and grade everything again. "
+                "Credentials, teacher benchmarks, backups, configuration, and form lists are preserved.",
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No,
             )
@@ -1209,7 +1206,8 @@ class FormManager(QMainWindow):
                     dialog,
                     "Cache cleared",
                     f"Removed {result['removed_files']} cached files ({megabytes:.1f} MB). "
-                    "The next grading run will start fresh.",
+                    f"Removed {result['review_records_removed']} pending review records. "
+                    "The next grading run will start completely fresh.",
                 )
             except Exception as exc:
                 QMessageBox.critical(dialog, "Could not clear cache", str(exc))

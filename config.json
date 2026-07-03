@@ -1,26 +1,29 @@
 {
     "models": {
         "judge": [
-            "llama3.1:8b"
+            "mistral-nemo:12b"
         ]
     },
     "jury_models": {
-        "semantic_judge": "llama3.1:8b",
-        "concept_judge": "llama3.1:8b",
+        "semantic_judge": "mistral-nemo:12b",
+        "concept_judge": "phi4:14b",
         "factual_judge": "gemma3:12b",
         "strict_judge": "gpt-oss:latest",
         "misconception_judge": "llama3.1:8b",
         "language_filter": "gpt-oss:latest"
     },
-    "rubric_model": "llama3.1:8b",
+    "rubric_model": "mistral-nemo:12b",
     "embedding_model": "mxbai-embed-large",
-    "reasoning_model": "llama3.1:8b",
+    "reasoning_model": "phi4:14b",
     "leniency": "balanced",
     "leniency_note": "options: extreme, lenient, balanced, strict",
     "evaluator": "ai_evaluator_semantic",
     "generate_report": false,
     "console_stage_banners": true,
     "console_color_enabled": true,
+    "external_heartbeat_interval_seconds": 20,
+    "external_log_student_answers": true,
+    "gui_show_student_answers": true,
     "enable_form_context": true,
     "enable_vision_context": true,
     "vision_context_optional": true,
