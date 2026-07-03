@@ -1057,10 +1057,10 @@ class FormManager(QMainWindow):
             adaptive = preset.get("adaptive_math_jury", cfg.get("adaptive_math_jury", {}))
             primary_roles = list(adaptive.get("primary_roles", [])) if adaptive.get("enabled", False) else []
             adjudicator_role = str(adaptive.get("adjudicator_role", ""))
-            total_roles = len(jury_defaults)
+            visible_jury_roles = {"semantic_judge", "factual_judge", "strict_judge"}
+            total_roles = len(visible_jury_roles)
             status_text = (
-                f"{len(active_roles)} active jury roles for {mode}; "
-                f"{total_roles} role models configured."
+                f"{len(active_roles & visible_jury_roles)} active jury roles."
             )
             if len(primary_roles) >= 2 and adjudicator_role:
                 status_text += (
@@ -1143,50 +1143,19 @@ class FormManager(QMainWindow):
             normalize_execution_mode(cfg.get("execution_mode", DEFAULT_EXECUTION_MODE))
         )
 
-        form.addRow("Evaluator:", evaluator_combo)
-        form.addRow("Leniency:", leniency_combo)
-        form.addRow("Primary Judge Model:", model_combo)
-        form.addRow("Rubric Model:", rubric_model_combo)
-        form.addRow("Embedding Model:", embedding_model_combo)
-        form.addRow("Reasoning Model:", reasoning_model_combo)
         form.addRow("Teacher-Key Validator:", expected_validator_model_combo)
         form.addRow("Validator Fallback:", expected_validator_fallback_combo)
         form.addRow("Minimum Judge Confidence:", minimum_judge_confidence_spin)
-        form.addRow("Independent Jury:", distinct_models_checkbox)
         form.addRow("Answer-Key Automation:", key_auto_add_checkbox)
         form.addRow("Slow Model Handling:", patient_ai_checkbox)
-        form.addRow("Decision Evidence Log:", audit_path_edit)
-        form.addRow("Teacher Benchmark:", benchmark_path_edit)
         form.addRow("Model Choices:", model_status_label)
-        # Add jury model rows
+        # Only the three roles used by the active grading workflow belong in the everyday UI.
         for role, combo in jury_combos.items():
-            form.addRow(jury_role_labels[role], combo)
+            if role in {"semantic_judge", "factual_judge", "strict_judge"}:
+                form.addRow(jury_role_labels[role], combo)
         form.addRow("Jury Roles:", jury_status_label)
         form.addRow("", report_checkbox)
-        
-        # Ollama options section
-        ollama_section = QWidget(dialog)
-        ollama_layout = QHBoxLayout(ollama_section)
-        ollama_layout.setContentsMargins(0, 0, 0, 0)
-        ollama_layout.addWidget(QLabel("Ollama Options:"))
-        ollama_layout.addWidget(QLabel("Judge Ctx:"))
-        ollama_layout.addWidget(judge_num_ctx_spin)
-        ollama_layout.addWidget(QLabel("Judge Pred:"))
-        ollama_layout.addWidget(judge_num_predict_spin)
-        ollama_layout.addWidget(QLabel("Rubric Ctx:"))
-        ollama_layout.addWidget(rubric_num_ctx_spin)
-        ollama_layout.addWidget(QLabel("Rubric Pred:"))
-        ollama_layout.addWidget(rubric_num_predict_spin)
-        form.addRow("", ollama_section)
-
-        batch_row = QWidget(dialog)
-        bl = QHBoxLayout(batch_row)
-        bl.setContentsMargins(0, 0, 0, 0)
-        bl.addWidget(batch_size_spin)
-        bl.addWidget(batch_auto_checkbox)
-        form.addRow("Batch Size:", batch_row)
         form.addRow("Grade Mode:", grading_mode_combo)
-        form.addRow("Execution Mode:", execution_mode_combo)
         execution_mode_combo.currentTextChanged.connect(refresh_jury_status)
         refresh_jury_status()
 
@@ -1205,18 +1174,6 @@ class FormManager(QMainWindow):
             "ambiguity, or low confidence. Deterministic checks become evidence only."
         )
         form.addRow("AI Evaluation:", force_ai_checkbox)
-
-        # Heartbeat settings section
-        heartbeat_section = QWidget(dialog)
-        heartbeat_layout = QHBoxLayout(heartbeat_section)
-        heartbeat_layout.setContentsMargins(0, 0, 0, 0)
-        heartbeat_layout.addWidget(QLabel("Heartbeat Timeout:"))
-        heartbeat_layout.addWidget(heartbeat_timeout_spin)
-        heartbeat_layout.addWidget(QLabel("Check Interval:"))
-        heartbeat_layout.addWidget(heartbeat_interval_spin)
-        heartbeat_layout.addWidget(QLabel("Max Restarts:"))
-        heartbeat_layout.addWidget(heartbeat_max_restarts_spin)
-        form.addRow("", heartbeat_section)
 
         buttons = QWidget(dialog)
         b = QHBoxLayout(buttons)

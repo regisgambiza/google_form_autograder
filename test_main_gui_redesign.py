@@ -94,3 +94,20 @@ def test_settings_exposes_cache_and_history_clear_action(monkeypatch):
     assert "clear_grading_cache(reset_history=True)" in source
     assert "Always grade from fresh data (ignore previous-run cache)" in source
     assert "Send every answer through the full AI jury" in source
+
+
+def test_settings_hides_low_level_expert_controls():
+    source = __import__("pathlib").Path("gui_main.py").read_text(encoding="utf-8")
+    for obsolete_row in (
+        'form.addRow("Evaluator:"',
+        'form.addRow("Leniency:"',
+        'form.addRow("Primary Judge Model:"',
+        'form.addRow("Rubric Model:"',
+        'form.addRow("Embedding Model:"',
+        'form.addRow("Reasoning Model:"',
+        'form.addRow("Decision Evidence Log:"',
+        'form.addRow("Teacher Benchmark:"',
+        'form.addRow("Batch Size:"',
+        'form.addRow("Execution Mode:"',
+    ):
+        assert obsolete_row not in source
