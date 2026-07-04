@@ -40,6 +40,7 @@
     "answer_key_auto_add_proven_equivalents": true,
     "ignore_grading_cache": true,
     "force_ai_jury_for_all_answers": true,
+    "model_first_question_batching": true,
     "decision_audit_path": "logs/grading_decisions.jsonl",
     "teacher_benchmark_path": "teacher_benchmark.jsonl",
     "accuracy_policy": {
@@ -108,6 +109,7 @@
     "numeric_tolerance": 1e-06,
     "max_latency_per_answer_seconds": 21600,
     "answer_hard_timeout_seconds": 21600,
+    "question_batch_hard_timeout_seconds": 21600,
     "patient_ai_mode": true,
     "enable_jury_circuit_breaker": false,
     "enable_reflection": false,

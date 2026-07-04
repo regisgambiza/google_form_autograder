@@ -451,6 +451,179 @@ def _log_judge_result(role: str, model: str, duration_ms: float, decision: str, 
         )
 
 
+def call_judge_role_sync(
+    role: str,
+    answer: str,
+    question: str,
+    expected: str,
+    rubric: Dict[str, object],
+    retries: int = 3,
+) -> Dict[str, object]:
+    """Run one judge role for one answer.
+
+    This is intentionally public so the dispatcher/pipeline can run judges
+    model-first across a whole question: role A judges all answers, then role B
+    judges all answers, etc. That keeps Ollama from swapping models for every
+    single student answer.
+    """
+    cfg = load_config()
+    jury_models = cfg.get("jury_models", {})
+    TIMEOUT_SECONDS = max(10, int(cfg.get("judge_timeout_seconds", 45)))
+    http_timeout_seconds = max(TIMEOUT_SECONDS, int(cfg.get("judge_http_timeout_seconds", 60)))
+    role_model = jury_models.get(role)
+
+    def _call_once(repair: bool = False) -> Dict[str, object]:
+        _write_heartbeat_if_needed()
+        start = time.perf_counter()
+        log("INFO", f"START judge_{role} (model={role_model})")
+        update_runtime_state(active_model=role_model, active_role=role, active_since=time.time())
+        user_prompt = _make_judge_prompt(question, expected, answer, rubric)
+        if repair:
+            user_prompt += "\n\nREPAIR: Your previous response was invalid. Output only the required JSON object."
+        payload = {
+            "model": role_model,
+            "messages": [
+                {"role": "system", "content": JUDGE_PROMPTS[role]},
+                {"role": "user", "content": user_prompt},
+            ],
+            "stream": False,
+            "options": _get_ollama_options(role),
+            "format": _get_judge_format(),
+            "timeout": http_timeout_seconds,
+        }
+        sem = _get_judge_http_semaphore()
+        sem_wait = max(3, int(cfg.get("judge_http_semaphore_wait_seconds", TIMEOUT_SECONDS)))
+        if not sem.acquire(timeout=sem_wait):
+            log("WARNING", f"Judge {role} semaphore wait timeout ({sem_wait}s); no verdict produced")
+            duration_ms = (time.perf_counter() - start) * 1000
+            _log_judge_result(role, role_model, duration_ms, "ERROR", 0.0)
+            out = _abstain("semaphore_timeout")
+            out.update({"role": role, "model": role_model})
+            return out
+
+        try:
+            resp = requests.post(
+                _ollama_chat_url(),
+                json=payload,
+                timeout=(10, TIMEOUT_SECONDS),
+            )
+            resp.raise_for_status()
+            response = resp.json()
+        except requests.Timeout:
+            log("WARNING", f"Judge {role} timed out after {TIMEOUT_SECONDS}s without a binary verdict")
+            duration_ms = (time.perf_counter() - start) * 1000
+            _log_judge_result(role, role_model, duration_ms, "ERROR", 0.0)
+            out = _abstain("timeout")
+            out.update({"role": role, "model": role_model})
+            return out
+        except Exception as ex:
+            log("WARNING", f"Judge {role} sync attempt failed: {ex}")
+            duration_ms = (time.perf_counter() - start) * 1000
+            _log_judge_result(role, role_model, duration_ms, "ERROR", 0.0)
+            out = _abstain("exception")
+            out.update({"role": role, "model": role_model})
+            return out
+        finally:
+            try:
+                sem.release()
+            except Exception:
+                pass
+
+        raw = response.get("message", {}).get("content", "")
+        obj = parse_judge_response(raw) if isinstance(raw, str) else raw
+        obj = _normalize_decision(obj)
+        obj = _fill_judge_defaults(obj)
+        duration_ms = (time.perf_counter() - start) * 1000
+        if _valid(obj):
+            obj["role"] = role
+            obj["model"] = role_model
+            log_post_inference_gpu_probe_once("judge_sync")
+            _log_judge_result(role, role_model, duration_ms, obj.get("decision", "ERROR"), obj.get("confidence", 0.0), obj)
+            _write_heartbeat_if_needed()
+            return obj
+        _log_judge_result(role, role_model, duration_ms, "ERROR", 0.0)
+        log("WARNING", f"Judge {role} invalid output category={_failure_category(raw)} raw={repr(raw)[:1000]}")
+        _write_heartbeat_if_needed()
+        out = _abstain("invalid_response")
+        out.update({"role": role, "model": role_model})
+        return out
+
+    last = None
+    for attempt in range(max(1, retries)):
+        last = _call_once(repair=attempt > 0)
+        if str(last.get("decision", "ERROR")).upper() in {"YES", "NO"}:
+            return last
+        log("WARNING", f"Judge {role} returned no binary verdict on attempt {attempt + 1}/{max(1, retries)}; retrying")
+    return last or _abstain("retries_exhausted")
+
+
+def run_judges_model_first(
+    answers: List[str],
+    question: str,
+    expected: str,
+    rubrics_by_answer: Dict[str, Dict[str, object]],
+    retries: int = 3,
+) -> Dict[str, List[Dict[str, object]]]:
+    """Run judges by model/role across all answers for one question."""
+    cfg = load_config()
+    roles = _selected_roles(cfg)
+    out: Dict[str, List[Dict[str, object]]] = {answer: [] for answer in answers}
+    adaptive_cfg = cfg.get("adaptive_math_jury", {})
+
+    log("INFO", f"[JUDGES] Model-first question batch START answers={len(answers)} roles={roles}")
+    if bool(adaptive_cfg.get("enabled", False)):
+        primary_roles = [
+            role for role in adaptive_cfg.get("primary_roles", ["semantic_judge", "factual_judge", "concept_judge"])
+            if role in roles
+        ]
+        adjudicator_role = str(adaptive_cfg.get("adjudicator_role", "strict_judge"))
+        threshold = float(adaptive_cfg.get("minimum_primary_confidence", 0.90))
+        ambiguity_words = tuple(str(x).casefold() for x in adaptive_cfg.get(
+            "ambiguity_markers", ["ambiguous", "uncertain", "unclear", "insufficient", "depends"]
+        ))
+
+        for role in primary_roles:
+            log("INFO", f"[JUDGES] Model-first role START role={role} answers={len(answers)}")
+            for answer in answers:
+                out[answer].append(call_judge_role_sync(role, answer, question, expected, rubrics_by_answer.get(answer, {}), retries))
+            log("INFO", f"[JUDGES] Model-first role DONE role={role}")
+
+        needs_adjudication: List[str] = []
+        for answer in answers:
+            judges = out[answer]
+            valid_primary = all(str(j.get("decision", "ERROR")) in {"YES", "NO"} for j in judges)
+            decisions = [str(j.get("decision", "ERROR")) for j in judges]
+            confidences = [float(j.get("confidence", 0.0) or 0.0) for j in judges]
+            ambiguous = any(
+                any(marker in str(j.get("reason_short", "")).casefold() for marker in ambiguity_words)
+                for j in judges
+            ) or any(j.get("requirements_missing") or j.get("contradictions") for j in judges)
+            if (
+                len(judges) != len(primary_roles)
+                or not valid_primary
+                or len(set(decisions)) != 1
+                or min(confidences, default=0.0) < threshold
+                or ambiguous
+            ):
+                needs_adjudication.append(answer)
+
+        if needs_adjudication and adjudicator_role in roles:
+            log("INFO", f"[JUDGES] Model-first adjudicator START role={adjudicator_role} answers={len(needs_adjudication)}")
+            for answer in needs_adjudication:
+                out[answer].append(call_judge_role_sync(adjudicator_role, answer, question, expected, rubrics_by_answer.get(answer, {}), retries))
+            log("INFO", f"[JUDGES] Model-first adjudicator DONE role={adjudicator_role}")
+        else:
+            log("INFO", "[JUDGES] Model-first adjudicator skipped")
+        return out
+
+    for role in roles:
+        log("INFO", f"[JUDGES] Model-first role START role={role} answers={len(answers)}")
+        for answer in answers:
+            out[answer].append(call_judge_role_sync(role, answer, question, expected, rubrics_by_answer.get(answer, {}), retries))
+        log("INFO", f"[JUDGES] Model-first role DONE role={role}")
+    return out
+
+
 async def run_all_judges_with_early_exit(
     answer: str,
     question: str,

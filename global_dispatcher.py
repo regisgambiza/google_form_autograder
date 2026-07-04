@@ -11,7 +11,7 @@ from typing import Dict, List, Optional
 
 from auth import get_service
 from deterministic_checks import run_deterministic_checks
-from evaluation_pipeline import EvaluationResult, evaluate_answer
+from evaluation_pipeline import EvaluationResult, evaluate_answer, evaluate_answers_model_first
 from evaluator_config import load_config
 from feedback import generate_form_feedback
 from form_context_builder import (
@@ -37,6 +37,16 @@ class Task:
     answer_idx: int
     answer: str
     expected: List[str]
+    queued_monotonic: float = field(default_factory=time.monotonic)
+
+
+@dataclass
+class QuestionBatch:
+    form_idx: int
+    form_id: str
+    form_title: str
+    question: Dict
+    tasks: List[Task]
     queued_monotonic: float = field(default_factory=time.monotonic)
 
 
@@ -73,6 +83,12 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
     fetch_workers = max(1, int(cfg.get("global_prefetch_workers", 4)))
     det_workers = max(1, int(cfg.get("deterministic_worker_count", 5)))
     ai_workers = max(1, int(cfg.get("ai_worker_count", 3)))
+    model_first_batching = (
+        bool(cfg.get("model_first_question_batching", False))
+        and bool(cfg.get("force_ai_jury_for_all_answers", False))
+    )
+    if model_first_batching:
+        ai_workers = 1
     max_latency = float(cfg.get("max_latency_per_answer_seconds", 30.0))
     patient_mode = bool(cfg.get("patient_ai_mode", False))
     read_rate_per_min = float(cfg.get("forms_expensive_reads_per_minute", 160))
@@ -96,6 +112,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
     # before consumers start.
     det_q: "queue.Queue[Optional[Task]]" = queue.Queue(maxsize=0 if staged_startup else queue_size)
     ai_q: "queue.Queue[Optional[Task]]" = queue.Queue(maxsize=max(200, int(queue_size * 0.5)))
+    ai_batch_q: "queue.Queue[Optional[QuestionBatch]]" = queue.Queue(maxsize=max(50, int(queue_size * 0.1)))
     result_q: "queue.Queue[Optional[tuple[Task, EvaluationResult]]]" = queue.Queue(maxsize=max(200, int(queue_size * 0.75)))
     apply_q: "queue.Queue[Optional[tuple[int, str]]]" = queue.Queue()
     stop = threading.Event()
@@ -180,7 +197,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
             "expected_tasks": expected,
             "q_fetch": fetch_out.qsize(),
             "q_det": det_q.qsize(),
-            "q_ai": ai_q.qsize(),
+            "q_ai": ai_batch_q.qsize() if model_first_batching else ai_q.qsize(),
             "q_ai_actual": ai_backlog,
             "q_result": result_q.qsize(),
             "wm_low": det_q_low_wm,
@@ -315,6 +332,8 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
             fetch_done = False
 
             def refill_det_queue(force: bool = False):
+                if model_first_batching:
+                    return
                 while pending_tasks and not stop.is_set():
                     task = pending_tasks.popleft()
                     # Prefer immediate burst enqueue; stop only when queue is truly full.
@@ -331,11 +350,11 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
 
             while not stop.is_set():
                 # Keep the deterministic queue full enough so downstream workers don't idle.
-                if pending_tasks and det_q.qsize() <= det_q_low_wm:
+                if (not model_first_batching) and pending_tasks and det_q.qsize() <= det_q_low_wm:
                     refill_det_queue(force=True)
 
                 if fetch_done:
-                    if pending_tasks:
+                    if (not model_first_batching) and pending_tasks:
                         refill_det_queue(force=True)
                         if pending_tasks:
                             time.sleep(0.02)
@@ -344,7 +363,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                 try:
                     item = fetch_out.get(timeout=0.5)
                 except queue.Empty:
-                    if pending_tasks:
+                    if (not model_first_batching) and pending_tasks:
                         refill_det_queue(force=True)
                     continue
                 if item is None:
@@ -402,24 +421,35 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                             f"unique={len(answers)} removed={removed_duplicates}",
                         )
                     forms_results[i]["counts"][qid] = len(answers)
+                    question_tasks: List[Task] = []
                     for ai, ans in enumerate(answers):
-                        pending_tasks.append(Task(i, form_id, title, q, ai, ans, expected))
+                        task = Task(i, form_id, title, q, ai, ans, expected)
+                        if model_first_batching:
+                            question_tasks.append(task)
+                        else:
+                            pending_tasks.append(task)
                         with metrics_lock:
                             progress["expected_tasks"] += 1
                             progress["pending_buffer"] = len(pending_tasks)
                             task_builder_metrics["built"] += 1
 
+                    if model_first_batching and question_tasks:
+                        ai_batch_q.put(QuestionBatch(i, form_id, title, q, question_tasks), timeout=2)
+                        with metrics_lock:
+                            progress["ai_backlog"] += len(question_tasks)
+                            task_builder_metrics["enqueued"] += len(question_tasks)
+
                     # Burst-fill up to high watermark while we build tasks.
                     refill_det_queue(force=False)
                     # If producer buffer gets very large, force-drain until queue blocks.
-                    if len(pending_tasks) >= det_q_high_wm:
+                    if (not model_first_batching) and len(pending_tasks) >= det_q_high_wm:
                         refill_det_queue(force=True)
                     with metrics_lock:
                         progress["pending_buffer"] = len(pending_tasks)
                     emit_task_builder_metric(event="form_chunk")
 
             # Drain any remaining buffered tasks before shutdown sentinels.
-            while pending_tasks and not stop.is_set():
+            while (not model_first_batching) and pending_tasks and not stop.is_set():
                 refill_det_queue(force=True)
                 with metrics_lock:
                     progress["pending_buffer"] = len(pending_tasks)
@@ -427,8 +457,9 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                     time.sleep(0.05)
                 emit_task_builder_metric(event="drain")
 
-            for _ in range(det_workers):
-                det_q.put(None, timeout=2)
+            if not model_first_batching:
+                for _ in range(det_workers):
+                    det_q.put(None, timeout=2)
             log("INFO", "[Worker: Producer] DONE task_builder")
             emit_task_builder_metric(event="complete", force=True)
             mark_build_done()
@@ -498,6 +529,59 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
             return payload
         raise payload
 
+    def evaluate_question_batch_bounded(batch: QuestionBatch) -> List[tuple[Task, EvaluationResult]]:
+        hard_timeout_s = max(
+            (float(cfg.get("answer_hard_timeout_seconds", 120.0)) * max(1, len(batch.tasks))),
+            float(cfg.get("question_batch_hard_timeout_seconds", 3600.0)),
+        )
+        result_holder: "queue.Queue[tuple[str, object]]" = queue.Queue(maxsize=1)
+
+        def _runner():
+            try:
+                results = evaluate_answers_model_first(
+                    [task.answer for task in batch.tasks],
+                    batch.tasks[0].expected if batch.tasks else [],
+                    get_question_context(batch.question),
+                )
+                result_holder.put(("ok", list(zip(batch.tasks, results))))
+            except Exception as ex:
+                result_holder.put(("error", ex))
+
+        worker = threading.Thread(target=_runner, name="evaluate-question-batch", daemon=True)
+        worker.start()
+        worker.join(timeout=hard_timeout_s)
+        if worker.is_alive():
+            log(
+                "ERROR",
+                f"[DISPATCH] question batch hard timeout after {hard_timeout_s:.1f}s "
+                f"form_id={batch.form_id} question_id={batch.question.get('questionId')} answers={len(batch.tasks)}",
+            )
+            failed_results = []
+            for task in batch.tasks:
+                failed_results.append((task, EvaluationResult(
+                    answer=task.answer,
+                    decision="NO",
+                    final_score=0.0,
+                    semantic_score=0.0,
+                    concept_score=0.0,
+                    factual_score=0.0,
+                    misconception_detected=False,
+                    misconception_description="question_batch_hard_timeout",
+                    missing_concepts=[],
+                    accepted_concepts=[],
+                    model_agreement=0.0,
+                    confidence=0.0,
+                    fast_path_used=False,
+                    latency_ms=hard_timeout_s * 1000.0,
+                    stage_reached="question_batch_hard_timeout",
+                )))
+            return failed_results
+
+        status, payload = result_holder.get()
+        if status == "ok":
+            return payload
+        raise payload
+
     def det_worker():
         log("INFO", "[Worker: Deterministic] START det_worker")
         force_ai_for_all = bool(cfg.get("force_ai_jury_for_all_answers", False))
@@ -539,6 +623,70 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
 
     def ai_worker():
         log("INFO", "[Worker: AI] START ai_worker")
+        if model_first_batching:
+            while not stop.is_set():
+                try:
+                    batch = ai_batch_q.get(timeout=1)
+                except queue.Empty:
+                    with metrics_lock:
+                        expected = int(progress.get("expected_tasks", 0))
+                        completed = int(progress.get("completed", 0))
+                        backlog = int(progress.get("ai_backlog", 0))
+                    if expected > 0 and completed >= expected and backlog <= 0:
+                        log("INFO", "[Worker: AI] DONE ai_worker (all batched work complete)")
+                        return
+                    continue
+                if batch is None:
+                    log("INFO", "[Worker: AI] DONE ai_worker")
+                    return
+
+                qid = batch.question.get("questionId")
+                queue_wait_s = max(0.0, time.monotonic() - batch.queued_monotonic)
+                update_runtime_state(
+                    active_task=f"f{batch.form_idx}:q{qid}:batch",
+                    active_form=batch.form_id,
+                    active_question=qid,
+                    active_model="model-first-jury",
+                    active_since=time.time(),
+                )
+                log(
+                    "INFO",
+                    f"[BATCH START] form_id={batch.form_id} question_id={qid} "
+                    f"answers={len(batch.tasks)} queue_wait_s={queue_wait_s:.2f}",
+                )
+                started = time.perf_counter()
+                try:
+                    batch_results = evaluate_question_batch_bounded(batch)
+                except Exception as exx:
+                    log("ERROR", f"[DISPATCH] batch ai worker error: {exx}")
+                    batch_results = []
+                    for task in batch.tasks:
+                        batch_results.append((task, EvaluationResult(
+                            answer=task.answer, decision="NO", final_score=0.0, semantic_score=0.0,
+                            concept_score=0.0, factual_score=0.0, misconception_detected=False,
+                            misconception_description="batch_worker_error", missing_concepts=[],
+                            accepted_concepts=[], model_agreement=0.0, confidence=0.0,
+                            fast_path_used=False, latency_ms=0.0, stage_reached="batch_worker_error",
+                        )))
+
+                for task, result in batch_results:
+                    try:
+                        result_q.put((task, result), timeout=2)
+                    except Exception:
+                        pass
+                with metrics_lock:
+                    counters["ai"] += len(batch_results)
+                    ai_progress["last_ai_done_ts"] = time.time()
+                    progress["ai_backlog"] = max(0, progress["ai_backlog"] - len(batch.tasks))
+                elapsed_s = time.perf_counter() - started
+                log(
+                    "INFO",
+                    f"[BATCH END] form_id={batch.form_id} question_id={qid} "
+                    f"answers={len(batch.tasks)} duration_s={elapsed_s:.2f}",
+                )
+                update_runtime_state(active_task="", active_model="idle", active_since=0.0)
+            return
+
         while not stop.is_set():
             try:
                 t = ai_q.get(timeout=1)
@@ -837,7 +985,9 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                 log(
                     "INFO",
                     f"[DISPATCH METRICS] fetch/s={f/dt:.2f} det/s={d/dt:.2f} ai/s={a/dt:.2f} apply/s={ap/dt:.2f} "
-                    f"q_fetch={fetch_out.qsize()} q_det={det_q.qsize()} q_ai={ai_q.qsize()} q_ai_actual={ai_backlog} q_result={result_q.qsize()} "
+                    f"q_fetch={fetch_out.qsize()} q_det={det_q.qsize()} "
+                    f"q_ai={(ai_batch_q.qsize() if model_first_batching else ai_q.qsize())} "
+                    f"q_ai_actual={ai_backlog} q_result={result_q.qsize()} "
                     f"pending={pb} wm={det_q_low_wm}/{det_q_high_wm} done={comp}/{exp}",
                 )
                 runtime = runtime_snapshot()
@@ -858,7 +1008,12 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                     f"apply={'idle' if apply_q.empty() else 'pending'} progress={comp}/{exp} q_ai={ai_backlog}"
                     f"{resource_text}",
                 )
-                snapshot = (fetch_out.qsize(), det_q.qsize(), ai_q.qsize(), result_q.qsize())
+                snapshot = (
+                    fetch_out.qsize(),
+                    det_q.qsize(),
+                    ai_batch_q.qsize() if model_first_batching else ai_q.qsize(),
+                    result_q.qsize(),
+                )
                 with metrics_lock:
                     if snapshot != queue_progress["last_snapshot"] or (f + d + a + ap) > 0:
                         queue_progress["last_any_work_ts"] = time.time()
@@ -879,11 +1034,12 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                 with metrics_lock:
                     ai_idle_for = time.time() - ai_progress["last_ai_done_ts"]
                     since_ai_warning = time.time() - ai_progress["last_warning_ts"]
-                if ai_q.qsize() > 0 and ai_idle_for > ai_stall_timeout_s and since_ai_warning >= 300.0:
+                active_ai_qsize = ai_batch_q.qsize() if model_first_batching else ai_q.qsize()
+                if active_ai_qsize > 0 and ai_idle_for > ai_stall_timeout_s and since_ai_warning >= 300.0:
                     log(
                         "WARNING",
                         f"[DISPATCH] AI queue has waited {ai_idle_for:.1f}s without a completed AI result "
-                        f"(q_ai={ai_q.qsize()} q_ai_actual={ai_backlog}); patient mode is still waiting without fallback",
+                        f"(q_ai={active_ai_qsize} q_ai_actual={ai_backlog}); patient mode is still waiting without fallback",
                     )
                     with metrics_lock:
                         ai_progress["last_warning_ts"] = time.time()
@@ -894,7 +1050,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
 
     tf = threading.Thread(target=fetch_stage, daemon=False)
     tb = threading.Thread(target=task_builder, daemon=False)
-    da = [threading.Thread(target=det_worker, daemon=False) for _ in range(det_workers)]
+    da = [] if model_first_batching else [threading.Thread(target=det_worker, daemon=False) for _ in range(det_workers)]
     aw = [threading.Thread(target=ai_worker, daemon=False) for _ in range(ai_workers)]
     ag = threading.Thread(target=result_aggregator, daemon=False)
     ap = threading.Thread(target=incremental_apply_worker, daemon=False)
@@ -951,7 +1107,10 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
     [t.join() for t in da]
     for _ in range(ai_workers):
         try:
-            ai_q.put(None, timeout=1)
+            if model_first_batching:
+                ai_batch_q.put(None, timeout=1)
+            else:
+                ai_q.put(None, timeout=1)
         except Exception:
             pass
     [t.join() for t in aw]

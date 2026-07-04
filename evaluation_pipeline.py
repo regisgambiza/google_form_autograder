@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Union
 
-from ai_judges import run_judges
+from ai_judges import run_judges, run_judges_model_first
 from consensus_engine import combine_scores
 from deterministic_checks import run_deterministic_checks
 from evaluator_config import load_config
@@ -114,7 +114,12 @@ def _chunked(items: List[str], size: int) -> List[List[str]]:
     return [items[i:i + size] for i in range(0, len(items), size)]
 
 
-def evaluate_answer(answer: str, expected: Union[str, List[str]], question: str) -> EvaluationResult:
+def evaluate_answer(
+    answer: str,
+    expected: Union[str, List[str]],
+    question: str,
+    precomputed_judges: Optional[List[Dict[str, object]]] = None,
+) -> EvaluationResult:
     global JURY_DISABLED_UNTIL_TS
     cfg = load_config()
     start = time.perf_counter()
@@ -125,7 +130,7 @@ def evaluate_answer(answer: str, expected: Union[str, List[str]], question: str)
     ck = _cache_key(answer, qh)
 
     with RESULT_CACHE_LOCK:
-        if ck in RESULT_CACHE:
+        if precomputed_judges is None and ck in RESULT_CACHE:
             r = RESULT_CACHE[ck]
             log("DEBUG", f"cache_hit=True stage={r.stage_reached}")
             return r
@@ -190,65 +195,67 @@ def evaluate_answer(answer: str, expected: Union[str, List[str]], question: str)
         with RESULT_CACHE_LOCK:
             RESULT_CACHE[ck] = res
         return res
-    jury_sem = _get_jury_semaphore()
-    sem_wait_timeout_s = max(5.0, float(cfg.get("jury_semaphore_acquire_timeout_seconds", max(30.0, float(cfg.get("max_latency_per_answer_seconds", 30.0))))))
-    acquired = jury_sem.acquire() if patient_mode else jury_sem.acquire(timeout=sem_wait_timeout_s)
-    if not acquired:
-        lat = (time.perf_counter() - start) * 1000.0
-        log("WARNING", f"[PIPELINE] jury semaphore wait timed out after {sem_wait_timeout_s:.1f}s; using embedding fallback")
-        decision = "REVIEW"
-        res = EvaluationResult(
-            answer,
-            decision,
-            emb_score,
-            float(concept["semantic_score"]),
-            float(concept["concept_score"]),
-            float(concept["semantic_score"]),
-            bool(misconception["misconception_detected"]),
-            str(misconception["misconception_description"]),
-            list(concept["missing_concepts"]),
-            list(concept["accepted_concepts"]),
-            0.0,
-            emb_score,
-            False,
-            lat,
-            "jury_wait_timeout",
-        )
-        with RESULT_CACHE_LOCK:
-            RESULT_CACHE[ck] = res
-        return res
+    judges = precomputed_judges
+    if judges is None:
+        jury_sem = _get_jury_semaphore()
+        sem_wait_timeout_s = max(5.0, float(cfg.get("jury_semaphore_acquire_timeout_seconds", max(30.0, float(cfg.get("max_latency_per_answer_seconds", 30.0))))))
+        acquired = jury_sem.acquire() if patient_mode else jury_sem.acquire(timeout=sem_wait_timeout_s)
+        if not acquired:
+            lat = (time.perf_counter() - start) * 1000.0
+            log("WARNING", f"[PIPELINE] jury semaphore wait timed out after {sem_wait_timeout_s:.1f}s; using embedding fallback")
+            decision = "REVIEW"
+            res = EvaluationResult(
+                answer,
+                decision,
+                emb_score,
+                float(concept["semantic_score"]),
+                float(concept["concept_score"]),
+                float(concept["semantic_score"]),
+                bool(misconception["misconception_detected"]),
+                str(misconception["misconception_description"]),
+                list(concept["missing_concepts"]),
+                list(concept["accepted_concepts"]),
+                0.0,
+                emb_score,
+                False,
+                lat,
+                "jury_wait_timeout",
+            )
+            with RESULT_CACHE_LOCK:
+                RESULT_CACHE[ck] = res
+            return res
 
-    def _run_judges_bounded():
-        holder = {}
-        err = {}
-        def _runner():
-            try:
-                holder["judges"] = run_judges(answer, question, exp_text, comparison_evidence, retries=int(cfg.get("retry_attempts", 3)))
-            except Exception as ex:
-                err["ex"] = ex
-        t = threading.Thread(target=_runner, daemon=True)
-        t.start()
-        hard_timeout_s = max(20, int(cfg.get("judge_total_hard_timeout_seconds", 70)))
-        t.join(timeout=hard_timeout_s)
-        if t.is_alive():
-            raise TimeoutError(f"jury hard timeout after {hard_timeout_s}s")
-        if "ex" in err:
-            raise err["ex"]
-        return holder.get("judges", [])
+        def _run_judges_bounded():
+            holder = {}
+            err = {}
+            def _runner():
+                try:
+                    holder["judges"] = run_judges(answer, question, exp_text, comparison_evidence, retries=int(cfg.get("retry_attempts", 3)))
+                except Exception as ex:
+                    err["ex"] = ex
+            t = threading.Thread(target=_runner, daemon=True)
+            t.start()
+            hard_timeout_s = max(20, int(cfg.get("judge_total_hard_timeout_seconds", 70)))
+            t.join(timeout=hard_timeout_s)
+            if t.is_alive():
+                raise TimeoutError(f"jury hard timeout after {hard_timeout_s}s")
+            if "ex" in err:
+                raise err["ex"]
+            return holder.get("judges", [])
 
-    try:
-        judges = _run_judges_bounded()
-    except Exception as jury_ex:
-        if circuit_enabled:
-            with JURY_CIRCUIT_LOCK:
-                JURY_DISABLED_UNTIL_TS = time.time() + max(60, int(cfg.get("jury_circuit_break_seconds", 600)))
-        log("ERROR", f"[PIPELINE] jury failed: {jury_ex}; routing answer to REVIEW")
-        judges = []
-    finally:
         try:
-            jury_sem.release()
-        except Exception:
-            pass
+            judges = _run_judges_bounded()
+        except Exception as jury_ex:
+            if circuit_enabled:
+                with JURY_CIRCUIT_LOCK:
+                    JURY_DISABLED_UNTIL_TS = time.time() + max(60, int(cfg.get("jury_circuit_break_seconds", 600)))
+            log("ERROR", f"[PIPELINE] jury failed: {jury_ex}; routing answer to REVIEW")
+            judges = []
+        finally:
+            try:
+                jury_sem.release()
+            except Exception:
+                pass
     active = [j for j in judges if j.get("decision") in {"YES", "NO"}]
     policy_evidence = {}
     if not active:
@@ -370,3 +377,47 @@ def evaluate_answers(answers: List[str], expected: Union[str, List[str]], questi
             r = rep_results[rep]
             out.append(EvaluationResult(original, r.decision, r.final_score, r.semantic_score, r.concept_score, r.factual_score, r.misconception_detected, r.misconception_description, r.missing_concepts, r.accepted_concepts, r.model_agreement, r.confidence, r.fast_path_used, r.latency_ms, r.stage_reached, dict(r.evidence)))
     return out
+
+
+def evaluate_answers_model_first(answers: List[str], expected: Union[str, List[str]], question: str) -> List[EvaluationResult]:
+    """Evaluate one question's answers by running each judge role across the whole answer set."""
+    if not answers:
+        return []
+    cfg = load_config()
+    exp_text = _expected_text(expected)
+    rubrics_by_answer: Dict[str, Dict[str, object]] = {}
+    cached: Dict[str, EvaluationResult] = {}
+    uncached: List[str] = []
+
+    for answer in answers:
+        qh = _qhash(question, expected)
+        ck = _cache_key(answer, qh)
+        with RESULT_CACHE_LOCK:
+            existing = RESULT_CACHE.get(ck)
+        if existing is not None:
+            cached[answer] = existing
+            continue
+        domain = validate_answer_domain(answer, expected if isinstance(expected, list) else [expected], question)
+        rubrics_by_answer[answer] = {
+            "teacher_answer_is_authoritative": True,
+            "deterministic_comparison": domain.to_dict(),
+        }
+        uncached.append(answer)
+
+    judged: Dict[str, List[Dict[str, object]]] = {}
+    if uncached:
+        judged = run_judges_model_first(
+            uncached,
+            question,
+            exp_text,
+            rubrics_by_answer,
+            retries=int(cfg.get("retry_attempts", 3)),
+        )
+
+    results: List[EvaluationResult] = []
+    for answer in answers:
+        if answer in cached:
+            results.append(cached[answer])
+        else:
+            results.append(evaluate_answer(answer, expected, question, precomputed_judges=judged.get(answer, [])))
+    return results
