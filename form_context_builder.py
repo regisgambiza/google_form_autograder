@@ -283,6 +283,9 @@ def build_form_context(
         expected = expected_by_item_id.get(q.get("itemId"), [])
         teacher_expected = expected[:1]
         enriched = _compose_question_context(form_title, section, q, nearby, teacher_expected)
+        # Default effective_expected preserves all provided variants; validation may replace it.
+        effective_expected = list(expected)
+        expected_was_replaced = False
         questions[qid] = {
             "question_id": qid,
             "item_id": q.get("itemId"),
@@ -297,7 +300,30 @@ def build_form_context(
             "vision_status": "ok" if section.vision_notes else "not_found",
             "mapped_textbook_question": section.question_map.get(_normalize_question_label(q.get("title")), ""),
             "teacher_answer": teacher_expected,
+            "effective_expected": effective_expected,
+            "expected_was_replaced_for_grading": expected_was_replaced,
         }
+        # Optionally validate the first teacher answer using the expected-answer validator
+        try:
+            cfg = load_config()
+            if bool(cfg.get("validate_expected_answers", False)):
+                try:
+                    import expected_answer_validator as _eav
+
+                    validation = _eav.validate_expected_answer(enriched, teacher_expected)
+                    questions[qid]["expected_validation"] = validation
+                    # If configured to use validated expected for grading, apply suggested answers when validator recommends replacement
+                    if bool(cfg.get("use_validated_expected_for_grading", False)) and validation and not validation.get("valid", True):
+                        conf = float(validation.get("confidence", 0.0) or 0.0)
+                        min_conf = float(cfg.get("expected_answer_validator_min_confidence", 0.85))
+                        if conf >= min_conf and validation.get("suggested_answers"):
+                            questions[qid]["effective_expected"] = list(validation.get("suggested_answers"))
+                            questions[qid]["expected_was_replaced_for_grading"] = True
+                except Exception:
+                    # Non-fatal: skip validation if validator is unavailable
+                    pass
+        except Exception:
+            pass
 
     out = {
         "enabled": True,
@@ -327,6 +353,8 @@ def apply_question_context(structure: List[Dict], context: Dict) -> List[Dict]:
             q2["has_vision_context"] = bool(qctx.get("has_vision_context"))
             q2["mapped_textbook_question"] = qctx.get("mapped_textbook_question", "")
             q2["teacher_answer"] = qctx.get("teacher_answer", [])[:1]
+            q2["effective_expected"] = qctx.get("effective_expected", [])
+            q2["expected_was_replaced_for_grading"] = qctx.get("expected_was_replaced_for_grading", False)
         enriched_structure.append(q2)
     return enriched_structure
 
@@ -342,4 +370,11 @@ def get_effective_expected(question: Dict, fallback_expected: Optional[List[str]
     """
     values = [str(x) for x in (fallback_expected or []) if _clean(x)]
     return values[:1]
+
+
+def should_block_answer_updates(question: Dict) -> bool:
+    """Return True when answer updates should be blocked due to a validated replacement."""
+    if not isinstance(question, dict):
+        return False
+    return bool(question.get("expected_was_replaced_for_grading", False))
 

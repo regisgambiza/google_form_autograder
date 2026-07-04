@@ -366,10 +366,10 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                         bucket = answers_by_qid.setdefault(resp_qid, [])
                         for a in qa.get("textAnswers", {}).get("answers", []):
                             if a.get("value") is not None:
-                                bucket.append(str(a["value"]).strip())
+                                bucket.append(str(a["value"]))
                         for a in qa.get("choiceAnswers", {}).get("answers", []):
                             if a.get("value") is not None:
-                                bucket.append(str(a["value"]).strip())
+                                bucket.append(str(a["value"]))
 
                 expected_by_item_id: Dict[str, List[str]] = {}
                 try:
@@ -660,13 +660,14 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                     progress["review_answers"] += 1
                 elif r.decision == "NO":
                     progress["rejected"] += 1
-                if r.decision in {"REVIEW", "NO"} or accepted_variant:
-                    review_question_ids.add(qid)
                 completed_now = int(progress["completed"])
                 expected_now = int(progress["expected_tasks"])
                 accepted_now = int(progress["accepted"])
                 review_answers_now = int(progress["review_answers"])
                 rejected_now = int(progress["rejected"])
+                # The GUI badge counts only persisted, clickable REVIEW
+                # questions. Rejections and accepted audit variants do not
+                # belong in "Needs review".
                 review_now = len(review_question_ids)
                 progress["last_progress_ts"] = time.time()
             # Machine-readable real-time progress consumed by GraderThread.
@@ -779,6 +780,21 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                         "route": "grading_review",
                         "evidence": reviews,
                     })
+                if approval_answers:
+                    with metrics_lock:
+                        review_question_ids.add((fi, qid))
+                        completed_metric = int(progress["completed"])
+                        expected_metric = int(progress["expected_tasks"])
+                        accepted_metric = int(progress["accepted"])
+                        rejected_metric = int(progress["rejected"])
+                        review_metric = len(review_question_ids)
+                    # Refresh the GUI only after the review queue is durable,
+                    # so clicking the badge cannot lead to an empty screen.
+                    print(
+                        f"FormMetrics: {completed_metric}/{expected_metric} {accepted_metric} "
+                        f"{review_metric} {int(time.time() - form_started_ts)} {rejected_metric}",
+                        flush=True,
+                    )
                 if categorized_candidates and question["type"] in {"SHORT_ANSWER", "LONG_ANSWER"}:
                     update_correct_answers(
                         service, form_id, question["itemId"], categorized_candidates, question["index"], trusted_expected,

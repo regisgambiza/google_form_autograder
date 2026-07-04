@@ -139,15 +139,19 @@ def compare_formatting(candidate: object, expected: object, question: str = "") 
     ctext, etext = normalize_presentation(candidate), normalize_presentation(expected)
     cq, eq = _parse_quantity(candidate), _parse_quantity(expected)
     if cq and eq:
-        cvalue, cunit, cplaces, _ = cq
+        cvalue, cunit, cplaces, cunit_parenthetical = cq
         evalue, eunit, eplaces, eunit_parenthetical = eq
         # Units and written precision are presentation details. Missing units,
         # harmless extra units, and equivalent numeric formatting are accepted;
         # only two explicit incompatible units remain a substantive mismatch.
         units_compatible = not (cunit and eunit and cunit != eunit)
-        required_places = None
-        precision_ok = True
-        equivalent = cvalue == evalue and units_compatible and precision_ok
+        # Required decimal places may be specified in the question text.
+        required_places = _required_places(question)
+        if required_places is None:
+            # If teacher used parenthesized unit, prefer exact decimal places of expected
+            required_places = eplaces if eunit_parenthetical and eplaces is not None else None
+        precision_ok = True if required_places is None else (cplaces == required_places)
+        equivalent = (cvalue == evalue) and units_compatible and precision_ok
         return FormatEquivalence(
             equivalent,
             "numeric_unit_format" if equivalent else "numeric_difference",

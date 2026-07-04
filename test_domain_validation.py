@@ -58,6 +58,13 @@ def test_mark_scheme_ranges_and_explicit_alternatives_are_supported():
     assert check("64", expected, "Work out the ribbon length").status == "CONTRADICTED"
 
 
+def test_symbolic_or_alternatives_do_not_accept_an_extracted_number():
+    result = check("20", "m + 20 or 20 + m", "the cost of a television")
+
+    assert result.status != "PROVEN"
+    assert result.reason != "value is within an accepted range/alternative"
+
+
 def test_required_rounding_and_parenthesized_units_are_supported():
     question = "Find the diameter. Give your answer to 1 decimal place."
     assert check("50.9 cm", "50.9 (cm)", question).status == "PROVEN"

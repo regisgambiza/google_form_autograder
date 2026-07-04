@@ -1,4 +1,5 @@
 import evaluation_pipeline as pipeline
+from domain_validation import DomainValidation
 
 
 def test_exact_answer_still_reaches_full_ai_jury_when_forced(monkeypatch):
@@ -30,14 +31,6 @@ def test_exact_answer_still_reaches_full_ai_jury_when_forced(monkeypatch):
     }
     calls = []
     monkeypatch.setattr(pipeline, "load_config", lambda: cfg)
-    monkeypatch.setattr(pipeline, "get_or_generate_rubric", lambda *_a, **_k: {})
-    monkeypatch.setattr(pipeline, "score_concepts", lambda *_a, **_k: {
-        "embedding_score": 0.0, "semantic_score": 0.0, "concept_score": 0.0,
-        "missing_concepts": [], "accepted_concepts": [],
-    })
-    monkeypatch.setattr(pipeline, "detect_misconception", lambda *_a, **_k: {
-        "misconception_detected": False, "misconception_description": "",
-    })
     monkeypatch.setattr(pipeline, "combine_scores", lambda *_a, **_k: 0.99)
     monkeypatch.setattr(pipeline, "record_decision", lambda *_a, **_k: None)
 
@@ -73,5 +66,21 @@ def test_exact_answer_still_reaches_full_ai_jury_when_forced(monkeypatch):
         "Find the diameter. Give your answer to 1 decimal place.",
     )
 
-    assert formatted.decision == "YES"
-    assert formatted.evidence["policy"]["policy_reason"] == "proven_formatting_equivalence"
+    assert formatted.decision == "NO"
+
+    # Even a faulty deterministic parser claiming PROVEN cannot overturn the jury.
+    monkeypatch.setattr(
+        pipeline,
+        "validate_answer_domain",
+        lambda *_a, **_k: DomainValidation(
+            "PROVEN", "numeric_range", 1.0,
+            "incorrect deterministic proof", True, {"fault_injected": True},
+        ),
+    )
+    pipeline.RESULT_CACHE.clear()
+    contradicted = pipeline.evaluate_answer(
+        "20", ["m + 20 or 20 + m"], "the cost of a television"
+    )
+
+    assert contradicted.decision == "NO"
+    assert contradicted.evidence["policy"]["deterministic_evidence_non_authoritative"]["status"] == "PROVEN"

@@ -1180,6 +1180,16 @@ class FormManager(QMainWindow):
         )
         form.addRow("Cache Reuse:", ignore_cache_checkbox)
 
+        truncate_checkbox = QCheckBox(
+            "Truncate answer variants before grading (keep only teacher's first answer)", dialog
+        )
+        truncate_checkbox.setChecked(bool(cfg.get("truncate_answers_before_grading", False)))
+        truncate_checkbox.setToolTip(
+            "DESTRUCTIVE: When enabled, before grading each targeted form the system will remove all answer-key variants\n"
+            "leaving only the first teacher-provided answer. Backups are created automatically before changes."
+        )
+        form.addRow("Truncate Answers:", truncate_checkbox)
+
         force_ai_checkbox = QCheckBox("Send every answer through the full AI jury", dialog)
         force_ai_checkbox.setChecked(bool(cfg.get("force_ai_jury_for_all_answers", True)))
         force_ai_checkbox.setToolTip(
@@ -1282,6 +1292,7 @@ class FormManager(QMainWindow):
             config_data["force_ai_jury_for_all_answers"] = force_ai_checkbox.isChecked()
             config_data["patient_ai_mode"] = patient_ai_checkbox.isChecked()
             config_data["enable_jury_circuit_breaker"] = not patient_ai_checkbox.isChecked()
+            config_data["truncate_answers_before_grading"] = truncate_checkbox.isChecked()
             config_data["decision_audit_path"] = audit_path_edit.text().strip() or "logs/grading_decisions.jsonl"
             config_data["teacher_benchmark_path"] = benchmark_path_edit.text().strip() or "teacher_benchmark.jsonl"
 
@@ -1312,6 +1323,11 @@ class FormManager(QMainWindow):
             preset = EXECUTION_MODE_PRESETS.get(selected_mode, EXECUTION_MODE_PRESETS[DEFAULT_EXECUTION_MODE])
             for key, value in preset.items():
                 config_data[key] = value
+            # Keep Ollama fully serial so one model at a time owns the GPU.
+            config_data["max_concurrent_judge_http"] = 1
+            config_data["max_concurrent_jury_answers"] = 1
+            config_data["enable_async_judges"] = False
+            config_data["sync_judge_parallelism"] = 1
             # User-facing accuracy controls override the preset defaults.
             config_data["accuracy_policy"]["minimum_judge_confidence"] = float(minimum_judge_confidence_spin.value())
             config_data["accuracy_policy"]["require_distinct_models"] = distinct_models_checkbox.isChecked()
@@ -2475,14 +2491,16 @@ class FormManager(QMainWindow):
         so the main window immediately reflects the changed review queue size.
         """
         try:
-            fid = form_id or getattr(self, "current_form_url", None)
+            current_url = getattr(self, "current_form_url", None)
+            current_fid = self.extract_form_id(current_url) if current_url else None
+            fid = form_id or current_fid
             if not fid:
                 return
             pending = load_pending_review_records(fid) or {}
             # pending is a mapping item_id -> list[records]
             review_count = sum(len(v) for v in pending.values())
             # If the current form matches, update the metrics display
-            if getattr(self, "current_form_url", None) == fid:
+            if current_fid == fid:
                 try:
                     cur = int(self.detail_progress.text().split("%", 1)[0].strip().rstrip('%'))
                 except Exception:

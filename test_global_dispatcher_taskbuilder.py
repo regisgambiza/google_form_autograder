@@ -10,6 +10,14 @@ def test_exact_duplicates_are_removed_after_fetch_in_first_seen_order():
     assert gd.remove_exact_duplicate_answers(answers) == ["7", "9 - 2 = 7", " 7 "]
 
 
+def test_strict_dedup_keeps_spacing_case_and_symbol_variants_separate():
+    answers = ["5x - 5", "5x-5", "5x - 5 ", "5X - 5", "5x − 5", "5x - 5"]
+
+    assert gd.remove_exact_duplicate_answers(answers) == [
+        "5x - 5", "5x-5", "5x - 5 ", "5X - 5", "5x − 5"
+    ]
+
+
 class _FakeReq:
     def __init__(self, payload):
         self._payload = payload
@@ -135,7 +143,8 @@ def test_task_builder_supplies_work_without_starving(monkeypatch, capsys):
         if line.startswith("FormMetrics:")
     ]
     assert metric_lines
-    assert metric_lines[-1].split()[1:4] == ["480/480", "480", "4"]
+    # Accepted answer-key audit variants are not "Needs review" questions.
+    assert metric_lines[-1].split()[1:4] == ["480/480", "480", "0"]
     review_ready = [i for i, line in enumerate(emitted_lines) if line.startswith("QuestionAvailableForReview:")]
     assert len(review_ready) == 4
     assert review_ready[0] < max(i for i, line in enumerate(emitted_lines) if line == "FormProgress: 480/480")

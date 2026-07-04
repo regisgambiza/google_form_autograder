@@ -340,7 +340,7 @@ def _get_ollama_options(role: str) -> Dict[str, object]:
         predict_key="judge_num_predict",
         default_predict=256,
     )
-    out["temperature"] = 0.1
+    out["temperature"] = 0.0
     out["top_p"] = 0.9
     return out
 

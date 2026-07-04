@@ -134,8 +134,8 @@
         "embedding": 0.1
     },
     "ollama_options": {
-        "judge_num_ctx": 8192,
-        "judge_num_predict": 2048,
+        "judge_num_ctx": 2048,
+        "judge_num_predict": 512,
         "embedding_num_ctx": 1024,
         "fallback_num_ctx": 2048,
         "fallback_num_predict": 256,
@@ -178,5 +178,6 @@
         "concept_judge",
         "strict_judge"
     ],
+    "truncate_answers_before_grading": false,
     "rubric_timeout_seconds": 3600
 }

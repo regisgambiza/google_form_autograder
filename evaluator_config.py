@@ -50,8 +50,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "dispatcher_stall_timeout_seconds": 7200,
     "embedding_timeout_seconds": 1800,
     "ollama_options": {
-        "judge_num_ctx": 8192,
-        "judge_num_predict": 2048,
+        "judge_num_ctx": 2048,
+        "judge_num_predict": 512,
         "embedding_num_ctx": 1024,
         "fallback_num_ctx": 2048,
         "fallback_num_predict": 256,

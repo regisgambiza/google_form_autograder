@@ -17,6 +17,8 @@ from normalization import normalize, semantic_deduplicate
 from accuracy_policy import adaptive_math_jury_decision, conservative_jury_decision
 from decision_audit import record_decision
 from domain_validation import validate_answer_domain
+from semantic_scoring import score_concepts
+from misconception_detector import detect_misconception
 
 
 def _write_heartbeat_if_needed(hang_stage: str = "unknown"):
@@ -85,6 +87,11 @@ def _expected_text(expected: Union[str, List[str]]) -> str:
 
 def _qhash(question: str, expected: Union[str, List[str]]) -> str:
     return hashlib.sha256(f"{question}:{_expected_text(expected)}".encode()).hexdigest()
+
+
+def get_or_generate_rubric(*args, **kwargs) -> Dict:
+    """Backward-compatible stub: return an empty rubric structure when not present."""
+    return {}
 
 
 def _cache_key(answer: str, question_hash: str) -> str:
@@ -287,9 +294,10 @@ def evaluate_answer(answer: str, expected: Union[str, List[str]], question: str)
                 required_roles=accuracy_cfg.get("required_accept_roles", ["semantic_judge", "factual_judge", "strict_judge"]),
                 require_distinct_models=bool(accuracy_cfg.get("require_distinct_models", True)),
             )
-        if domain.status == "PROVEN":
-            decision, confidence, reason = "YES", 1.0, "proven_teacher_answer_equivalence"
-            policy_evidence["teacher_answer_equivalence_override"] = domain.to_dict()
+        # Domain/deterministic checks are diagnostic evidence only. The AI
+        # jury is authoritative and must never be changed from NO/REVIEW to
+        # YES by a parser result, even when that result claims PROVEN.
+        policy_evidence["deterministic_evidence_non_authoritative"] = domain.to_dict()
         stage = "jury" if decision in {"YES", "NO"} else "review"
         policy_evidence["policy_reason"] = reason
         factual = float(agg["factual_accuracy"])

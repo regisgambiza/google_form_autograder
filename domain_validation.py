@@ -105,6 +105,11 @@ def _allowed_numeric_spec(expected: str) -> Dict[str, object]:
     """Extract explicit ranges and alternatives from teacher mark-scheme prose."""
     text = _clean(expected).casefold()
     spec: Dict[str, object] = {"range": None, "alternatives": []}
+    # Do not mine standalone numbers from symbolic alternatives such as
+    # "m + 20 or 20 + m". Those are complete expressions, not the numeric
+    # alternative 20.
+    if re.search(r"(?:\b[a-z]\b\s*[+\-*/^]|[+\-*/^]\s*\b[a-z]\b)", text):
+        return spec
     match = re.search(rf"\bbetween\s+({_NUMBER_TOKEN})\s+and\s+({_NUMBER_TOKEN})", text)
     if not match:
         match = re.search(rf"({_NUMBER_TOKEN})\s*(?:to|\.\.|-)\s*({_NUMBER_TOKEN})", text)
@@ -260,6 +265,14 @@ def validate_answer_domain(answer: str, expected_values: Sequence[str], question
         if cu and eu and cu != eu:
             return DomainValidation("CONTRADICTED", "numeric", 1.0, "unit mismatch", False, {**base, "candidate_unit": cu, "canonical_unit": eu})
         if cnum == enum:
+            # Enforce required decimal places when the question requests rounding
+            # or when the expected uses parenthesized unit notation to indicate precision.
+            required_places = _required_decimal_places(question)
+            if required_places is None and '(' in expected:
+                required_places = _decimal_places(expected)
+            cand_places = _decimal_places(candidate)
+            if required_places is not None and cand_places is not None and cand_places != required_places:
+                return DomainValidation("CONTRADICTED", "numeric", 1.0, "required precision mismatch", False, {**base, "required_decimal_places": required_places, "candidate_decimal_places": cand_places})
             return DomainValidation("PROVEN", "numeric", 1.0, "exact numeric equivalence", True, base)
         return DomainValidation("CONTRADICTED", "numeric", 1.0, "numeric value contradicts canonical", False, base)
 
@@ -299,6 +312,15 @@ def validate_answer_domain(answer: str, expected_values: Sequence[str], question
                 False, {**base, "equations": candidate_equations},
             )
         equivalent = _equivalent_math(candidate, expected)
+        # If the question explicitly requested a factorised form, require the candidate
+        # to also be factorised (presence of parentheses or explicit multiplication).
+        qtext = question.lower() if question else ""
+        wants_factor = bool(re.search(r"\bfactor\w*\b", qtext))
+        expected_factorised = bool(re.search(r"\(|\*", expected))
+        candidate_factorised = bool(re.search(r"\(|\*", candidate))
+        if wants_factor and expected_factorised and not candidate_factorised:
+            return DomainValidation("CONTRADICTED", "mathematics", 0.99, "factorised form required", False, base)
+
         if equivalent is False:
             return DomainValidation("CONTRADICTED", "mathematics", 0.99, "mathematical contradiction or answer-type mismatch", False, base)
         if equivalent is None:
