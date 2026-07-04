@@ -66,9 +66,10 @@ def test_queue_search_and_status_filter_hide_nonmatches():
 
 def test_live_metric_cards_show_accept_review_and_elapsed():
     window = FormManager()
-    window.update_form_metrics(207, 462, 180, 6, 3723)
+    window.update_form_metrics(207, 462, 180, 6, 3723, 21)
     assert window.metric_responses.text() == "207 / 462"
     assert window.metric_accepted.text() == "180"
+    assert window.metric_rejected.text() == "21"
     assert ">6<" in window.metric_review.text()
     assert window.metric_elapsed.text() == "01:02:03"
 

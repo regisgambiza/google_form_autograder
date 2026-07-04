@@ -13,14 +13,15 @@ class GraderThread(QThread):
     finished = pyqtSignal(bool, str)
     progress = pyqtSignal(int, int)
     overall_progress = pyqtSignal(int, int)
-    form_metrics = pyqtSignal(int, int, int, int, int)
+    form_metrics = pyqtSignal(int, int, int, int, int, int)
     debug_message = pyqtSignal(str)
     current_form = pyqtSignal(str)
     finished_form = pyqtSignal(str)
 
-    def __init__(self, grade_recent_only=False):
+    def __init__(self, grade_recent_only=False, form_urls=None):
         super().__init__()
         self.grade_recent_only = grade_recent_only
+        self.form_urls = form_urls or []
         self.process = None
         self._stop_requested = False
         self._gui_log_fh = None
@@ -209,8 +210,12 @@ class GraderThread(QThread):
             if os.name == "nt":
                 creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
 
+            args = [sys.executable, main_path]
+            if self.form_urls:
+                args.extend(self.form_urls)
+
             self.process = subprocess.Popen(
-                [sys.executable, main_path],
+                args,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -279,7 +284,10 @@ class GraderThread(QThread):
                         payload = ls.split(":", 1)[1].strip().split()
                         completed, total = map(int, payload[0].split("/", 1))
                         accepted, review_questions, elapsed = map(int, payload[1:4])
-                        self.form_metrics.emit(completed, total, accepted, review_questions, elapsed)
+                        rejected = 0
+                        if len(payload) >= 5:
+                            rejected = int(payload[4])
+                        self.form_metrics.emit(completed, total, accepted, review_questions, elapsed, rejected)
                     except Exception:
                         pass
 

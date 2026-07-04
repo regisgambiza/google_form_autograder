@@ -552,6 +552,13 @@ class AnswerKeyDashboard(QDialog):
     def _on_save_finished(self, progress, finding, benchmark_examples=None):
         progress.close()
         resolve_reviews(self.form_id, finding.item_id, "approved")
+        # Notify parent/main window to refresh displayed review counts
+        try:
+            parent = self.parent()
+            if parent and hasattr(parent, "refresh_review_counts"):
+                parent.refresh_review_counts(self.form_id)
+        except Exception:
+            pass
         benchmark_path = str(load_config().get("teacher_benchmark_path", "teacher_benchmark.jsonl"))
         added = save_teacher_labels(benchmark_path, benchmark_examples or [])
         report = summarize_recorded_decisions(benchmark_path)

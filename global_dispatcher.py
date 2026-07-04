@@ -674,7 +674,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
             # so the denominator is stable and the percentage cannot move backwards.
             print(f"FormProgress: {completed_now}/{expected_now}", flush=True)
             print(
-                f"FormMetrics: {completed_now}/{expected_now} {accepted_now} {review_now} {int(time.time() - form_started_ts)}",
+                f"FormMetrics: {completed_now}/{expected_now} {accepted_now} {review_now} {int(time.time() - form_started_ts)} {rejected_now}",
                 flush=True,
             )
             evidence = r.evidence or {}
@@ -813,8 +813,9 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                     counters["fetch"] = counters["det"] = counters["ai"] = counters["apply"] = 0
                     exp = progress["expected_tasks"]; comp = progress["completed"]; lp = progress["last_progress_ts"]; pb = progress["pending_buffer"]; ai_backlog = progress["ai_backlog"]
                     accepted_total = int(progress["accepted"]); review_total = len(review_question_ids)
+                    rejected_total = int(progress["rejected"])
                 print(
-                    f"FormMetrics: {comp}/{exp} {accepted_total} {review_total} {int(time.time() - form_started_ts)}",
+                    f"FormMetrics: {comp}/{exp} {accepted_total} {review_total} {int(time.time() - form_started_ts)} {rejected_total}",
                     flush=True,
                 )
                 log(

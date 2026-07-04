@@ -105,6 +105,12 @@ def extract_form_id(form_url: str) -> str:
 
 
 def _load_form_urls() -> List[str]:
+    # Check if form URLs are passed as command-line arguments
+    if len(sys.argv) > 1:
+        cmd_urls = [arg.strip() for arg in sys.argv[1:] if arg.strip().startswith("http")]
+        if cmd_urls:
+            return list(dict.fromkeys(cmd_urls))
+
     try:
         with open("forms_to_grade.json", "r", encoding="utf-8") as f:
             data = json.load(f)

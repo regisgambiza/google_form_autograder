@@ -35,6 +35,8 @@ from scheduler import scheduler as auto_scheduler
 from answer_key_dashboard import AnswerKeyDashboard
 from app_theme import apply_application_theme, apply_widget_theme
 from cache_manager import clear_grading_cache
+from answer_key_manager import load_pending_review_records, keep_teacher_answers_only
+import re
 
 BANGKOK_TZ = timezone(timedelta(hours=7))
 
@@ -618,6 +620,7 @@ class FormManager(QMainWindow):
         metrics_row = QHBoxLayout()
         self.metric_responses = QLabel("0 / 0")
         self.metric_accepted = QLabel("0")
+        self.metric_rejected = QLabel("0")
         self.metric_review = QLabel('<a href="review">0</a>')
         self.metric_elapsed = QLabel("00:00")
         self.metric_review.setTextFormat(Qt.RichText)
@@ -626,9 +629,10 @@ class FormManager(QMainWindow):
         self.metric_review.linkActivated.connect(self.open_current_form_review)
         for metric_name, metric_value in (
             ("Responses", self.metric_responses),
-            ("Auto accepted", self.metric_accepted),
+            ("Accepted", self.metric_accepted),
+            ("Rejected", self.metric_rejected),
             ("Needs review", self.metric_review),
-            ("Elapsed", self.metric_elapsed),
+            ("Elapsed time", self.metric_elapsed),
         ):
             metric = QFrame()
             metric.setObjectName("Metric")
@@ -787,6 +791,37 @@ class FormManager(QMainWindow):
         self.detail_progress_value.setText(f"{progress}%")
         self.pipeline_updated.setText(meta.get("finished_at") or meta.get("started_at") or "Ready")
         self._update_pipeline_rows_for_status(status)
+
+        # Update metrics cards
+        completed = meta.get("completed", 0)
+        total = meta.get("total", 0)
+        accepted = meta.get("accepted", 0)
+        rejected = meta.get("rejected", 0)
+        review_questions = meta.get("review_questions", 0)
+        elapsed_seconds = meta.get("elapsed", 0)
+
+        # For inactive forms, dynamically load the most up-to-date review count from disk
+        form_id = self.extract_form_id(meta.get("url"))
+        if form_id:
+            try:
+                from answer_key_manager import load_pending_reviews
+                pending = load_pending_reviews(form_id)
+                review_questions = len(pending)
+            except Exception:
+                pass
+
+        self.metric_responses.setText(f"{completed} / {total}")
+        self.metric_accepted.setText(str(accepted))
+        self.metric_rejected.setText(str(rejected))
+        self.metric_review.setText(f'<a href="review">{review_questions}</a>')
+        if isinstance(elapsed_seconds, str):
+            self.metric_elapsed.setText(elapsed_seconds)
+        else:
+            hours, remainder = divmod(max(0, int(elapsed_seconds)), 3600)
+            minutes, seconds = divmod(remainder, 60)
+            self.metric_elapsed.setText(
+                f"{hours:02d}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes:02d}:{seconds:02d}"
+            )
 
     def _update_pipeline_rows_for_status(self, status):
         order = ["load", "validate", "evaluate", "apply"]
@@ -1624,6 +1659,9 @@ class FormManager(QMainWindow):
             QTimer.singleShot(0, dialog.scan)
         dialog.exec_()
 
+        if self.form_list.currentItem():
+            self._on_form_selection_changed(self.form_list.currentItem())
+
     def open_current_form_review(self, _link="review"):
         target = self.current_form_url
         if not target and self.form_list.currentItem():
@@ -1653,25 +1691,68 @@ class FormManager(QMainWindow):
         layout.addWidget(input_field)
 
         button_layout = QHBoxLayout()
-        ok_button = QPushButton("Scan and Grade")
+        add_button = QPushButton("Scan and Add to Queue")
+        grade_button = QPushButton("Scan and Grade")
         cancel_button = QPushButton("Cancel")
 
-        ok_button.clicked.connect(dialog.accept)
-        cancel_button.clicked.connect(dialog.reject)
-
-        button_layout.addWidget(ok_button)
+        button_layout.addWidget(add_button)
+        button_layout.addWidget(grade_button)
         button_layout.addWidget(cancel_button)
         layout.addLayout(button_layout)
 
         dialog.setLayout(layout)
 
+        action = [None]
+
+        def on_add():
+            action[0] = "add"
+            dialog.accept()
+
+        def on_grade():
+            action[0] = "grade"
+            dialog.accept()
+
+        add_button.clicked.connect(on_add)
+        grade_button.clicked.connect(on_grade)
+        cancel_button.clicked.connect(dialog.reject)
+
         if dialog.exec_() == QDialog.Accepted:
-            sources = input_field.toPlainText().strip()
-            if not sources:
+            sources_text = input_field.toPlainText().strip()
+            if not sources_text:
                 QMessageBox.warning(self, "Empty Input", "Please enter at least one URL")
                 return
 
-            self.grade_url_immediately(sources)
+            # Split input into multiple source URLs (commas or newlines)
+            parts = [p.strip() for p in re.split('[,\n\r]+', sources_text) if p.strip()]
+            if not parts:
+                QMessageBox.warning(self, "Empty Input", "Please enter at least one URL")
+                return
+
+            # Record existing forms to compute newly added ones
+            before = set(self.forms_data.keys())
+            for src in parts:
+                try:
+                    # Do not start grading yet for each; defer to a single run later
+                    self.grade_url_immediately(src, start_grading=False)
+                except Exception as e:
+                    self.append_debug(f"[GRADE NOW] Failed to add source {src}: {e}")
+
+            # Persist and update UI
+            self.update_in_queue_label()
+            self.save_forms()
+
+            # Determine newly added form URLs
+            after = set(self.forms_data.keys())
+            new_urls = list(after - before)
+
+            if action[0] == "grade":
+                if not new_urls:
+                    QMessageBox.information(self, "No New Forms", "No new forms were found to grade.")
+                    return
+                # Start grading only the newly added forms
+                self.run_grader(target_urls=new_urls)
+            else:
+                self.append_debug(f"✅ Scan/Add: Added {len(new_urls)} new form(s) to queue")
 
     def update_evaluator(self, text):
         if "Semantic Pipeline" in text:
@@ -1743,7 +1824,7 @@ class FormManager(QMainWindow):
             print(f"Error loading config: {e}")
             self.grading_mode = "Whole Form"
 
-    def grade_url_immediately(self, url):
+    def grade_url_immediately(self, url, start_grading=True):
         """Grade a folder or form URL immediately without checking last submissions"""
         try:
             forms = find_all_forms_in_sources(
@@ -1773,7 +1854,8 @@ class FormManager(QMainWindow):
             self.update_in_queue_label()
             self.save_forms()
             self.grading_mode = "Whole Form"
-            self.run_grader()
+            if start_grading:
+                self.run_grader()
             return
 
             from datetime import datetime, timezone, timedelta
@@ -2245,7 +2327,7 @@ class FormManager(QMainWindow):
         else:
             self.showMinimized()
 
-    def run_grader(self, force_recent_only=False):
+    def run_grader(self, force_recent_only=False, target_urls=None):
         """Start the grading process"""
         if not self.forms_data:
             if self.auto_mode:
@@ -2269,11 +2351,15 @@ class FormManager(QMainWindow):
         self.detail_progress_value.setText("0%")
         self.metric_responses.setText("0 / 0")
         self.metric_accepted.setText("0")
+        self.metric_rejected.setText("0")
         self.metric_review.setText('<a href="review">0</a>')
         self.metric_elapsed.setText("00:00")
         self.detail_progress_text.setText("Preparing form and responses")
         for i in range(self.form_list.count()):
             item = self.form_list.item(i)
+            url = item.data(Qt.UserRole)
+            if target_urls is not None and url not in target_urls:
+                continue
             meta = item.data(Qt.UserRole + 1) or {}
             meta["status"] = "queued"
             meta["started_at"] = None
@@ -2291,10 +2377,45 @@ class FormManager(QMainWindow):
             wp_enabled = False
         self.append_debug(f"<font color='cyan'>[GRADER] Worker pipeline: {'ON' if wp_enabled else 'OFF'}</font>")
 
+        # Optionally truncate answer variants before grading (destructive): keep only first teacher answer
+        truncate_enabled = False
+        try:
+            with open("config.json", "r", encoding="utf-8") as f:
+                _cfg2 = json.load(f)
+                truncate_enabled = bool(_cfg2.get("truncate_answers_before_grading", False))
+        except Exception:
+            truncate_enabled = False
+
+        if truncate_enabled:
+            try:
+                service = get_service()
+            except Exception as e:
+                self.append_debug(f"<font color='orange'>[GRADER] Could not obtain service to truncate answers: {e}</font>")
+                service = None
+
+            # Build list of URLs to truncate: either the provided target_urls or queued items
+            urls_to_truncate = list(target_urls) if target_urls else []
+            if not urls_to_truncate:
+                for i in range(self.form_list.count()):
+                    item = self.form_list.item(i)
+                    meta = item.data(Qt.UserRole + 1) or {}
+                    if meta.get("status") == "queued":
+                        urls_to_truncate.append(item.data(Qt.UserRole))
+
+            for url in urls_to_truncate:
+                fid = self.extract_form_id(url) or None
+                if not fid or not service:
+                    continue
+                try:
+                    result = keep_teacher_answers_only(service, fid, dry_run=False)
+                    self.append_debug(f"<font color='cyan'>[GRADER] Truncated answers for {fid}: removed {result.get('removed', 0)} variants</font>")
+                except Exception as e:
+                    self.append_debug(f"<font color='orange'>[GRADER] Failed to truncate answers for {fid}: {e}</font>")
+
         grading_mode = self.grading_mode
         grade_recent_only = force_recent_only or (grading_mode == "Recent Only")
 
-        self.grader_thread = GraderThread(grade_recent_only=grade_recent_only)
+        self.grader_thread = GraderThread(grade_recent_only=grade_recent_only, form_urls=target_urls)
         self.grader_thread.finished.connect(self.on_grading_finished)
         self.grader_thread.progress.connect(self.update_progress)
         self.grader_thread.overall_progress.connect(self.update_overall_progress)
@@ -2324,15 +2445,55 @@ class FormManager(QMainWindow):
         self.in_queue_label.setText(f"In Queue: {max(0, tot - cur)}")
         self.command_summary.setText(f"{tot} forms · {cur} completed")
 
-    def update_form_metrics(self, completed, total, accepted, review_questions, elapsed_seconds):
+    def update_form_metrics(self, completed, total, accepted, review_questions, elapsed_seconds, rejected=0):
         self.metric_responses.setText(f"{completed} / {total}")
         self.metric_accepted.setText(str(accepted))
+        self.metric_rejected.setText(str(rejected))
         self.metric_review.setText(f'<a href="review">{review_questions}</a>')
         hours, remainder = divmod(max(0, int(elapsed_seconds)), 3600)
         minutes, seconds = divmod(remainder, 60)
         self.metric_elapsed.setText(
             f"{hours:02d}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes:02d}:{seconds:02d}"
         )
+
+        item = self._find_form_item_by_url(self.current_form_url)
+        if item:
+            meta = item.data(Qt.UserRole + 1) or {}
+            meta["completed"] = completed
+            meta["total"] = total
+            meta["accepted"] = accepted
+            meta["rejected"] = rejected
+            meta["review_questions"] = review_questions
+            meta["elapsed"] = elapsed_seconds
+            meta["review_questions"] = review_questions
+            item.setData(Qt.UserRole + 1, meta)
+
+    def refresh_review_counts(self, form_id: str = None):
+        """Recompute pending review counts for a form and update GUI metrics.
+
+        This is intended to be called after the answer-key dashboard resolves reviews
+        so the main window immediately reflects the changed review queue size.
+        """
+        try:
+            fid = form_id or getattr(self, "current_form_url", None)
+            if not fid:
+                return
+            pending = load_pending_review_records(fid) or {}
+            # pending is a mapping item_id -> list[records]
+            review_count = sum(len(v) for v in pending.values())
+            # If the current form matches, update the metrics display
+            if getattr(self, "current_form_url", None) == fid:
+                try:
+                    cur = int(self.detail_progress.text().split("%", 1)[0].strip().rstrip('%'))
+                except Exception:
+                    cur = 0
+                # preserve existing responses display if available
+                # update only the review metric
+                if hasattr(self, "metric_review"):
+                    self.metric_review.setText(f'<a href="review">{review_count}</a>')
+        except Exception:
+            pass
+            item.setData(Qt.UserRole + 1, meta)
 
     def update_current_form(self, url):
         # Progress belongs to the newly announced form, never the previously
@@ -2341,6 +2502,7 @@ class FormManager(QMainWindow):
         self.detail_progress_value.setText("0%")
         self.metric_responses.setText("0 / 0")
         self.metric_accepted.setText("0")
+        self.metric_rejected.setText("0")
         self.metric_review.setText('<a href="review">0</a>')
         self.metric_elapsed.setText("00:00")
         self.detail_progress_text.setText("Preparing form and responses")
@@ -2372,6 +2534,30 @@ class FormManager(QMainWindow):
             self._set_form_status(item, "done", "Finished and saved grading updates")
         self.append_debug(f"<font color='green'>[AUTO {now_str}] Completed: {title}</font>")
         self.finished_label.setText(f"Finished: {len(self.finished_forms)}")
+        # After a form finishes, if the grader has become idle, start the next queued forms.
+        QTimer.singleShot(800, self._maybe_start_next_after_finish)
+
+    def _maybe_start_next_after_finish(self):
+        # Only start next run if not currently grading and no grader thread running
+        if self.is_grading:
+            return
+        if self.grader_thread and self.grader_thread.isRunning():
+            return
+        queued_urls = []
+        seen_ids = set()
+        for i in range(self.form_list.count()):
+            item = self.form_list.item(i)
+            meta = item.data(Qt.UserRole + 1) or {}
+            if meta.get("status") == "queued":
+                url = (item.data(Qt.UserRole) or "").strip()
+                fid = self.extract_form_id(url) or url
+                if fid in seen_ids:
+                    continue
+                seen_ids.add(fid)
+                queued_urls.append(url)
+        if queued_urls:
+            self.append_debug(f"<font color='cyan'>[GRADER] 🔄 Detected queued forms after finish. Starting next run...</font>")
+            QTimer.singleShot(500, lambda: self.run_grader(target_urls=queued_urls))
 
     def is_timing_line(self, message):
         return "Timing " in message
@@ -2539,6 +2725,25 @@ class FormManager(QMainWindow):
             self.append_debug("<b><font color='green'>ALL FORMS FINISHED. Grading run complete.</font></b>")
             if not self.auto_mode:
                 self.append_debug("<font color='gray'>[GRADER] Completed forms remain visible for review. Use Clear All when ready.</font>")
+
+        # Check if there are any queued forms that were added while the grader was running
+        queued_urls = []
+        seen_ids = set()
+        for i in range(self.form_list.count()):
+            item = self.form_list.item(i)
+            meta = item.data(Qt.UserRole + 1) or {}
+            if meta.get("status") == "queued":
+                url = (item.data(Qt.UserRole) or "").strip()
+                fid = self.extract_form_id(url) or url
+                if fid in seen_ids:
+                    continue
+                seen_ids.add(fid)
+                queued_urls.append(url)
+
+        if queued_urls:
+            self.append_debug(f"<font color='cyan'>[GRADER] 🔄 Found {len(queued_urls)} queued form(s) added during execution. Starting next run...</font>")
+            QTimer.singleShot(1000, lambda: self.run_grader(target_urls=queued_urls))
+            return
 
         if self.auto_mode:
             # Clear finished forms
