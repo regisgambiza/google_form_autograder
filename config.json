@@ -5,14 +5,13 @@
         ]
     },
     "jury_models": {
-        "semantic_judge": "mistral-nemo:12b",
+        "semantic_judge": "deepseek-r1:14b",
         "factual_judge": "gemma3:12b",
         "concept_judge": "phi4:14b",
         "strict_judge": "gpt-oss:latest",
         "misconception_judge": "llama3.1:8b",
         "language_filter": "gpt-oss:latest"
     },
-    "rubric_model": "mistral-nemo:12b",
     "embedding_model": "mxbai-embed-large",
     "reasoning_model": "phi4:14b",
     "leniency": "balanced",
@@ -35,17 +34,6 @@
     "vision_fallback_timeout_seconds": 1000,
     "vision_connect_timeout_seconds": 10,
     "vision_download_timeout_seconds": 45,
-    "validate_expected_answers": true,
-    "expected_answer_validation_optional": true,
-    "expected_answer_validator_model": "llama3.1:8b",
-    "expected_answer_validator_fallback_model": "gemma3:4b",
-    "expected_answer_validator_timeout_seconds": 180,
-    "expected_answer_validator_fallback_timeout_seconds": 300,
-    "expected_answer_validator_connect_timeout_seconds": 10,
-    "expected_answer_validator_min_confidence": 0.85,
-    "use_validated_expected_for_grading": true,
-    "auto_replace_invalid_expected": false,
-    "invalid_expected_blocks_updates": true,
     "answer_key_max_variants": 50,
     "answer_key_dry_run": false,
     "answer_key_auto_apply_confidence": 0.95,
@@ -57,17 +45,31 @@
     "accuracy_policy": {
         "enabled": true,
         "minimum_judge_confidence": 0.9,
-        "required_accept_roles": ["semantic_judge", "factual_judge", "concept_judge"],
+        "required_accept_roles": [
+            "semantic_judge",
+            "factual_judge",
+            "concept_judge"
+        ],
         "require_distinct_models": true,
         "embeddings_can_accept": false,
         "ambiguous_outcome": "REVIEW"
     },
     "adaptive_math_jury": {
         "enabled": true,
-        "primary_roles": ["semantic_judge", "factual_judge", "concept_judge"],
+        "primary_roles": [
+            "semantic_judge",
+            "factual_judge",
+            "concept_judge"
+        ],
         "adjudicator_role": "strict_judge",
         "minimum_primary_confidence": 0.9,
-        "ambiguity_markers": ["ambiguous", "uncertain", "unclear", "insufficient", "depends"]
+        "ambiguity_markers": [
+            "ambiguous",
+            "uncertain",
+            "unclear",
+            "insufficient",
+            "depends"
+        ]
     },
     "enable_pipeline_workers": true,
     "deterministic_worker_count": 4,
@@ -101,10 +103,9 @@
     "embedding_timeout_seconds": 1800,
     "embedding_connect_timeout_seconds": 10,
     "semantic_similarity_batch_timeout_seconds": 1800,
-    "rubric_timeout_seconds": 3600,
     "rubric_connect_timeout_seconds": 10,
     "batch_size": 15,
-    "numeric_tolerance": 0.000001,
+    "numeric_tolerance": 1e-06,
     "max_latency_per_answer_seconds": 21600,
     "answer_hard_timeout_seconds": 21600,
     "patient_ai_mode": true,
@@ -136,8 +137,6 @@
         "judge_num_ctx": 8192,
         "judge_num_predict": 2048,
         "embedding_num_ctx": 1024,
-        "rubric_num_ctx": 512,
-        "rubric_num_predict": 512,
         "fallback_num_ctx": 2048,
         "fallback_num_predict": 256,
         "num_gpu": -1,
@@ -171,12 +170,13 @@
     "ai_stall_timeout_seconds": 900,
     "judge_total_hard_timeout_seconds": 21600,
     "jury_circuit_break_seconds": 0,
-    "judge_prewarm_enabled": true,
+    "judge_prewarm_enabled": false,
     "judge_prewarm_timeout_seconds": 20,
     "active_judge_roles": [
         "semantic_judge",
         "factual_judge",
         "concept_judge",
         "strict_judge"
-    ]
+    ],
+    "rubric_timeout_seconds": 3600
 }
