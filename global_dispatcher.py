@@ -40,6 +40,11 @@ class Task:
     queued_monotonic: float = field(default_factory=time.monotonic)
 
 
+def remove_exact_duplicate_answers(answers: List[str]) -> List[str]:
+    """Preserve fetch order while keeping one copy of each exact answer string."""
+    return list(dict.fromkeys(answers))
+
+
 class TokenBucket:
     def __init__(self, rate_per_sec: float, capacity: int):
         self.rate = rate_per_sec
@@ -387,7 +392,15 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                     qid = q.get("questionId")
                     expected = get_effective_expected(q, expected_by_item_id.get(q.get("itemId"), []))
                     q["trusted_expected"] = expected[:1]
-                    answers = answers_by_qid.get(qid, [])
+                    fetched_answers = answers_by_qid.get(qid, [])
+                    answers = remove_exact_duplicate_answers(fetched_answers)
+                    removed_duplicates = len(fetched_answers) - len(answers)
+                    if removed_duplicates:
+                        log(
+                            "INFO",
+                            f"[DEDUP] question_id={qid} fetched={len(fetched_answers)} "
+                            f"unique={len(answers)} removed={removed_duplicates}",
+                        )
                     forms_results[i]["counts"][qid] = len(answers)
                     for ai, ans in enumerate(answers):
                         pending_tasks.append(Task(i, form_id, title, q, ai, ans, expected))

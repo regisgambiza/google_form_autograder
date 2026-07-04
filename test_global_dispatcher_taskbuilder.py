@@ -4,6 +4,12 @@ import types
 import global_dispatcher as gd
 
 
+def test_exact_duplicates_are_removed_after_fetch_in_first_seen_order():
+    answers = ["7", "7", "9 - 2 = 7", "7", "9 - 2 = 7", " 7 "]
+
+    assert gd.remove_exact_duplicate_answers(answers) == ["7", "9 - 2 = 7", " 7 "]
+
+
 class _FakeReq:
     def __init__(self, payload):
         self._payload = payload
