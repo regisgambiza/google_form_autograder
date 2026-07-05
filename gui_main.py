@@ -9,7 +9,7 @@ from PyQt5.QtWidgets import (
     QTextEdit, QLabel, QComboBox, QCheckBox,
     QProgressDialog, QSplitter, QSpinBox, QDialog, QFormLayout, QTabWidget,
     QSystemTrayIcon, QMenu, QAction, QStyle, QFrame, QProgressBar, QDoubleSpinBox,
-    QScrollArea
+    QScrollArea, QFileDialog
 )
 
 from PyQt5.QtCore import Qt, QDate, QTimer, QSize
@@ -37,6 +37,10 @@ from app_theme import apply_application_theme, apply_widget_theme
 from cache_manager import clear_grading_cache
 from answer_key_manager import load_pending_review_records, keep_teacher_answers_only
 import re
+try:
+    from ai_agent import AIAgent
+except Exception:
+    AIAgent = None
 
 BANGKOK_TZ = timezone(timedelta(hours=7))
 
@@ -519,6 +523,12 @@ class FormManager(QMainWindow):
         answer_keys_button.setFixedWidth(145)
         answer_keys_button.clicked.connect(self.open_answer_key_dashboard)
         command_layout.addWidget(answer_keys_button)
+        # Agent inspector button (opens in-app inspector dialog)
+        self.agent_button = QPushButton("Agent")
+        self.agent_button.setObjectName("Secondary")
+        self.agent_button.setFixedWidth(120)
+        self.agent_button.clicked.connect(self.open_agent_inspector)
+        command_layout.addWidget(self.agent_button)
         command_layout.addStretch()
         self.command_summary = QLabel("0 forms")
         self.command_summary.setObjectName("Muted")
@@ -751,6 +761,29 @@ class FormManager(QMainWindow):
             self.form_list.setCurrentRow(0)
         self._setup_system_tray()
         apply_widget_theme(self)
+
+        # Instantiate in-app AIAgent for tuning/inspection (UI-only controller)
+        self.ai_agent = None
+        try:
+            cfg = {}
+            try:
+                with open("config.json", "r", encoding="utf-8") as f:
+                    cfg = json.load(f)
+            except Exception:
+                cfg = {}
+            if AIAgent and bool(cfg.get("enable_ai_agent", False)):
+                models_cfg = cfg.get("ai_agent_models", []) or []
+                if not models_cfg and isinstance(cfg.get("jury_models"), dict):
+                    models_cfg = [
+                        {"name": k, "alternates": [], "batch": 4}
+                        for k in cfg.get("jury_models", {}).keys()
+                    ]
+                if not models_cfg:
+                    models_cfg = [{"name": "default", "alternates": [], "batch": 4}]
+                self.ai_agent = AIAgent(models=models_cfg)
+                self.ai_agent.start()
+        except Exception as ex:
+            print(f"Failed to start in-app AIAgent: {ex}")
 
     def _filter_form_queue(self, *_args):
         query = self.form_search_input.text().strip().lower() if hasattr(self, "form_search_input") else ""
@@ -2484,6 +2517,19 @@ class FormManager(QMainWindow):
             meta["review_questions"] = review_questions
             item.setData(Qt.UserRole + 1, meta)
 
+        # Feed per-form metrics to in-app agent (coarse instrumentation)
+        try:
+            if hasattr(self, "ai_agent") and self.ai_agent:
+                answers = total
+                errors = rejected or 0
+                latency_ms = (float(elapsed_seconds) * 1000.0) / max(1, total) if total else 0.0
+                try:
+                    self.ai_agent.ingest_metrics(answers=answers, errors=errors, latency_ms=latency_ms)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
     def refresh_review_counts(self, form_id: str = None):
         """Recompute pending review counts for a form and update GUI metrics.
 
@@ -2586,6 +2632,86 @@ class FormManager(QMainWindow):
         w.setFont(QFont("Consolas", 10))
         w.setStyleSheet("background-color:#1e1e1e; color:#dcdcdc;")
         return w
+
+    # --- Agent inspector UI ---
+    def open_agent_inspector(self):
+        if not hasattr(self, "ai_agent") or not self.ai_agent:
+            QMessageBox.information(self, "Agent not enabled", "AI agent is not enabled in config.json")
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle("AIAgent Inspector")
+        dialog.resize(760, 520)
+        layout = QVBoxLayout(dialog)
+
+        top = QHBoxLayout()
+        self.agent_state_label = QLabel("Agent: running")
+        top.addWidget(self.agent_state_label)
+        top.addStretch()
+        start_btn = QPushButton("Start")
+        stop_btn = QPushButton("Stop")
+        export_btn = QPushButton("Export Logs")
+        top.addWidget(start_btn)
+        top.addWidget(stop_btn)
+        top.addWidget(export_btn)
+        layout.addLayout(top)
+
+        self.agent_models_list = QListWidget()
+        layout.addWidget(self.agent_models_list, 1)
+
+        self.agent_logs = QTextEdit()
+        self.agent_logs.setReadOnly(True)
+        layout.addWidget(self.agent_logs, 1)
+
+        def refresh_state():
+            try:
+                state = self.ai_agent.get_state()
+            except Exception:
+                return
+            active = state.get("active_model") or {}
+            self.agent_state_label.setText(f"Agent enabled={state.get('enabled')} active={active.get('name')}")
+            self.agent_models_list.clear()
+            for m in state.get("models", []):
+                self.agent_models_list.addItem(f"{m.get('name')}  batch={m.get('batch')} errors={m.get('errors')} lat={m.get('latency_ms'):.0f}ms")
+            self.agent_logs.clear()
+            for entry in state.get("recent_logs", [])[:200]:
+                self.agent_logs.append(f"[{entry.get('ts')}] {entry.get('actor')}: {entry.get('action')} {entry.get('details')}")
+
+        def on_start():
+            try:
+                self.ai_agent.start()
+                refresh_state()
+            except Exception as e:
+                QMessageBox.critical(dialog, "Agent Start Failed", str(e))
+
+        def on_stop():
+            try:
+                self.ai_agent.stop()
+                refresh_state()
+            except Exception as e:
+                QMessageBox.critical(dialog, "Agent Stop Failed", str(e))
+
+        def on_export():
+            try:
+                path, _ = QFileDialog.getSaveFileName(self, "Export Agent Logs", "agent_logs.csv", "CSV Files (*.csv);;All Files (*)")
+                if not path:
+                    return
+                self.ai_agent.export_logs_csv(path)
+                QMessageBox.information(self, "Exported", f"Logs exported to {path}")
+            except Exception as e:
+                QMessageBox.critical(self, "Export Failed", str(e))
+
+        start_btn.clicked.connect(on_start)
+        stop_btn.clicked.connect(on_stop)
+        export_btn.clicked.connect(on_export)
+
+        # Timer to refresh state periodically while dialog is open
+        timer = QTimer(dialog)
+        timer.timeout.connect(refresh_state)
+        timer.start(1000)
+
+        refresh_state()
+        dialog.exec_()
+        timer.stop()
 
     def _route_worker_log(self, message):
         if "[Worker: Producer]" in message:
