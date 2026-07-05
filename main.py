@@ -239,6 +239,11 @@ def main():
                 models_cfg = [{"name": "default", "alternates": [], "batch": 4}]
             agent = AIAgent(models=models_cfg)
             agent.start()
+            try:
+                from ai_agent import register_global_agent
+                register_global_agent(agent)
+            except Exception:
+                pass
             update_runtime_state(ai_agent_enabled=True, ai_agent_active_model=(agent.get_state().get("active_model") or {}).get("name", ""))
     except Exception as e:
         log("WARNING", f"Failed to start AIAgent: {e}")

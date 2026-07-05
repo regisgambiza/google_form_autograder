@@ -14,6 +14,10 @@
     },
     "embedding_model": "mxbai-embed-large",
     "reasoning_model": "phi4:14b",
+    "enable_ai_agent": true,
+    "ai_agent_models": [
+        { "name": "gtp-oss:latest", "alternates": [], "batch": 4 }
+    ],
     "leniency": "balanced",
     "leniency_note": "options: extreme, lenient, balanced, strict",
     "evaluator": "ai_evaluator_semantic",

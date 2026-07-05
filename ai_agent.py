@@ -252,3 +252,18 @@ if __name__ == '__main__':
     agent.export_logs_csv('agent_logs.csv')
     agent.stop()
     print('Done, logs -> agent_logs.csv')
+
+# --- Global agent registry for process-wide access ---
+_GLOBAL_AGENT: Optional[AIAgent] = None
+
+
+def register_global_agent(agent: AIAgent):
+    global _GLOBAL_AGENT
+    try:
+        _GLOBAL_AGENT = agent
+    except Exception:
+        pass
+
+
+def get_global_agent() -> Optional[AIAgent]:
+    return _GLOBAL_AGENT
