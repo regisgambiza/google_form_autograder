@@ -65,6 +65,7 @@ REQUIRED_FIELDS = [
     "decision", "confidence", "reason_short", "requirements_met",
     "requirements_missing", "contradictions", "calculation_check",
 ]
+BATCH_RESULT_FIELDS = ["answer_index", *REQUIRED_FIELDS]
 
 
 def _selected_roles(cfg: Dict[str, object]) -> List[str]:
@@ -315,6 +316,100 @@ def _make_judge_prompt(question: str, expected: str, answer: str, comparison_evi
     )
 
 
+def _make_batch_judge_prompt(
+    question: str,
+    expected: str,
+    indexed_answers: List[tuple[int, str]],
+    comparison_evidence_by_index: Dict[int, Dict[str, object]],
+) -> str:
+    """Create prompt for a judge to evaluate a small batch of answers independently."""
+    def compact(value: object, limit: int) -> str:
+        text = str(value or "")
+        if len(text) <= limit:
+            return text
+        head = int(limit * 0.75)
+        return text[:head] + "\n...[irrelevant context omitted]...\n" + text[-(limit - head):]
+
+    compact_question = compact(question, 8000)
+    answer_lines = []
+    for index, answer in indexed_answers:
+        evidence = comparison_evidence_by_index.get(index, {})
+        evidence_text = compact(json.dumps(evidence, ensure_ascii=False), 1200)
+        answer_lines.append(
+            f"ANSWER_INDEX {index}\n"
+            f"STUDENT ANSWER: {answer}\n"
+            f"COMPARISON EVIDENCE: {evidence_text}"
+        )
+
+    return (
+        f"Whole-paper context (interpretation only): {compact_question}\n"
+        f"AUTHORITATIVE TEACHER ANSWER: {expected}\n\n"
+        "Evaluate EACH student answer independently. Do not let one student's answer influence another. "
+        "The first teacher answer is the sole source of truth. Never recalculate it, correct it, replace it, "
+        "or invent another expected answer. Decide only whether each student's core value or meaning is close "
+        "enough to the teacher answer in this question's context. Accept equivalent algebra, decimal commas, "
+        "equivalent fractions/percentages, capitalization, spelling, grammar, punctuation, Unicode symbols, "
+        "and harmless whitespace. Accept a correct core answer when units, working, explanation, requested "
+        "rounding presentation, or requested algebraic form are missing. Accept harmless extra compatible units. "
+        "Reject units only when they are explicitly incompatible and materially change the answer. "
+        "Do not borrow requirements from nearby questions in the whole-paper context.\n\n"
+        "You MUST make a binary YES/NO decision for every ANSWER_INDEX. Never skip an answer. Never abstain. "
+        "Return exactly one result object for each ANSWER_INDEX, using the same answer_index number. "
+        "Return ONLY one compact JSON object in this exact shape:\n"
+        '{"results":[{"answer_index":1,"decision":"YES","confidence":0.95,'
+        '"reason_short":"brief reason","requirements_met":["requirement supported by the answer"],'
+        '"requirements_missing":[],"contradictions":[],"calculation_check":"verified or not applicable"}]}\n\n'
+        "Student answers to evaluate:\n"
+        + "\n\n".join(answer_lines)
+    )
+
+
+def _extract_json_object(raw: str) -> object:
+    if not raw or not raw.strip():
+        raise ValueError("empty_response")
+    clean = re.sub(r"```[a-z]*\n(.*?)(?:\n```|```$)", r"\1", raw, flags=re.IGNORECASE | re.DOTALL)
+    clean = re.sub(r"<think>.*?</think>", "", clean, flags=re.IGNORECASE | re.DOTALL)
+    clean = re.sub(r"<\|.*?\|>", "", clean, flags=re.DOTALL)
+    clean = clean.strip()
+    try:
+        return json.loads(clean)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", clean, re.DOTALL)
+        if match:
+            return json.loads(match.group())
+        raise
+
+
+def parse_batch_judge_response(raw: str, expected_indices: List[int]) -> Dict[int, Dict[str, object]]:
+    """Parse a batch judge response into per-answer judge objects."""
+    try:
+        obj = _extract_json_object(raw)
+    except Exception:
+        return {}
+    if not isinstance(obj, dict):
+        return {}
+    results = obj.get("results")
+    if not isinstance(results, list):
+        return {}
+
+    expected_set = set(expected_indices)
+    parsed: Dict[int, Dict[str, object]] = {}
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        try:
+            answer_index = int(item.get("answer_index"))
+        except (TypeError, ValueError):
+            continue
+        if answer_index not in expected_set or answer_index in parsed:
+            continue
+        normalized = _normalize_decision(dict(item))
+        normalized = _fill_judge_defaults(normalized)
+        if _valid(normalized):
+            parsed[answer_index] = normalized
+    return parsed
+
+
 def _get_judge_format() -> Dict[str, object]:
     """Return JSON schema for structured output."""
     return {
@@ -332,6 +427,34 @@ def _get_judge_format() -> Dict[str, object]:
     }
 
 
+def _get_batch_judge_format() -> Dict[str, object]:
+    """Return JSON schema for batched structured output."""
+    item_properties = {
+        "answer_index": {"type": "integer", "minimum": 1},
+        "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+        "decision": {"type": "string", "enum": ["YES", "NO"]},
+        "reason_short": {"type": "string", "maxLength": 500},
+        "requirements_met": {"type": "array", "items": {"type": "string"}, "maxItems": 20},
+        "requirements_missing": {"type": "array", "items": {"type": "string"}, "maxItems": 20},
+        "contradictions": {"type": "array", "items": {"type": "string"}, "maxItems": 20},
+        "calculation_check": {"type": "string", "maxLength": 500},
+    }
+    return {
+        "type": "object",
+        "properties": {
+            "results": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": item_properties,
+                    "required": BATCH_RESULT_FIELDS,
+                },
+            }
+        },
+        "required": ["results"],
+    }
+
+
 def _get_ollama_options(role: str) -> Dict[str, object]:
     """Get Ollama options for a judge role."""
     out = build_ollama_options(
@@ -342,6 +465,14 @@ def _get_ollama_options(role: str) -> Dict[str, object]:
     )
     out["temperature"] = 0.0
     out["top_p"] = 0.9
+    return out
+
+
+def _get_batch_ollama_options(role: str, batch_size: int) -> Dict[str, object]:
+    out = _get_ollama_options(role)
+    cfg = load_config()
+    batch_predict = int(cfg.get("judge_batch_num_predict", max(768, int(out.get("num_predict", 512)) * max(1, batch_size))))
+    out["num_predict"] = max(int(out.get("num_predict", 512)), batch_predict)
     return out
 
 
@@ -557,6 +688,110 @@ def call_judge_role_sync(
     return last or _abstain("retries_exhausted")
 
 
+def _chunked(items: List[str], size: int) -> List[List[str]]:
+    return [items[i:i + size] for i in range(0, len(items), size)]
+
+
+def call_judge_role_batch_sync(
+    role: str,
+    answers: List[str],
+    question: str,
+    expected: str,
+    rubrics_by_answer: Dict[str, Dict[str, object]],
+    retries: int = 3,
+) -> Dict[str, Dict[str, object]]:
+    """Run one judge role for a small batch of answers in one Ollama call.
+
+    Invalid/missing batch items are retried through the single-answer path so
+    batching improves speed without weakening correctness.
+    """
+    cfg = load_config()
+    jury_models = cfg.get("jury_models", {})
+    TIMEOUT_SECONDS = max(10, int(cfg.get("judge_timeout_seconds", 45)))
+    http_timeout_seconds = max(TIMEOUT_SECONDS, int(cfg.get("judge_http_timeout_seconds", 60)))
+    role_model = jury_models.get(role)
+    indexed_answers = [(i + 1, answer) for i, answer in enumerate(answers)]
+    comparison_by_index = {
+        i + 1: rubrics_by_answer.get(answer, {})
+        for i, answer in enumerate(answers)
+    }
+
+    def _call_once(repair: bool = False) -> Dict[int, Dict[str, object]]:
+        _write_heartbeat_if_needed()
+        start = time.perf_counter()
+        log("INFO", f"START judge_{role}_batch (model={role_model}, answers={len(answers)})")
+        update_runtime_state(active_model=role_model, active_role=role, active_since=time.time())
+        user_prompt = _make_batch_judge_prompt(question, expected, indexed_answers, comparison_by_index)
+        if repair:
+            user_prompt += "\n\nREPAIR: Your previous response was invalid or incomplete. Output only the required JSON object with one result for every answer_index."
+        payload = {
+            "model": role_model,
+            "messages": [
+                {"role": "system", "content": JUDGE_PROMPTS[role]},
+                {"role": "user", "content": user_prompt},
+            ],
+            "stream": False,
+            "options": _get_batch_ollama_options(role, len(answers)),
+            "format": _get_batch_judge_format(),
+            "timeout": http_timeout_seconds,
+        }
+        sem = _get_judge_http_semaphore()
+        sem_wait = max(3, int(cfg.get("judge_http_semaphore_wait_seconds", TIMEOUT_SECONDS)))
+        if not sem.acquire(timeout=sem_wait):
+            log("WARNING", f"Judge {role} batch semaphore wait timeout ({sem_wait}s); falling back")
+            return {}
+        raw = ""
+        try:
+            resp = requests.post(
+                _ollama_chat_url(),
+                json=payload,
+                timeout=(10, TIMEOUT_SECONDS),
+            )
+            resp.raise_for_status()
+            response = resp.json()
+            raw = response.get("message", {}).get("content", "")
+            parsed = parse_batch_judge_response(raw, [idx for idx, _ in indexed_answers])
+        except requests.Timeout:
+            log("WARNING", f"Judge {role} batch timed out after {TIMEOUT_SECONDS}s; falling back")
+            parsed = {}
+        except Exception as ex:
+            log("WARNING", f"Judge {role} batch attempt failed: {ex}")
+            parsed = {}
+        finally:
+            try:
+                sem.release()
+            except Exception:
+                pass
+
+        duration_ms = (time.perf_counter() - start) * 1000
+        log("INFO", f"END judge_{role}_batch duration_ms={duration_ms:.0f} parsed={len(parsed)}/{len(answers)} (model={role_model})")
+        if len(parsed) != len(answers):
+            log("WARNING", f"Judge {role} batch incomplete parsed={len(parsed)}/{len(answers)} raw={repr(raw)[:1000]}")
+        for result in parsed.values():
+            result["role"] = role
+            result["model"] = role_model
+        if parsed:
+            log_post_inference_gpu_probe_once("judge_batch_sync")
+        _write_heartbeat_if_needed()
+        return parsed
+
+    parsed_by_index: Dict[int, Dict[str, object]] = {}
+    for attempt in range(max(1, retries)):
+        parsed_by_index = _call_once(repair=attempt > 0)
+        if len(parsed_by_index) == len(answers):
+            break
+        log("WARNING", f"Judge {role} batch returned incomplete results on attempt {attempt + 1}/{max(1, retries)}; retrying")
+
+    out: Dict[str, Dict[str, object]] = {}
+    for index, answer in indexed_answers:
+        result = parsed_by_index.get(index)
+        if result is None:
+            log("WARNING", f"Judge {role} batch missing answer_index={index}; falling back to single-answer judge")
+            result = call_judge_role_sync(role, answer, question, expected, rubrics_by_answer.get(answer, {}), retries)
+        out[answer] = result
+    return out
+
+
 def run_judges_model_first(
     answers: List[str],
     question: str,
@@ -569,8 +804,21 @@ def run_judges_model_first(
     roles = _selected_roles(cfg)
     out: Dict[str, List[Dict[str, object]]] = {answer: [] for answer in answers}
     adaptive_cfg = cfg.get("adaptive_math_jury", {})
+    batch_size = max(1, int(cfg.get("judge_answer_batch_size", 3)))
 
-    log("INFO", f"[JUDGES] Model-first question batch START answers={len(answers)} roles={roles}")
+    def run_role_for_answers(role: str, role_answers: List[str]) -> None:
+        if not role_answers:
+            return
+        if batch_size <= 1:
+            for answer in role_answers:
+                out[answer].append(call_judge_role_sync(role, answer, question, expected, rubrics_by_answer.get(answer, {}), retries))
+            return
+        for chunk in _chunked(role_answers, batch_size):
+            batch_results = call_judge_role_batch_sync(role, chunk, question, expected, rubrics_by_answer, retries)
+            for answer in chunk:
+                out[answer].append(batch_results[answer])
+
+    log("INFO", f"[JUDGES] Model-first question batch START answers={len(answers)} roles={roles} answer_batch_size={batch_size}")
     if bool(adaptive_cfg.get("enabled", False)):
         primary_roles = [
             role for role in adaptive_cfg.get("primary_roles", ["semantic_judge", "factual_judge", "concept_judge"])
@@ -584,8 +832,7 @@ def run_judges_model_first(
 
         for role in primary_roles:
             log("INFO", f"[JUDGES] Model-first role START role={role} answers={len(answers)}")
-            for answer in answers:
-                out[answer].append(call_judge_role_sync(role, answer, question, expected, rubrics_by_answer.get(answer, {}), retries))
+            run_role_for_answers(role, answers)
             log("INFO", f"[JUDGES] Model-first role DONE role={role}")
 
         needs_adjudication: List[str] = []
@@ -609,8 +856,7 @@ def run_judges_model_first(
 
         if needs_adjudication and adjudicator_role in roles:
             log("INFO", f"[JUDGES] Model-first adjudicator START role={adjudicator_role} answers={len(needs_adjudication)}")
-            for answer in needs_adjudication:
-                out[answer].append(call_judge_role_sync(adjudicator_role, answer, question, expected, rubrics_by_answer.get(answer, {}), retries))
+            run_role_for_answers(adjudicator_role, needs_adjudication)
             log("INFO", f"[JUDGES] Model-first adjudicator DONE role={adjudicator_role}")
         else:
             log("INFO", "[JUDGES] Model-first adjudicator skipped")
@@ -618,8 +864,7 @@ def run_judges_model_first(
 
     for role in roles:
         log("INFO", f"[JUDGES] Model-first role START role={role} answers={len(answers)}")
-        for answer in answers:
-            out[answer].append(call_judge_role_sync(role, answer, question, expected, rubrics_by_answer.get(answer, {}), retries))
+        run_role_for_answers(role, answers)
         log("INFO", f"[JUDGES] Model-first role DONE role={role}")
     return out
 

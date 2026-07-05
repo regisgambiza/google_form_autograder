@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>AI Agent — Performance Monitor (Simulation)</title>
+  <style>
+    body{font-family:Inter,system-ui,Segoe UI,Roboto,Arial;margin:0;background:#0f1724;color:#e6eef8}
+    header{padding:18px 24px;background:#051123;border-bottom:1px solid #113049}
+    h1{margin:0;font-size:18px}
+    .container{display:flex;gap:16px;padding:18px}
+    .col{background:#071827;border-radius:8px;padding:12px;flex:1;min-width:260px}
+    .panel-title{font-weight:600;margin-bottom:8px;color:#9fd3ff}
+    .metric{display:flex;justify-content:space-between;padding:10px 6px;border-bottom:1px dashed rgba(255,255,255,0.03)}
+    .metric:last-child{border-bottom:0}
+    .btn{background:#1161a8;color:white;padding:8px 12px;border-radius:6px;border:0;cursor:pointer}
+    .btn.ghost{background:transparent;border:1px solid rgba(255,255,255,0.06)}
+    .small{font-size:12px;color:#9fb7d0}
+    .log{height:240px;overflow:auto;background:#04202b;padding:8px;border-radius:6px;border:1px solid rgba(255,255,255,0.02)}
+    .model{display:flex;align-items:center;justify-content:space-between;padding:8px;border-radius:6px;background:linear-gradient(180deg, rgba(255,255,255,0.01), transparent);margin-bottom:8px}
+    .model .meta{font-size:13px}
+    .switch{display:inline-flex;align-items:center;gap:8px}
+    footer{padding:12px 18px;background:#03121a;border-top:1px solid #082634;text-align:right}
+    .kpi{font-size:20px;font-weight:700}
+    .badge{padding:4px 8px;border-radius:999px;background:#083b27;color:#9ff2c4;font-weight:600}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>AI Agent — Performance Monitor (Simulation)</h1>
+    <div class="small">Simulates an autonomous agent monitoring model health, swapping models and tuning batch sizes for speed and reliability.</div>
+  </header>
+
+  <div class="container">
+    <div class="col" style="flex:0.9">
+      <div class="panel-title">Agent Controls</div>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
+        <button id="enableBtn" class="btn">Enable Agent</button>
+        <button id="pauseBtn" class="btn ghost">Pause</button>
+        <div style="margin-left:auto;text-align:right">
+          <div class="small">Target: <span id="targetGoal">Highest speed, no errors</span></div>
+          <div class="small">Mode: <span id="agentMode">Automatic</span></div>
+        </div>
+      </div>
+
+      <div class="panel-title">Model Pool & Health</div>
+      <div id="models"></div>
+
+      <div style="height:12px"></div>
+      <div class="panel-title">Tuning: answers-per-call</div>
+      <div class="small">Agent will adjust batch size (answers per call) per model to optimize throughput vs failures.</div>
+      <div style="display:flex;gap:8px;margin-top:8px;align-items:center">
+        <input id="globalBatch" type="range" min="1" max="32" value="4" style="flex:1" />
+        <div class="small">Batch: <span id="globalBatchVal">4</span></div>
+      </div>
+
+    </div>
+
+    <div class="col" style="flex:1.1">
+      <div class="panel-title">Live Metrics</div>
+      <div class="metric"><div>QPS (sim)</div><div class="kpi" id="qps">0</div></div>
+      <div class="metric"><div>Avg latency / answer (ms)</div><div class="kpi" id="latency">0</div></div>
+      <div class="metric"><div>Total errors (last 10m)</div><div class="kpi" id="errors">0</div></div>
+      <div class="metric"><div>Active model</div><div id="activeModel" class="small">-</div></div>
+
+      <div style="height:12px"></div>
+      <div class="panel-title">Agent Decisions</div>
+      <div class="log" id="decisionLog"></div>
+    </div>
+
+    <div class="col" style="flex:0.9">
+      <div class="panel-title">Simulation Controls & Stats</div>
+      <div class="small">Simulate incoming load and model failures.</div>
+      <div style="display:flex;gap:8px;margin-top:8px;align-items:center">
+        <label class="small">Incoming answers/sec</label>
+        <input id="load" type="range" min="1" max="200" value="30" style="flex:1" />
+        <div class="small" id="loadVal">30</div>
+      </div>
+
+      <div style="height:12px"></div>
+      <div class="panel-title">Recent Activity</div>
+      <div id="activityLog" class="log"></div>
+
+      <div style="height:12px"></div>
+      <div class="panel-title">Agent UI Button (Main GUI)</div>
+      <div class="small">This simulates the button in the main GUI to open the agent inspector.</div>
+      <div style="margin-top:8px"><button id="openInspector" class="btn ghost">Open Agent Inspector</button></div>
+
+    </div>
+  </div>
+
+  <footer>
+    <span class="small">Simulation only — does not modify app code.</span>
+  </footer>
+
+  <script>
+    // Sample model entries (each has two alternates)
+    const modelPool = [
+      {name: 'mistral-nemo:12b', alternates: ['mistral-nemo:7b','phi4:14b'], batch:4, errors:0, latency:120},
+      {name: 'gemma3:12b', alternates: ['gemma2:8b','gemma3:6b'], batch:4, errors:0, latency:150},
+      {name: 'phi4:14b', alternates: ['phi4:7b','mistral-nemo:12b'], batch:4, errors:0, latency:140},
+    ];
+
+    const modelsDiv = document.getElementById('models');
+    const decisionLog = document.getElementById('decisionLog');
+    const activityLog = document.getElementById('activityLog');
+    const qpsEl = document.getElementById('qps');
+    const latencyEl = document.getElementById('latency');
+    const errorsEl = document.getElementById('errors');
+    const activeModelEl = document.getElementById('activeModel');
+    const globalBatch = document.getElementById('globalBatch');
+    const globalBatchVal = document.getElementById('globalBatchVal');
+    const load = document.getElementById('load');
+    const loadVal = document.getElementById('loadVal');
+
+    let enabled = false;
+    let paused = false;
+    let activeModelIdx = 0;
+    let totalErrors = 0;
+
+    function renderModels(){
+      modelsDiv.innerHTML='';
+      modelPool.forEach((m, i)=>{
+        const div = document.createElement('div');
+        div.className='model';
+        div.innerHTML = `<div><div class="meta">${m.name}</div><div class="small">Alternates: ${m.alternates.join(', ')}</div></div><div style="text-align:right"><div class="small">batch <input data-idx="${i}" class="batchInput" type=number min=1 max=32 value="${m.batch}" style="width:56px;margin-bottom:6px" /></div><div class="small">errors: <strong>${m.errors}</strong></div></div>`;
+        modelsDiv.appendChild(div);
+      });
+      document.querySelectorAll('.batchInput').forEach(inp=>{
+        inp.addEventListener('change', e=>{
+          const idx = +e.target.getAttribute('data-idx');
+          modelPool[idx].batch = Math.max(1, Math.min(32, parseInt(e.target.value)||1));
+          logActivity(`Manual set batch ${modelPool[idx].batch} for ${modelPool[idx].name}`);
+        });
+      });
+    }
+
+    function logDecision(text){
+      const t = new Date().toLocaleTimeString();
+      decisionLog.innerHTML = `<div style="padding:6px;border-bottom:1px solid rgba(255,255,255,0.02)"><strong>${t}</strong> ${text}</div>` + decisionLog.innerHTML;
+    }
+    function logActivity(text){
+      const t = new Date().toLocaleTimeString();
+      activityLog.innerHTML = `<div style="padding:6px;border-bottom:1px dashed rgba(255,255,255,0.02)"><span class="small">${t}</span> ${text}</div>` + activityLog.innerHTML;
+    }
+
+    function simulateTick(){
+      if(!enabled || paused) return;
+      // simulate load
+      const rpm = parseInt(load.value, 10); // answers per second
+      // assume answers grouped by chosen batch size
+      const m = modelPool[activeModelIdx];
+      const batch = m.batch || parseInt(globalBatch.value) || 1;
+      const calls = Math.ceil(rpm / batch);
+      // per-call success probability depends on current errors (higher errors -> more failures)
+      const failProb = Math.min(0.4, m.errors/50);
+      // simulate calls
+      let successes = 0, fails=0, totalLatency=0;
+      for(let c=0;c<calls;c++){
+        // each call handles up to batch answers
+        const answersThisCall = Math.min(batch, rpm - (c*batch));
+        // simulate per-call outcome
+        if(Math.random() < failProb){
+          fails += answersThisCall;
+          m.errors += answersThisCall>0?1:0; // register error count
+          totalErrors += answersThisCall;
+          logActivity(`Model ${m.name} produced ${answersThisCall} errors in a call`);
+        } else {
+          successes += answersThisCall;
+        }
+        // latency influenced by model's base latency and batch
+        totalLatency += (m.latency + answersThisCall*8);
+      }
+      // tune: if failures exceed threshold, agent may swap
+      if(m.errors > 8){
+        logDecision(`High error rate detected for ${m.name} (${m.errors}). Considering swap.`);
+        attemptSwap(activeModelIdx);
+      }
+      // auto-tune batch: if no errors and latency low, increase batch for throughput
+      if(m.errors===0 && (totalLatency / Math.max(1, successes)) < 220 && m.batch < 32){
+        m.batch = Math.min(32, m.batch + 1);
+        logDecision(`Increased batch for ${m.name} to ${m.batch} (auto-tune)`);
+      }
+      // if lots of errors, decrease batch
+      if(m.errors>5 && m.batch>1){
+        m.batch = Math.max(1, Math.floor(m.batch/2));
+        logDecision(`Reduced batch for ${m.name} to ${m.batch} to reduce errors`);
+      }
+
+      // update KPIs
+      qpsEl.textContent = rpm;
+      latencyEl.textContent = Math.round(totalLatency / Math.max(1, successes+fails));
+      errorsEl.textContent = totalErrors;
+      activeModelEl.textContent = m.name + (m.errors>5 ? ' ⚠️' : '');
+      renderModels();
+    }
+
+    function attemptSwap(idx){
+      const m = modelPool[idx];
+      const healthy = m.alternates[0];
+      // pick first alternate as candidate
+      logDecision(`Swapping ${m.name} -> ${healthy}`);
+      // simulation: reduce errors and reset some metrics
+      m.name = healthy;
+      m.errors = Math.max(0, Math.floor(m.errors/3));
+      m.latency = Math.max(60, m.latency - 20);
+      logActivity(`Swapped to ${healthy}. New latency ${m.latency} ms`);
+    }
+
+    // UI bindings
+    document.getElementById('enableBtn').addEventListener('click', ()=>{
+      enabled = !enabled;
+      document.getElementById('enableBtn').textContent = enabled? 'Agent: ON' : 'Enable Agent';
+      logDecision(enabled? 'Agent enabled' : 'Agent disabled');
+    });
+    document.getElementById('pauseBtn').addEventListener('click', ()=>{
+      paused = !paused;
+      document.getElementById('pauseBtn').textContent = paused? 'Resume' : 'Pause';
+      logDecision(paused? 'Agent paused' : 'Agent resumed');
+    });
+    document.getElementById('openInspector').addEventListener('click', ()=>{
+      alert('Agent Inspector (simulation)\n\nShows model health, recent swaps and tuning actions.');
+    });
+
+    globalBatch.addEventListener('input', ()=>{ globalBatchVal.textContent = globalBatch.value; });
+    load.addEventListener('input', ()=>{ loadVal.textContent = load.value; });
+
+    // initial render
+    renderModels();
+    logActivity('Simulation initialized.');
+
+    // tick every second
+    setInterval(simulateTick, 1000);
+
+  </script>
+</body>
+</html>

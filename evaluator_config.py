@@ -39,6 +39,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "ignore_grading_cache": True,
     "force_ai_jury_for_all_answers": True,
     "model_first_question_batching": True,
+    "judge_answer_batch_size": 3,
+    "judge_batch_num_predict": 1024,
     "patient_ai_mode": True,
     "enable_jury_circuit_breaker": False,
     "judge_timeout_seconds": 7200,
