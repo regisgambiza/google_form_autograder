@@ -93,6 +93,7 @@
     <span class="small">Simulation only — does not modify app code.</span>
   </footer>
 
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script>
     // Sample model entries (each has two alternates)
     const modelPool = [
@@ -138,11 +139,35 @@
     function logDecision(text){
       const t = new Date().toLocaleTimeString();
       decisionLog.innerHTML = `<div style="padding:6px;border-bottom:1px solid rgba(255,255,255,0.02)"><strong>${t}</strong> ${text}</div>` + decisionLog.innerHTML;
+      pushChartPoint('decisions', Date.now(), 1);
     }
     function logActivity(text){
       const t = new Date().toLocaleTimeString();
       activityLog.innerHTML = `<div style="padding:6px;border-bottom:1px dashed rgba(255,255,255,0.02)"><span class="small">${t}</span> ${text}</div>` + activityLog.innerHTML;
+      pushChartPoint('activity', Date.now(), 1);
     }
+
+    // Charts
+    const charts = {};
+    const chartDataBuffers = {throughput:[], latency:[], errors:[], decisions:[], activity:[]};
+
+    function pushChartPoint(kind, ts, val){
+      const buf = chartDataBuffers[kind];
+      buf.push({x: ts, y: val});
+      while(buf.length>60) buf.shift();
+      if(charts[kind]) charts[kind].update();
+    }
+
+    function createCharts(){
+      const ctx1 = document.createElement('canvas'); ctx1.height=80; document.querySelector('.col:nth-child(2)').appendChild(ctx1);
+      charts.throughput = new Chart(ctx1.getContext('2d'), {type:'line', data:{datasets:[{label:'throughput',data:chartDataBuffers.throughput,borderColor:'#7ee7a2',tension:0.3}]}, options:{scales:{x:{type:'time',time:{unit:'second'}}}}});
+      const ctx2 = document.createElement('canvas'); ctx2.height=80; document.querySelector('.col:nth-child(2)').appendChild(ctx2);
+      charts.latency = new Chart(ctx2.getContext('2d'), {type:'line', data:{datasets:[{label:'latency ms',data:chartDataBuffers.latency,borderColor:'#ffd166',tension:0.3}]}, options:{scales:{x:{type:'time',time:{unit:'second'}}}}});
+      const ctx3 = document.createElement('canvas'); ctx3.height=80; document.querySelector('.col:nth-child(2)').appendChild(ctx3);
+      charts.errors = new Chart(ctx3.getContext('2d'), {type:'line', data:{datasets:[{label:'errors',data:chartDataBuffers.errors,borderColor:'#ff6b6b',tension:0.3}]}, options:{scales:{x:{type:'time',time:{unit:'second'}}}}});
+    }
+
+    createCharts();
 
     function simulateTick(){
       if(!enabled || paused) return;
@@ -188,9 +213,13 @@
       }
 
       // update KPIs
+      const avgLat = Math.round(totalLatency / Math.max(1, successes+fails));
       qpsEl.textContent = rpm;
-      latencyEl.textContent = Math.round(totalLatency / Math.max(1, successes+fails));
+      latencyEl.textContent = avgLat;
       errorsEl.textContent = totalErrors;
+      pushChartPoint('throughput', Date.now(), rpm);
+      pushChartPoint('latency', Date.now(), avgLat);
+      pushChartPoint('errors', Date.now(), totalErrors);
       activeModelEl.textContent = m.name + (m.errors>5 ? ' ⚠️' : '');
       renderModels();
     }
