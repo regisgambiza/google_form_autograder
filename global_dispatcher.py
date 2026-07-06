@@ -785,8 +785,9 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                 and key_eligible
                 and all(r.raw_answer != str(value) for value in (t.expected or []))
             )
+            # Write YES and REVIEW answers to Google Form; NO answers are not written
             forms_results[fi]["question_answers"].setdefault(qid, []).append(
-                r.raw_answer if r.decision == "YES" and key_eligible else None
+                r.raw_answer if r.decision in ("YES", "REVIEW") else None
             )
             if r.decision == "REVIEW":
                 forms_results[fi].setdefault("question_reviews", {}).setdefault(qid, []).append({
@@ -866,7 +867,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
             if r.decision == "YES":
                 action = "Answer accepted; queued for the answer key audit." if accepted_variant else "Answer accepted; it matches an existing accepted form."
             elif r.decision == "REVIEW":
-                action = "Not added to Google Forms; teacher approval is required."
+                action = "Answer added to Google Forms; pending teacher review."
             else:
                 action = "Rejected and not added to Google Forms."
             shown_answer = safe_text(t.answer) if bool(cfg.get("gui_show_student_answers", True)) else "[hidden]"
@@ -915,8 +916,8 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                     answer for answer in data["question_answers"].get(qid, [])
                     if answer is not None and answer != "" and answer not in expected_values
                 ))
-                # Only confident agreement between all primary roles may
-                # change the live Form automatically. REVIEW stays queued.
+                # REVIEW answers are now written to Google Form and will be reviewed later.
+                # Only confident YES answers may be auto-applied without teacher approval.
                 categorized_candidates = list(dict.fromkeys(accepted))
                 if accepted or approval_answers or rejected_answers:
                     enqueue_review({
