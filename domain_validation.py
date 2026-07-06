@@ -159,6 +159,7 @@ def _equation_fragments(value: str) -> List[Dict[str, object]]:
         lhs, rhs = _math_expr(left), _math_expr(right)
         valid = bool(
             lhs is not None and rhs is not None
+            and hasattr(lhs, 'free_symbols') and hasattr(rhs, 'free_symbols')
             and not lhs.free_symbols and not rhs.free_symbols
             and simplify(lhs - rhs) == 0
         )
@@ -187,6 +188,8 @@ def _inequality_set(value: str):
     left, op, right = _math_expr(match.group(1)), match.group(2), _math_expr(match.group(3))
     if left is None or right is None:
         return None
+    if not hasattr(left, 'free_symbols') or not hasattr(right, 'free_symbols'):
+        return None
     symbols = left.free_symbols | right.free_symbols
     if len(symbols) != 1:
         return None
@@ -208,18 +211,27 @@ def _equivalent_math(candidate: str, expected: str) -> Optional[bool]:
         if any(value is None for value in (cexpr, eexpr, crhs, erhs)):
             return None
         cdiff, ediff = simplify(cexpr - crhs), simplify(eexpr - erhs)
+        if not hasattr(cdiff, 'free_symbols') or not hasattr(ediff, 'free_symbols'):
+            return False
         if cdiff.free_symbols != ediff.free_symbols:
             return False
         if ediff == 0:
             return bool(cdiff == 0)
         ratio = simplify(cdiff / ediff)
+        if not hasattr(ratio, 'free_symbols'):
+            return bool(ratio != 0)
         return bool(not ratio.free_symbols and ratio != 0)
     cexpr, eexpr = _math_expr(candidate), _math_expr(expected)
     if cexpr is None or eexpr is None:
         return None
+    if not hasattr(cexpr, 'free_symbols') or not hasattr(eexpr, 'free_symbols'):
+        return False
     if cexpr.free_symbols != eexpr.free_symbols:
         return False
-    return bool(simplify(cexpr - eexpr) == 0)
+    result = simplify(cexpr - eexpr)
+    if not hasattr(result, 'free_symbols'):
+        return bool(result == 0)
+    return bool(result == 0)
 
 
 def _looks_structured_math(question: str, expected: str) -> bool:

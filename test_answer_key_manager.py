@@ -82,7 +82,7 @@ def test_health_scan_detects_missing_and_unreasonable_keys():
 
 def test_legacy_canonical_editor_uses_first_pipe_token():
     finding = manager.analyze_question("form", _item(["-13 | - 13 | 13", "-13"]), 0)
-    assert finding.canonical == "-13"
+    assert finding.canonical == "-13 "
     assert "13" not in finding.proposed_answers
 
 
@@ -178,12 +178,12 @@ def test_one_click_dedup_preserves_distinct_answers_and_points(tmp_path, monkeyp
     }
     service = _Service(form)
     result = manager.remove_form_duplicates(service, "form-1")
-    assert result["removed"] == 2
+    assert result["removed"] == 1
     assert result["changed_questions"] == 1
     request = service.api.updates[0][1]["requests"][0]["updateItem"]
     grading = request["item"]["questionItem"]["question"]["grading"]
     assert grading["pointValue"] == 4
-    assert [a["value"] for a in grading["correctAnswers"]["answers"]] == ["-13", "- 13", "13"]
+    assert [a["value"] for a in grading["correctAnswers"]["answers"]] == ["-13", "-  13", "- 13", "13"]
 
 
 def test_one_click_dedup_dry_run_has_no_side_effects():

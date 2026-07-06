@@ -11,7 +11,7 @@ def test_current_jury_models_use_reliability_first_independent_roles():
     assert cfg["jury_models"]["concept_judge"] == "phi4:14b"
     assert cfg["jury_models"]["strict_judge"] == "gpt-oss:latest"
     assert len(set(cfg["jury_models"][role] for role in ("semantic_judge", "factual_judge", "concept_judge", "strict_judge"))) == 4
-    assert cfg["rubric_model"] == "mistral-nemo:12b"
+    assert "rubric_model" not in cfg
     assert cfg["reasoning_model"] == "phi4:14b"
 
 
@@ -44,12 +44,12 @@ def test_jury_uses_three_blind_roles_and_conditional_gpt_adjudicator():
     assert cfg["jury_models"][adaptive["adjudicator_role"]] == "gpt-oss:latest"
 
 
-def test_teacher_key_validator_is_bounded_and_avoids_deepseek():
+def test_teacher_key_validator_was_removed_for_teacher_answer_master_flow():
     cfg = json.loads(Path("config.json").read_text(encoding="utf-8"))
-    assert cfg["expected_answer_validator_model"] == "llama3.1:8b"
-    assert cfg["expected_answer_validator_fallback_model"] == "gemma3:4b"
-    assert cfg["expected_answer_validator_timeout_seconds"] <= 180
-    assert cfg["expected_answer_validator_fallback_timeout_seconds"] <= 300
+    assert "expected_answer_validator_model" not in cfg
+    assert "expected_answer_validator_fallback_model" not in cfg
+    assert "expected_answer_validator_timeout_seconds" not in cfg
+    assert "expected_answer_validator_fallback_timeout_seconds" not in cfg
 
 
 def test_stop_before_thread_run_never_spawns_grader(monkeypatch):

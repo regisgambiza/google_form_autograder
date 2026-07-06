@@ -102,13 +102,13 @@ def get_responses(service, form_id, question_id, grade_recent_only=False):
                     for ans in q_ans["textAnswers"].get("answers", []):
                         value = ans.get("value")
                         if value is not None:
-                            answers.append(value.strip())
+                            answers.append(str(value))
                             found_with_answers += 1
                 if "choiceAnswers" in q_ans:
                     for ans in q_ans["choiceAnswers"].get("answers", []):
                         value = ans.get("value")
                         if value is not None:
-                            answers.append(value.strip())
+                            answers.append(str(value))
                             found_with_answers += 1
 
             next_page_token = result.get("nextPageToken")
@@ -128,13 +128,13 @@ def get_responses(service, form_id, question_id, grade_recent_only=False):
                     for ans in q_ans["textAnswers"].get("answers", []):
                         value = ans.get("value")
                         if value is not None:
-                            answers.append(value.strip())
+                            answers.append(str(value))
                             found_with_answers += 1
                 if "choiceAnswers" in q_ans:
                     for ans in q_ans["choiceAnswers"].get("answers", []):
                         value = ans.get("value")
                         if value is not None:
-                            answers.append(value.strip())
+                            answers.append(str(value))
                             found_with_answers += 1
 
             log("INFO", f"RECENT-ONLY STRICT: latest submit time {latest_time.isoformat()} | responses in batch: {len(latest_responses)}")

@@ -10,7 +10,6 @@ from typing import Dict, List, Optional, Sequence
 from answer_key_policy import (
     clean_display,
     equivalence_confidence,
-    identity_key,
     prepare_answer_key,
     safely_equivalent,
 )
@@ -45,7 +44,7 @@ def _answers(question: Dict) -> List[str]:
     return [
         str(answer.get("value", ""))
         for answer in grading.get("correctAnswers", {}).get("answers", [])
-        if clean_display(answer.get("value", ""))
+        if answer.get("value") is not None and str(answer.get("value")) != ""
     ]
 
 
@@ -68,8 +67,8 @@ def analyze_question(
     if "textQuestion" not in question:
         return None
     current = _answers(question)
-    canonical_source = clean_display(canonical_override if canonical_override is not None else (current[0] if current else ""))
-    canonical = clean_display(canonical_source.split("|", 1)[0]) if canonical_source else ""
+    canonical_source = str(canonical_override if canonical_override is not None else (current[0] if current else ""))
+    canonical = canonical_source.split("|", 1)[0] if clean_display(canonical_source) else ""
     issues: List[str] = []
     if not current:
         issues.append("missing answer key")
@@ -77,7 +76,7 @@ def analyze_question(
         issues.append("missing canonical answer")
 
     trusted = [canonical_source] if canonical_source else []
-    queued = [clean_display(value) for value in (review_candidates or []) if clean_display(value)]
+    queued = [str(value) for value in (review_candidates or []) if value is not None and str(value) != ""]
     plan = prepare_answer_key(current, [], trusted, max_variants)
     if plan.duplicates:
         issues.append(f"{len(plan.duplicates)} duplicate entries")
@@ -97,12 +96,12 @@ def analyze_question(
     if queued:
         issues.append(f"{len(queued)} queued candidate(s) awaiting decision")
 
-    current_clean = [clean_display(value) for value in current]
-    proposed = plan.answers if canonical else current_clean
-    current_keys = set(current_clean)
+    current_raw = list(current)
+    proposed = plan.answers if canonical else current_raw
+    current_keys = set(current_raw)
     proposed_keys = set(proposed)
     additions = [value for value in proposed if value not in current_keys]
-    removals = [value for value in current_clean if value not in proposed_keys]
+    removals = [value for value in current_raw if value not in proposed_keys]
 
     if not canonical:
         confidence, route = 0.0, "reject"
@@ -124,7 +123,7 @@ def analyze_question(
         title=str(item.get("title", "")),
         points=int(grading.get("pointValue", 0) or 0),
         canonical=canonical,
-        current_answers=current_clean,
+        current_answers=current_raw,
         proposed_answers=proposed,
         review_candidates=queued,
         additions=additions,
@@ -261,12 +260,11 @@ def remove_form_duplicates(service, form_id: str, dry_run: bool = False) -> Dict
         unique = []
         seen = set()
         for raw in current:
-            value = clean_display(raw)
-            key = identity_key(value)
-            if key in seen:
+            value = str(raw)
+            if value in seen:
                 removed += 1
                 continue
-            seen.add(key)
+            seen.add(value)
             unique.append(value)
         if len(unique) == len(current):
             continue
@@ -318,8 +316,8 @@ def keep_teacher_answers_only(service, form_id: str, dry_run: bool = False) -> D
         current = _answers(question)
         if len(current) <= 1:
             continue
-        canonical = clean_display(current[0])
-        if not canonical:
+        canonical = str(current[0])
+        if not clean_display(canonical):
             continue
         removed += len(current) - 1
         changed_questions += 1

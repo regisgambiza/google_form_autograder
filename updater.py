@@ -3,7 +3,7 @@ import threading
 import time
 
 from answer_key_manager import backup_form_grading, enqueue_review
-from answer_key_policy import clean_display, equivalence_confidence, identity_key, prepare_answer_key, safely_equivalent
+from answer_key_policy import clean_display
 from evaluator_config import load_config
 from logger import log
 
@@ -92,26 +92,29 @@ def update_correct_answers(
         auto_add_variants = bool(cfg.get("answer_key_auto_add_proven_equivalents", True))
         if dry_run is None:
             dry_run = bool(cfg.get("answer_key_dry_run", False))
-        canonical = clean_display((trusted_expected or [""])[0]).split("|", 1)[0].strip()
-        if not canonical:
+        canonical = str((trusted_expected or [""])[0])
+        if not clean_display(canonical):
             log("WARNING", f"No trusted teacher answer for QID {question_id}; answer-key update blocked.")
             return duplicates
 
-        existing_clean = [clean_display(value) for value in existing_answers if clean_display(value)]
-        existing_keys = {identity_key(value) for value in existing_clean}
+        # Existing Google Form values and accepted student values are payloads,
+        # not display strings. Exact equality is the only write-path dedupe rule.
+        existing_raw = [str(value) for value in existing_answers if value is not None and str(value) != ""]
+        existing_values = set(existing_raw)
         updated_answers = []
         seen = set()
         duplicates = []
 
         def append_unique(raw):
-            value = clean_display(raw)
-            if not value:
+            if raw is None:
                 return False
-            key = identity_key(value)
-            if key in seen:
+            value = str(raw)
+            if value == "":
+                return False
+            if value in seen:
                 duplicates.append(value)
                 return False
-            seen.add(key)
+            seen.add(value)
             updated_answers.append(value)
             return True
 
@@ -119,21 +122,21 @@ def update_correct_answers(
         append_unique(canonical)
         if manual_approval:
             for value in correct_answers:
-                if identity_key(value) != identity_key(canonical):
+                if str(value) != canonical:
                     append_unique(value)
         else:
             # Preserve all existing variants until a teacher removes them in review.
-            for value in existing_clean[1:]:
+            for value in existing_raw[1:]:
                 append_unique(value)
             newly_added = []
             if auto_add_variants:
                 max_variants = max(1, int(cfg.get("answer_key_max_variants", 50)))
                 for value in correct_answers:
-                    cleaned = clean_display(value)
                     if len(updated_answers) >= max_variants:
                         break
-                    if cleaned and identity_key(cleaned) not in existing_keys and append_unique(cleaned):
-                        newly_added.append(cleaned)
+                    raw_value = str(value) if value is not None else None
+                    if raw_value is not None and raw_value != "" and raw_value not in existing_values and append_unique(raw_value):
+                        newly_added.append(raw_value)
                 if newly_added:
                     review_record = {
                         "form_id": form_id,
@@ -147,7 +150,7 @@ def update_correct_answers(
                         "reason": "AI-classified variants added pending teacher audit",
                     }
 
-        changed = updated_answers != existing_clean
+        changed = updated_answers != existing_raw
         log("INFO", f"Filtered {len(duplicates)} duplicate answer-key candidates: {duplicates}")
 
         auto_threshold = float(cfg.get("answer_key_auto_apply_confidence", 0.95))

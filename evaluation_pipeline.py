@@ -4,7 +4,7 @@ import os
 import time
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Union
 
@@ -83,6 +83,20 @@ class EvaluationResult:
     stage_reached: str
     evidence: Dict[str, object] = field(default_factory=dict)
 
+    @property
+    def raw_answer(self) -> str:
+        """Exact response payload associated with this logical result."""
+        return self.answer
+
+
+def _result_for_raw_answer(result: EvaluationResult, raw_answer: str) -> EvaluationResult:
+    """Reuse a decision without leaking a normalized/cache representative into write-back."""
+    if result.answer == raw_answer and result.evidence.get("answer", raw_answer) == raw_answer:
+        return result
+    evidence = dict(result.evidence)
+    evidence["answer"] = raw_answer
+    return replace(result, answer=raw_answer, evidence=evidence)
+
 
 def _expected_text(expected: Union[str, List[str]]) -> str:
     if isinstance(expected, list):
@@ -144,7 +158,7 @@ def evaluate_answer(
                     agent.ingest_metrics(answers=1, errors=1 if r.decision == "NO" else 0, latency_ms=r.latency_ms)
             except Exception:
                 pass
-            return r
+            return _result_for_raw_answer(r, answer)
 
     # Write heartbeat with stage info for hang monitoring
     _write_heartbeat_if_needed(hang_stage="deterministic_checks")
@@ -416,7 +430,7 @@ def evaluate_answers(answers: List[str], expected: Union[str, List[str]], questi
     for rep, originals in mapping.items():
         for original in originals:
             r = rep_results[rep]
-            out.append(EvaluationResult(original, r.decision, r.final_score, r.semantic_score, r.concept_score, r.factual_score, r.misconception_detected, r.misconception_description, r.missing_concepts, r.accepted_concepts, r.model_agreement, r.confidence, r.fast_path_used, r.latency_ms, r.stage_reached, dict(r.evidence)))
+            out.append(_result_for_raw_answer(r, original))
     return out
 
 
@@ -436,7 +450,7 @@ def evaluate_answers_model_first(answers: List[str], expected: Union[str, List[s
         with RESULT_CACHE_LOCK:
             existing = RESULT_CACHE.get(ck)
         if existing is not None:
-            cached[answer] = existing
+            cached[answer] = _result_for_raw_answer(existing, answer)
             continue
         domain = validate_answer_domain(answer, expected if isinstance(expected, list) else [expected], question)
         rubrics_by_answer[answer] = {

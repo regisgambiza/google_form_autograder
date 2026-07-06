@@ -31,7 +31,6 @@ from answer_key_manager import (
     restore_backup,
     scan_form_data,
 )
-from answer_key_policy import identity_key
 from auth import get_service
 from app_theme import apply_widget_theme
 from form_searcher import find_all_forms_in_sources
@@ -352,18 +351,18 @@ class AnswerKeyDashboard(QDialog):
                 records = pending_by_item.get(str(finding.item_id), [])
                 categories = {}
                 for value in finding.current_answers:
-                    categories[identity_key(value)] = "Accepted"
+                    categories[value] = "Accepted"
                 for record in records:
                     for value in record.get("accepted", []):
-                        categories[identity_key(value)] = "Accepted"
+                        categories[value] = "Accepted"
                     for value in record.get("needs_approval", []):
-                        categories[identity_key(value)] = "Needs approval"
+                        categories[value] = "Needs approval"
                     for value in record.get("rejected", []):
-                        categories[identity_key(value)] = "Rejected"
+                        categories[value] = "Rejected"
                     if not any(key in record for key in ("accepted", "needs_approval", "rejected")):
                         legacy_category = "Needs approval" if record.get("source") == "grading_review" else "Accepted"
                         for value in record.get("candidates", []):
-                            categories[identity_key(value)] = legacy_category
+                            categories[value] = legacy_category
                 finding.answer_categories = categories
                 finding.review_records = records
                 needs_review = finding.route in {"review", "reject"} or bool(records)
@@ -409,29 +408,31 @@ class AnswerKeyDashboard(QDialog):
         self.canonical_input.setText(finding.canonical)
         self.answer_list.clear()
 
-        current_keys = {identity_key(value) for value in finding.current_answers}
-        canonical_key = identity_key(finding.canonical)
+        current_keys = set(finding.current_answers)
+        canonical_key = finding.canonical
         categories = getattr(finding, "answer_categories", {})
         values = []
         seen = set()
         for value in finding.current_answers + finding.review_candidates:
-            key = identity_key(value)
+            key = value
             if key not in seen:
                 seen.add(key)
                 values.append(value)
         for record in getattr(finding, "review_records", []):
             for value in record.get("candidates", []):
-                key = identity_key(value)
+                key = value
                 if key not in seen:
                     seen.add(key)
                     values.append(value)
         for value in values:
-            key = identity_key(value)
+            key = value
             category = categories.get(key, "Accepted" if key in current_keys else "Needs approval")
             label = "Accepted (teacher)" if key == canonical_key else category
             item = QListWidgetItem(f"{label} — {value}")
             item.setData(Qt.UserRole + 1, key == canonical_key)
             item.setData(Qt.UserRole + 2, label)
+            item.setData(Qt.UserRole + 3, value)
+            item.setData(Qt.UserRole + 4, item.text())
             if key == canonical_key:
                 item.setFlags(item.flags() & ~Qt.ItemIsEditable & ~Qt.ItemIsUserCheckable)
                 item.setToolTip("Protected teacher canonical answer")
@@ -480,15 +481,19 @@ class AnswerKeyDashboard(QDialog):
 
     @staticmethod
     def _answer_item_value(item) -> str:
-        text = item.text().strip()
+        raw_value = item.data(Qt.UserRole + 3)
+        original_display = item.data(Qt.UserRole + 4)
+        if raw_value is not None and item.text() == original_display:
+            return str(raw_value)
+        text = item.text()
         prefix = f"{item.data(Qt.UserRole + 2)} — "
-        return text[len(prefix):].strip() if text.startswith(prefix) else text
+        return text[len(prefix):] if text.startswith(prefix) else text
 
     def _teacher_benchmark_examples(self, finding: HealthFinding, canonical: str) -> List[Dict]:
         examples = []
         decision_by_category = {"Accepted": "YES", "Needs approval": "REVIEW", "Rejected": "NO"}
         reviewed_keys = {
-            identity_key(value)
+            value
             for record in getattr(finding, "review_records", [])
             for value in record.get("candidates", [])
         }
@@ -499,7 +504,7 @@ class AnswerKeyDashboard(QDialog):
             if bool(item.data(Qt.UserRole + 1)):
                 continue
             answer = self._answer_item_value(item)
-            if identity_key(answer) not in reviewed_keys:
+            if answer not in reviewed_keys:
                 continue
             category = str(item.data(Qt.UserRole + 2) or "Needs approval")
             examples.append({
@@ -515,7 +520,7 @@ class AnswerKeyDashboard(QDialog):
 
     def save_question(self):
         finding = self.active_finding
-        canonical = finding.canonical.strip() if finding else ""
+        canonical = finding.canonical if finding else ""
         if not finding or not canonical:
             QMessageBox.warning(self, "Correct answer required", "Enter the correct answer first.")
             return

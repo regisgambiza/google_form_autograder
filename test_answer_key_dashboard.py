@@ -156,10 +156,10 @@ def test_answer_categories_are_labelled_and_rejected_is_not_selected():
         index=0, item_id="item-1", title="Question 1", canonical="teacher",
         current_answers=["teacher", "accepted", "approval"], review_candidates=[],
         answer_categories={
-            dashboard.identity_key("teacher"): "Accepted",
-            dashboard.identity_key("accepted"): "Accepted",
-            dashboard.identity_key("approval"): "Needs approval",
-            dashboard.identity_key("wrong"): "Rejected",
+            "teacher": "Accepted",
+            "accepted": "Accepted",
+            "approval": "Needs approval",
+            "wrong": "Rejected",
         },
         review_records=[{"candidates": ["accepted", "approval", "wrong"]}],
     )

@@ -145,12 +145,12 @@ def _extract_answers_for_question(all_responses: List[Dict], question_id: str, g
             for ans in q_ans["textAnswers"].get("answers", []):
                 v = ans.get("value")
                 if v is not None:
-                    answers.append(str(v).strip())
+                    answers.append(str(v))
         if "choiceAnswers" in q_ans:
             for ans in q_ans["choiceAnswers"].get("answers", []):
                 v = ans.get("value")
                 if v is not None:
-                    answers.append(str(v).strip())
+                    answers.append(str(v))
     return answers
 
 

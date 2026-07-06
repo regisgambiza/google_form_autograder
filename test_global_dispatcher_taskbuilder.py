@@ -10,6 +10,12 @@ def test_exact_duplicates_are_removed_after_fetch_in_first_seen_order():
     assert gd.remove_exact_duplicate_answers(answers) == ["7", "9 - 2 = 7", " 7 "]
 
 
+def test_strict_dedup_keeps_unicode_minus_distinct_from_ascii_hyphen():
+    answers = ["5x - 5", "5x − 5", "5x - 5"]
+
+    assert gd.remove_exact_duplicate_answers(answers) == ["5x - 5", "5x − 5"]
+
+
 def test_strict_dedup_keeps_spacing_case_and_symbol_variants_separate():
     answers = ["5x - 5", "5x-5", "5x - 5 ", "5X - 5", "5x − 5", "5x - 5"]
 

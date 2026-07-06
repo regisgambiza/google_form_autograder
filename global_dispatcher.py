@@ -25,7 +25,6 @@ from logger import gui_event, log, runtime_snapshot, stage_banner, update_runtim
 from response_utils import save_grading_time
 from updater import update_correct_answers
 from answer_key_manager import enqueue_review
-from answer_key_policy import identity_key
 
 
 @dataclass
@@ -38,6 +37,11 @@ class Task:
     answer: str
     expected: List[str]
     queued_monotonic: float = field(default_factory=time.monotonic)
+
+    @property
+    def raw_answer(self) -> str:
+        """The exact Google Forms response; never normalize this value."""
+        return self.answer
 
 
 @dataclass
@@ -779,19 +783,19 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
             accepted_variant = (
                 r.decision == "YES"
                 and key_eligible
-                and all(identity_key(r.answer) != identity_key(value) for value in (t.expected or []))
+                and all(r.raw_answer != str(value) for value in (t.expected or []))
             )
             forms_results[fi]["question_answers"].setdefault(qid, []).append(
-                r.answer if r.decision == "YES" and key_eligible else None
+                r.raw_answer if r.decision == "YES" and key_eligible else None
             )
             if r.decision == "REVIEW":
                 forms_results[fi].setdefault("question_reviews", {}).setdefault(qid, []).append({
-                    "answer": r.answer, "confidence": r.confidence, "stage": r.stage_reached,
+                    "answer": r.raw_answer, "confidence": r.confidence, "stage": r.stage_reached,
                     "evidence": r.evidence,
                 })
             if r.decision == "NO":
                 forms_results[fi].setdefault("question_rejected", {}).setdefault(qid, []).append({
-                    "answer": r.answer, "confidence": r.confidence, "stage": r.stage_reached,
+                    "answer": r.raw_answer, "confidence": r.confidence, "stage": r.stage_reached,
                     "evidence": r.evidence,
                 })
             question_done = len(forms_results[fi]["question_answers"].get(qid, []))
@@ -906,10 +910,10 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                 approval_answers = list(dict.fromkeys(x["answer"] for x in reviews))
                 rejected_answers = list(dict.fromkeys(x["answer"] for x in rejected))
                 trusted_expected = question.get("trusted_expected", get_effective_expected(question, [])[:1])
-                expected_keys = {identity_key(value) for value in trusted_expected}
+                expected_values = {str(value) for value in trusted_expected}
                 accepted = list(dict.fromkeys(
                     answer for answer in data["question_answers"].get(qid, [])
-                    if answer and identity_key(answer) not in expected_keys
+                    if answer is not None and answer != "" and answer not in expected_values
                 ))
                 # Only confident agreement between all primary roles may
                 # change the live Form automatically. REVIEW stays queued.
