@@ -5,7 +5,7 @@
         ]
     },
     "jury_models": {
-        "semantic_judge": "gpt-oss:latest",
+        "semantic_judge": "mistral-nemo:12b",
         "factual_judge": "gemma3:12b",
         "concept_judge": "phi4:14b",
         "strict_judge": "gpt-oss:latest",
