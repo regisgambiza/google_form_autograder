@@ -13,11 +13,6 @@ from consensus_engine import combine_scores
 from deterministic_checks import run_deterministic_checks
 from evaluator_config import load_config
 from logger import log
-try:
-    from ai_agent import get_global_agent
-except Exception:
-    def get_global_agent():
-        return None
 from normalization import normalize, semantic_deduplicate
 from accuracy_policy import adaptive_math_jury_decision, conservative_jury_decision
 from decision_audit import record_decision
@@ -153,9 +148,7 @@ def evaluate_answer(
             r = RESULT_CACHE[ck]
             log("DEBUG", f"cache_hit=True stage={r.stage_reached}")
             try:
-                agent = get_global_agent()
-                if agent:
-                    agent.ingest_metrics(answers=1, errors=1 if r.decision == "NO" else 0, latency_ms=r.latency_ms)
+                pass
             except Exception:
                 pass
             return _result_for_raw_answer(r, answer)
@@ -172,12 +165,6 @@ def evaluate_answer(
             RESULT_CACHE[ck] = res
         record_decision(asdict(res), str(cfg.get("decision_audit_path", "logs/grading_decisions.jsonl")))
         log("DEBUG", f"latency_ms={lat:.2f} stage=deterministic")
-        try:
-            agent = get_global_agent()
-            if agent:
-                agent.ingest_metrics(answers=1, errors=0, latency_ms=lat)
-        except Exception:
-            pass
         return res
 
     domain = validate_answer_domain(answer, expected if isinstance(expected, list) else [expected], question)
@@ -231,12 +218,6 @@ def evaluate_answer(
         )
         with RESULT_CACHE_LOCK:
             RESULT_CACHE[ck] = res
-        try:
-            agent = get_global_agent()
-            if agent:
-                agent.ingest_metrics(answers=1, errors=1 if res.decision == "NO" else 0, latency_ms=lat)
-        except Exception:
-            pass
         return res
     judges = precomputed_judges
     if judges is None:
@@ -381,12 +362,6 @@ def evaluate_answer(
 
     log("DEBUG", f"EvaluationResult={res}")
     log("DEBUG", f"decision={res.decision} score={res.final_score:.3f} stage={res.stage_reached} latency_ms={res.latency_ms:.2f}")
-    try:
-        agent = get_global_agent()
-        if agent:
-            agent.ingest_metrics(answers=1, errors=1 if res.decision == "NO" else 0, latency_ms=lat)
-    except Exception:
-        pass
     return res
 
 

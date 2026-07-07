@@ -222,33 +222,6 @@ def main():
     write_heartbeat("initialization")
     start_hang_diagnostics(config)
 
-    # --- AI Agent integration ---
-    agent = None
-    try:
-        from ai_agent import AIAgent
-
-        if bool(config.get("enable_ai_agent", False)):
-            models_cfg = config.get("ai_agent_models", []) or []
-            # Fallback: construct simple models list from jury_models if available
-            if not models_cfg and isinstance(config.get("jury_models"), dict):
-                models_cfg = [
-                    {"name": k, "alternates": v.get("alternates", []), "batch": v.get("batch", 4)}
-                    for k, v in config.get("jury_models", {}).items()
-                ]
-            if not models_cfg:
-                models_cfg = [{"name": "default", "alternates": [], "batch": 4}]
-            agent = AIAgent(models=models_cfg)
-            agent.start()
-            try:
-                from ai_agent import register_global_agent
-                register_global_agent(agent)
-            except Exception:
-                pass
-            update_runtime_state(ai_agent_enabled=True, ai_agent_active_model=(agent.get_state().get("active_model") or {}).get("name", ""))
-    except Exception as e:
-        log("WARNING", f"Failed to start AIAgent: {e}")
-        agent = None
-
     grade_recent_only = os.environ.get("GRADE_RECENT_ONLY", "false").lower() == "true"
     if grade_recent_only:
         log("INFO", "RUNNING IN RECENT SUBMISSIONS ONLY MODE - Only new submissions will be graded")
@@ -355,14 +328,6 @@ def main():
                 log("INFO", f"[FORM] Stats | questions={total_questions} responses={total_responses} elapsed_s={elapsed:.2f}")
                 if duplicates_found:
                     print(f"\n=== Duplicate answers in {form_id}: {duplicates_found} ===\n")
-                # Feed coarse metrics to the AI agent (if running)
-                try:
-                    if agent:
-                        agent.ingest_metrics(answers=total_responses, errors=len(duplicates_found), latency_ms=(elapsed * 1000.0) / max(1, total_responses))
-                        update_runtime_state(ai_agent_total_answers=agent.get_state().get("total_answers"), ai_agent_total_errors=agent.get_state().get("total_errors"))
-                except Exception:
-                    pass
-
                 save_grading_time(form_id, datetime.now(timezone.utc))
                 write_heartbeat("form_complete")
                 processed_count += 1
@@ -468,14 +433,6 @@ def main():
             log("INFO", f"[FORM] Stats | questions={total_questions} responses={total_responses} elapsed_s={elapsed:.2f}")
             if duplicates_found:
                 print(f"\n=== Duplicate answers in {form_id}: {duplicates_found} ===\n")
-
-            # Feed coarse metrics to the AI agent (if running)
-            try:
-                if agent:
-                    agent.ingest_metrics(answers=total_responses, errors=len(duplicates_found), latency_ms=(elapsed * 1000.0) / max(1, total_responses))
-                    update_runtime_state(ai_agent_total_answers=agent.get_state().get("total_answers"), ai_agent_total_errors=agent.get_state().get("total_errors"))
-            except Exception:
-                pass
 
             save_grading_time(form_id, datetime.now(timezone.utc))
             write_heartbeat("form_complete")
