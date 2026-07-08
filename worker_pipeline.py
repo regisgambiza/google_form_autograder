@@ -5,9 +5,10 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Union
 
 from deterministic_checks import run_deterministic_checks
-from evaluation_pipeline import EvaluationResult, evaluate_answer
+from evaluation_pipeline import EvaluationResult, _result_for_raw_answer, evaluate_answer
 from evaluator_config import load_config
 from logger import log
+from normalization import normalize, semantic_deduplicate
 
 
 @dataclass
@@ -28,6 +29,16 @@ def evaluate_answers_worker_pipeline(
     question: str,
 ) -> List[EvaluationResult]:
     cfg = load_config()
+    deduplicate = bool(cfg.get("enable_deduplication", True))
+    original_answers = list(answers)
+    dedup_mapping = {}
+    if deduplicate:
+        answers, dedup_mapping = semantic_deduplicate(original_answers, normalize_fn=normalize)
+        log("INFO", f"[Worker Pipeline] Answer processing mode: deduplicated ({len(answers)}/{len(original_answers)} representative answers)")
+    else:
+        answers = original_answers
+        log("INFO", f"[Worker Pipeline] Answer processing mode: raw form responses ({len(answers)} answers, no deduplication)")
+
     det_workers = max(1, int(cfg.get("deterministic_worker_count", 6)))
     ai_workers = max(1, int(cfg.get("ai_worker_count", 2)))
     qsize = max(100, int(cfg.get("worker_queue_size", 2000)))
@@ -218,4 +229,14 @@ def evaluate_answers_worker_pipeline(
     log("INFO", "[Worker: Aggregator] Job complete.")
     log("INFO", f"[Worker Pipeline {pipeline_id}] Job complete. Processed {len(results_by_index)}/{total} answers.")
 
-    return [results_by_index[i] for i in range(total)]
+    representative_results = [results_by_index[i] for i in range(total)]
+    if not deduplicate:
+        return representative_results
+
+    results_by_representative = {result.answer: result for result in representative_results}
+    expanded_results: List[EvaluationResult] = []
+    for representative in answers:
+        result = results_by_representative[representative]
+        for original in dedup_mapping.get(representative, [representative]):
+            expanded_results.append(_result_for_raw_answer(result, original))
+    return expanded_results

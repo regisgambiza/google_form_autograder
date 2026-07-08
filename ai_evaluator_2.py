@@ -299,8 +299,10 @@ def evaluate_answers_batch(question, answers, expected=None):
         return []
 
     judges = MODELS
-    unique_answers = list(set(answers))
-    log("DEBUG", f"Processing {len(unique_answers)} unique answers against {len(expected)} expected")
+    deduplicate = bool(config.get("enable_deduplication", True))
+    unique_answers = list(dict.fromkeys(answers)) if deduplicate else list(answers)
+    mode = "unique answers" if deduplicate else "raw form answers"
+    log("DEBUG", f"Processing {len(unique_answers)} {mode} against {len(expected)} expected")
 
     accepted = []
 
@@ -366,7 +368,7 @@ def evaluate_answers_batch(question, answers, expected=None):
             log("DEBUG", f"Answer {idx} ({ans}) → NO")
 
     log("DEBUG", f"Accepted: {len(accepted)} answers")
-    return list(set(accepted))
+    return list(dict.fromkeys(accepted)) if deduplicate else accepted
 
 # --- Compatibility alias ---
 evaluate_answers = evaluate_answers_batch

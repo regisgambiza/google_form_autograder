@@ -245,3 +245,89 @@ def test_model_first_batching_evaluates_question_answers_together(monkeypatch, c
     emitted_lines = capsys.readouterr().out.splitlines()
     assert "FormProgress: 2/2" in emitted_lines
 
+
+def test_model_first_batching_raw_mode_keeps_duplicate_form_answers(monkeypatch, capsys):
+    structure = [{"questionId": "q1", "itemId": "item1", "index": 0, "type": "SHORT_ANSWER", "title": "Q1"}]
+    form_payload = {
+        "info": {"title": "Raw Batch Form"},
+        "items": [{
+            "itemId": "item1",
+            "questionItem": {
+                "question": {
+                    "grading": {"correctAnswers": {"answers": [{"value": "7"}]}}
+                }
+            },
+        }],
+    }
+    responses_payload = {
+        "responses": [
+            {"answers": {"q1": {"textAnswers": {"answers": [{"value": "7"}]}}}},
+            {"answers": {"q1": {"textAnswers": {"answers": [{"value": "7"}]}}}},
+            {"answers": {"q1": {"textAnswers": {"answers": [{"value": " 7 "}]}}}},
+        ]
+    }
+    fake_service = _FakeService(form_payload, responses_payload)
+    calls = []
+
+    monkeypatch.setattr(gd, "get_service", lambda: fake_service)
+    monkeypatch.setattr(gd, "get_form_structure", lambda service, form_id: structure)
+    monkeypatch.setattr(gd, "generate_form_feedback", lambda *args, **kwargs: None)
+    monkeypatch.setattr(gd, "save_grading_time", lambda *args, **kwargs: None)
+    monkeypatch.setattr(gd, "update_correct_answers", lambda *args, **kwargs: None)
+    monkeypatch.setattr(gd, "enqueue_review", lambda *args, **kwargs: None)
+    monkeypatch.setattr(gd, "log", lambda *args, **kwargs: None)
+
+    def fake_evaluate_answers_model_first(answers, expected, question):
+        calls.append((list(answers), list(expected), question))
+        return [
+            gd.EvaluationResult(
+                answer=answer,
+                decision="NO",
+                final_score=0.0,
+                semantic_score=0.0,
+                concept_score=0.0,
+                factual_score=0.0,
+                misconception_detected=False,
+                misconception_description="",
+                missing_concepts=[],
+                accepted_concepts=[],
+                model_agreement=1.0,
+                confidence=1.0,
+                fast_path_used=False,
+                latency_ms=1.0,
+                stage_reached="jury",
+                evidence={"key_eligible": False},
+            )
+            for answer in answers
+        ]
+
+    monkeypatch.setattr(gd, "evaluate_answers_model_first", fake_evaluate_answers_model_first)
+    monkeypatch.setattr(
+        gd,
+        "load_config",
+        lambda: {
+            "global_prefetch_workers": 1,
+            "ai_worker_count": 1,
+            "model_first_question_batching": True,
+            "force_ai_jury_for_all_answers": True,
+            "enable_deduplication": False,
+            "max_latency_per_answer_seconds": 5,
+            "forms_expensive_reads_per_minute": 6000,
+            "dispatcher_stall_timeout_seconds": 30,
+            "worker_queue_size": 100,
+            "enable_form_context": False,
+            "patient_ai_mode": True,
+        },
+    )
+
+    gd.run_global_dispatcher(
+        form_urls=["https://docs.google.com/forms/d/fake_form_1/viewform"],
+        grade_recent_only=False,
+        generate_report=False,
+    )
+
+    assert len(calls) == 1
+    assert calls[0][0] == ["7", "7", " 7 "]
+    emitted_lines = capsys.readouterr().out.splitlines()
+    assert "FormProgress: 3/3" in emitted_lines
+

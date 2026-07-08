@@ -1,4 +1,5 @@
 import evaluation_pipeline as ep
+import worker_pipeline as wp
 import global_dispatcher as gd
 import global_prefetch
 import response_utils
@@ -247,3 +248,139 @@ def test_model_first_cache_normalization_cannot_mutate_raw_answer(monkeypatch):
 
     assert [result.answer for result in results] == ["5x - 5", "5x-5"]
     assert [result.evidence["answer"] for result in results] == ["5x - 5", "5x-5"]
+
+
+def test_evaluate_answers_raw_mode_preserves_every_form_response(monkeypatch):
+    monkeypatch.setattr(
+        ep,
+        "load_config",
+        lambda *args, **kwargs: {
+            **__import__("evaluator_config").DEFAULT_CONFIG,
+            "enable_deduplication": False,
+        },
+    )
+    calls = []
+
+    def fake_evaluate_answer(answer, expected, question):
+        calls.append(answer)
+        return ep.EvaluationResult(
+            answer=answer,
+            decision="YES",
+            final_score=1.0,
+            semantic_score=1.0,
+            concept_score=1.0,
+            factual_score=1.0,
+            misconception_detected=False,
+            misconception_description="",
+            missing_concepts=[],
+            accepted_concepts=[],
+            model_agreement=1.0,
+            confidence=1.0,
+            fast_path_used=False,
+            latency_ms=1.0,
+            stage_reached="test",
+            evidence={"answer": answer, "key_eligible": True},
+        )
+
+    monkeypatch.setattr(ep, "evaluate_answer", fake_evaluate_answer)
+
+    results = ep.evaluate_answers(["5x - 5", "5x-5", "5x - 5"], ["5x - 5"], "Simplify.")
+
+    assert calls == ["5x - 5", "5x-5", "5x - 5"]
+    assert [result.answer for result in results] == ["5x - 5", "5x-5", "5x - 5"]
+
+
+def test_raw_cache_key_does_not_normalize_spacing(monkeypatch):
+    monkeypatch.setattr(ep, "normalize", lambda _value: "same-normalized-key")
+    qh = ep._qhash("Simplify.", ["5x - 5"])
+
+    assert ep._cache_key("5x - 5", qh, deduplicate=True) == ep._cache_key(" 5x - 5", qh, deduplicate=True)
+    assert ep._cache_key("5x - 5", qh, deduplicate=False) != ep._cache_key(" 5x - 5", qh, deduplicate=False)
+
+
+def test_worker_pipeline_deduplicated_mode_expands_raw_answers(monkeypatch):
+    monkeypatch.setattr(
+        wp,
+        "load_config",
+        lambda *args, **kwargs: {
+            **__import__("evaluator_config").DEFAULT_CONFIG,
+            "enable_deduplication": True,
+            "deterministic_worker_count": 1,
+            "ai_worker_count": 1,
+            "worker_queue_size": 100,
+            "numeric_tolerance": 0.01,
+        },
+    )
+    calls = []
+
+    def fake_evaluate_answer(answer, expected, question):
+        calls.append(answer)
+        return ep.EvaluationResult(
+            answer=answer,
+            decision="YES",
+            final_score=1.0,
+            semantic_score=1.0,
+            concept_score=1.0,
+            factual_score=1.0,
+            misconception_detected=False,
+            misconception_description="",
+            missing_concepts=[],
+            accepted_concepts=[],
+            model_agreement=1.0,
+            confidence=1.0,
+            fast_path_used=False,
+            latency_ms=1.0,
+            stage_reached="test",
+            evidence={"answer": answer, "key_eligible": True},
+        )
+
+    monkeypatch.setattr(wp, "evaluate_answer", fake_evaluate_answer)
+
+    results = wp.evaluate_answers_worker_pipeline(["foo", " foo ", "foo"], ["bar"], "Question?")
+
+    assert calls == ["foo"]
+    assert [result.answer for result in results] == ["foo", " foo ", "foo"]
+
+
+def test_worker_pipeline_raw_mode_preserves_duplicate_work(monkeypatch):
+    monkeypatch.setattr(
+        wp,
+        "load_config",
+        lambda *args, **kwargs: {
+            **__import__("evaluator_config").DEFAULT_CONFIG,
+            "enable_deduplication": False,
+            "deterministic_worker_count": 1,
+            "ai_worker_count": 1,
+            "worker_queue_size": 100,
+            "numeric_tolerance": 0.01,
+        },
+    )
+    calls = []
+
+    def fake_evaluate_answer(answer, expected, question):
+        calls.append(answer)
+        return ep.EvaluationResult(
+            answer=answer,
+            decision="YES",
+            final_score=1.0,
+            semantic_score=1.0,
+            concept_score=1.0,
+            factual_score=1.0,
+            misconception_detected=False,
+            misconception_description="",
+            missing_concepts=[],
+            accepted_concepts=[],
+            model_agreement=1.0,
+            confidence=1.0,
+            fast_path_used=False,
+            latency_ms=1.0,
+            stage_reached="test",
+            evidence={"answer": answer, "key_eligible": True},
+        )
+
+    monkeypatch.setattr(wp, "evaluate_answer", fake_evaluate_answer)
+
+    results = wp.evaluate_answers_worker_pipeline(["foo", " foo ", "foo"], ["bar"], "Question?")
+
+    assert calls == ["foo", " foo ", "foo"]
+    assert [result.answer for result in results] == ["foo", " foo ", "foo"]

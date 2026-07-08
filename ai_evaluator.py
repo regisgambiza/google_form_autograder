@@ -251,8 +251,10 @@ def evaluate_answers_batch(question, answers, expected=None):
     log("DEBUG", f"Expected numeric value: {expected_num}")
 
     judges = MODELS.get("judge", ["gpt-oss:20b"])
-    unique_answers = list(set(answers))
-    log("DEBUG", f"Processing {len(unique_answers)} unique answers")
+    deduplicate = bool(config.get("enable_deduplication", True))
+    unique_answers = list(dict.fromkeys(answers)) if deduplicate else list(answers)
+    mode = "unique answers" if deduplicate else "raw form answers"
+    log("DEBUG", f"Processing {len(unique_answers)} {mode}")
 
     accepted = []
 

@@ -519,12 +519,6 @@ class FormManager(QMainWindow):
         answer_keys_button.setFixedWidth(145)
         answer_keys_button.clicked.connect(self.open_answer_key_dashboard)
         command_layout.addWidget(answer_keys_button)
-        # Agent inspector button (opens in-app inspector dialog)
-        self.agent_button = QPushButton("Agent")
-        self.agent_button.setObjectName("Secondary")
-        self.agent_button.setFixedWidth(120)
-        self.agent_button.clicked.connect(self.open_agent_inspector)
-        command_layout.addWidget(self.agent_button)
         command_layout.addStretch()
         self.command_summary = QLabel("0 forms")
         self.command_summary.setObjectName("Muted")
@@ -959,6 +953,11 @@ class FormManager(QMainWindow):
         distinct_models_checkbox = QCheckBox("Require different models for acceptance", dialog)
         key_auto_add_checkbox = QCheckBox("Append validated answers now; audit them in Answer Keys", dialog)
         patient_ai_checkbox = QCheckBox("Patient AI: wait for complete model responses", dialog)
+        dedup_checkbox = QCheckBox("Deduplicated mode: group equivalent responses before evaluation", dialog)
+        dedup_checkbox.setToolTip(
+            "On: normalize/group equivalent responses and evaluate one representative.\n"
+            "Off: raw mode; take every response exactly as read from the form, with no pre-deduplication."
+        )
         audit_path_edit = QLineEdit(dialog)
         benchmark_path_edit = QLineEdit(dialog)
 
@@ -1057,6 +1056,14 @@ class FormManager(QMainWindow):
             jury_role_labels[role] = QLabel(role.replace('_', ' ').title() + ":", dialog)
 
         report_checkbox = QCheckBox("Generate Report", dialog)
+        dedup_checkbox.setChecked(cfg.get("enable_deduplication", True))
+        judge_answer_batch_size_spin = QSpinBox(dialog)
+        judge_answer_batch_size_spin.setRange(1, 20)
+        judge_answer_batch_size_spin.setValue(max(1, int(cfg.get("judge_answer_batch_size", 3))))
+        judge_answer_batch_size_spin.setToolTip(
+            "How many student answers are sent to each judge LLM call. "
+            "Use 1 for maximum JSON reliability; higher values can be faster but require stricter model output."
+        )
         batch_size_spin = QSpinBox(dialog)
         batch_size_spin.setRange(1, 200)
         batch_auto_checkbox = QCheckBox("Auto", dialog)
@@ -1203,6 +1210,8 @@ class FormManager(QMainWindow):
             "challenges completeness. GPT-OSS adjudicates disagreements, ambiguity, invalid output, or low confidence."
         )
         form.addRow("AI Evaluation:", force_ai_checkbox)
+        form.addRow("Answer Processing:", dedup_checkbox)
+        form.addRow("Judge Answers per Call:", judge_answer_batch_size_spin)
 
         buttons = QWidget(dialog)
         b = QHBoxLayout(buttons)
@@ -1356,6 +1365,9 @@ class FormManager(QMainWindow):
                 ]
             if "judge_prewarm_enabled" not in preset:
                 config_data["judge_prewarm_enabled"] = False
+
+            config_data["enable_deduplication"] = dedup_checkbox.isChecked()
+            config_data["judge_answer_batch_size"] = int(judge_answer_batch_size_spin.value())
 
             # Save Heartbeat monitor settings
             config_data["heartbeat_timeout"] = heartbeat_timeout_spin.value()

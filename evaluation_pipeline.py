@@ -108,8 +108,15 @@ def get_or_generate_rubric(*args, **kwargs) -> Dict:
     return {}
 
 
-def _cache_key(answer: str, question_hash: str) -> str:
-    return hashlib.sha256(f"{normalize(answer)}:{question_hash}".encode()).hexdigest()
+def _deduplication_enabled(cfg: Optional[Dict[str, object]] = None) -> bool:
+    """Whether equivalent-looking responses may share evaluation work."""
+    cfg = cfg if cfg is not None else load_config()
+    return bool(cfg.get("enable_deduplication", True))
+
+
+def _cache_key(answer: str, question_hash: str, deduplicate: bool = True) -> str:
+    cache_answer = normalize(answer) if deduplicate else str(answer)
+    return hashlib.sha256(f"{cache_answer}:{question_hash}".encode()).hexdigest()
 
 
 def _resolve_worker_bounds(cfg: Dict[str, object], unique_count: int) -> tuple[int, int, int]:
@@ -140,8 +147,9 @@ def evaluate_answer(
     log("DEBUG", f"START evaluate_answer (answer_len={len(answer)}, question_hash={_qhash(question, expected)[:8]})")
     max_latency_ms = float(cfg.get("max_latency_per_answer_seconds", 30.0)) * 1000.0
     force_ai_for_all = bool(cfg.get("force_ai_jury_for_all_answers", False))
+    deduplicate = _deduplication_enabled(cfg)
     qh = _qhash(question, expected)
-    ck = _cache_key(answer, qh)
+    ck = _cache_key(answer, qh, deduplicate=deduplicate)
 
     with RESULT_CACHE_LOCK:
         if precomputed_judges is None and ck in RESULT_CACHE:
@@ -366,8 +374,14 @@ def evaluate_answer(
 
 
 def evaluate_answers(answers: List[str], expected: Union[str, List[str]], question: str) -> List[EvaluationResult]:
-    unique, mapping = semantic_deduplicate(answers, normalize_fn=normalize)
     cfg = load_config()
+    deduplicate = _deduplication_enabled(cfg)
+    if not deduplicate:
+        log("INFO", f"[PIPELINE] Answer processing mode: raw form responses ({len(answers)} answers, no deduplication)")
+        return [evaluate_answer(answer, expected, question) for answer in answers]
+
+    unique, mapping = semantic_deduplicate(answers, normalize_fn=normalize)
+    log("INFO", f"[PIPELINE] Answer processing mode: deduplicated ({len(unique)}/{len(answers)} representative answers)")
     rep_results: Dict[str, EvaluationResult] = {}
     if len(unique) <= 1:
         rep_results = {u: evaluate_answer(u, expected, question) for u in unique}
@@ -421,7 +435,7 @@ def evaluate_answers_model_first(answers: List[str], expected: Union[str, List[s
 
     for answer in answers:
         qh = _qhash(question, expected)
-        ck = _cache_key(answer, qh)
+        ck = _cache_key(answer, qh, deduplicate=_deduplication_enabled(cfg))
         with RESULT_CACHE_LOCK:
             existing = RESULT_CACHE.get(ck)
         if existing is not None:

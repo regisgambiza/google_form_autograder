@@ -95,6 +95,8 @@ def test_settings_exposes_cache_and_history_clear_action(monkeypatch):
     assert "clear_grading_cache(reset_history=True)" in source
     assert "Always grade from fresh data (ignore previous-run cache)" in source
     assert "Send every answer through the full AI jury" in source
+    assert "Answer Processing:" in source
+    assert "raw mode; take every response exactly as read from the form" in source
 
 
 def test_settings_hides_low_level_expert_controls():

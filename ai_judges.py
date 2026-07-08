@@ -7,7 +7,7 @@ import time
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 from datetime import datetime, timezone
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 try:
     import aiohttp
@@ -692,6 +692,16 @@ def _chunked(items: List[str], size: int) -> List[List[str]]:
     return [items[i:i + size] for i in range(0, len(items), size)]
 
 
+def _judge_answer_batch_size(cfg: Optional[Dict[str, object]] = None) -> int:
+    """Read the current judge answer batch size from config.
+
+    This is intentionally cheap and called during model-first judging so a
+    Settings save can affect later roles/chunks in a running grading process.
+    """
+    cfg = cfg if cfg is not None else load_config()
+    return max(1, int(cfg.get("judge_answer_batch_size", 3)))
+
+
 def call_judge_role_batch_sync(
     role: str,
     answers: List[str],
@@ -804,11 +814,12 @@ def run_judges_model_first(
     roles = _selected_roles(cfg)
     out: Dict[str, List[Dict[str, object]]] = {answer: [] for answer in answers}
     adaptive_cfg = cfg.get("adaptive_math_jury", {})
-    batch_size = max(1, int(cfg.get("judge_answer_batch_size", 3)))
+    initial_batch_size = _judge_answer_batch_size(cfg)
 
     def run_role_for_answers(role: str, role_answers: List[str]) -> None:
         if not role_answers:
             return
+        batch_size = _judge_answer_batch_size()
         if batch_size <= 1:
             for answer in role_answers:
                 out[answer].append(call_judge_role_sync(role, answer, question, expected, rubrics_by_answer.get(answer, {}), retries))
@@ -818,7 +829,7 @@ def run_judges_model_first(
             for answer in chunk:
                 out[answer].append(batch_results[answer])
 
-    log("INFO", f"[JUDGES] Model-first question batch START answers={len(answers)} roles={roles} answer_batch_size={batch_size}")
+    log("INFO", f"[JUDGES] Model-first question batch START answers={len(answers)} roles={roles} answer_batch_size={initial_batch_size}")
     if bool(adaptive_cfg.get("enabled", False)):
         primary_roles = [
             role for role in adaptive_cfg.get("primary_roles", ["semantic_judge", "factual_judge", "concept_judge"])

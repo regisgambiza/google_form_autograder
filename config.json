@@ -39,10 +39,11 @@
     "answer_key_auto_apply_confidence": 0.95,
     "answer_key_auto_add_proven_equivalents": true,
     "ignore_grading_cache": true,
+    "enable_deduplication": false,
     "force_ai_jury_for_all_answers": true,
     "model_first_question_batching": true,
-    "judge_answer_batch_size": 3,
-    "judge_batch_num_predict": 1024,
+    "judge_answer_batch_size": 15,
+    "judge_batch_num_predict": 2048,
     "decision_audit_path": "logs/grading_decisions.jsonl",
     "teacher_benchmark_path": "teacher_benchmark.jsonl",
     "accuracy_policy": {
@@ -138,8 +139,8 @@
         "embedding": 0.1
     },
     "ollama_options": {
-        "judge_num_ctx": 2048,
-        "judge_num_predict": 512,
+        "judge_num_ctx": 8192,
+        "judge_num_predict": 1024,
         "embedding_num_ctx": 1024,
         "fallback_num_ctx": 2048,
         "fallback_num_predict": 256,

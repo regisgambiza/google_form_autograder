@@ -130,3 +130,72 @@ def test_call_judge_role_batch_sync_falls_back_for_missing_answer(monkeypatch):
     assert out["a"]["decision"] == "YES"
     assert out["b"]["decision"] == "NO"
     assert out["c"]["decision"] == "YES"
+
+
+def test_model_first_judging_refreshes_answer_batch_size_between_roles(monkeypatch):
+    config_calls = []
+    batch_calls = []
+
+    def fake_load_config():
+        config_calls.append(len(config_calls))
+        batch_size = 2 if len(config_calls) <= 2 else 1
+        return {
+            "jury_models": {
+                "semantic_judge": "model-a",
+                "factual_judge": "model-b",
+            },
+            "active_judge_roles": ["semantic_judge", "factual_judge"],
+            "adaptive_math_jury": {"enabled": False},
+            "judge_answer_batch_size": batch_size,
+        }
+
+    monkeypatch.setattr(ai_judges, "load_config", fake_load_config)
+    monkeypatch.setattr(ai_judges, "_selected_roles", lambda _cfg: ["semantic_judge", "factual_judge"])
+
+    def fake_batch(role, answers, question, expected, rubrics_by_answer, retries):
+        batch_calls.append((role, list(answers)))
+        return {
+            answer: {
+                "role": role,
+                "model": "model",
+                "decision": "YES",
+                "confidence": 0.99,
+                "reason_short": "batch",
+                "requirements_met": [],
+                "requirements_missing": [],
+                "contradictions": [],
+                "calculation_check": "ok",
+            }
+            for answer in answers
+        }
+
+    monkeypatch.setattr(ai_judges, "call_judge_role_batch_sync", fake_batch)
+
+    single_calls = []
+
+    def fake_single(role, answer, question, expected, rubric, retries):
+        single_calls.append((role, answer))
+        return {
+            "role": role,
+            "model": "model",
+            "decision": "YES",
+            "confidence": 0.99,
+            "reason_short": "single",
+            "requirements_met": [],
+            "requirements_missing": [],
+            "contradictions": [],
+            "calculation_check": "ok",
+        }
+
+    monkeypatch.setattr(ai_judges, "call_judge_role_sync", fake_single)
+
+    ai_judges.run_judges_model_first(
+        ["a", "b", "c"],
+        "question",
+        "expected",
+        {"a": {}, "b": {}, "c": {}},
+        retries=1,
+    )
+
+    assert batch_calls == [("semantic_judge", ["a", "b"]), ("semantic_judge", ["c"])]
+    assert single_calls == [("factual_judge", "a"), ("factual_judge", "b"), ("factual_judge", "c")]

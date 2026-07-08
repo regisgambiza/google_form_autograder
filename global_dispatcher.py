@@ -83,6 +83,7 @@ class TokenBucket:
 def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generate_report: bool):
     form_started_ts = time.time()
     cfg = load_config()
+    deduplicate_answers = bool(cfg.get("enable_deduplication", True))
     staged_startup = bool(cfg.get("staged_thread_startup", True))
     fetch_workers = max(1, int(cfg.get("global_prefetch_workers", 4)))
     det_workers = max(1, int(cfg.get("deterministic_worker_count", 5)))
@@ -416,13 +417,22 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                     expected = get_effective_expected(q, expected_by_item_id.get(q.get("itemId"), []))
                     q["trusted_expected"] = expected[:1]
                     fetched_answers = answers_by_qid.get(qid, [])
-                    answers = remove_exact_duplicate_answers(fetched_answers)
-                    removed_duplicates = len(fetched_answers) - len(answers)
+                    if deduplicate_answers:
+                        answers = remove_exact_duplicate_answers(fetched_answers)
+                        removed_duplicates = len(fetched_answers) - len(answers)
+                    else:
+                        answers = list(fetched_answers)
+                        removed_duplicates = 0
                     if removed_duplicates:
                         log(
                             "INFO",
                             f"[DEDUP] question_id={qid} fetched={len(fetched_answers)} "
                             f"unique={len(answers)} removed={removed_duplicates}",
+                        )
+                    elif not deduplicate_answers:
+                        log(
+                            "INFO",
+                            f"[DEDUP] disabled; question_id={qid} using {len(answers)} raw form responses",
                         )
                     forms_results[i]["counts"][qid] = len(answers)
                     question_tasks: List[Task] = []

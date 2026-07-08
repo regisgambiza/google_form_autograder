@@ -37,6 +37,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "answer_key_auto_apply_confidence": 0.95,
     "answer_key_auto_add_proven_equivalents": False,
     "ignore_grading_cache": True,
+    "enable_deduplication": True,
     "force_ai_jury_for_all_answers": True,
     "model_first_question_batching": True,
     "judge_answer_batch_size": 3,
