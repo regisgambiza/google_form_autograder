@@ -538,6 +538,8 @@ class FormManager(QMainWindow):
         remove_action.triggered.connect(self.remove_form)
         clear_action = more_menu.addAction("Clear Completed Forms")
         clear_action.triggered.connect(self.clear_finished_forms_silently)
+        clear_all_action = more_menu.addAction("Clear All Forms")
+        clear_all_action.triggered.connect(lambda: self.clear_all_forms(confirm=True))
         more_menu.addSeparator()
         exit_action = more_menu.addAction("Exit")
         exit_action.triggered.connect(self.exit_app)
@@ -567,8 +569,13 @@ class FormManager(QMainWindow):
         self.form_filter_combo = QComboBox()
         self.form_filter_combo.addItems(["All", "Running", "Queued", "Done", "Failed"])
         self.form_filter_combo.currentTextChanged.connect(self._filter_form_queue)
+        self.clear_forms_button = QPushButton("Clear All")
+        self.clear_forms_button.setObjectName("Danger")
+        self.clear_forms_button.setToolTip("Delete every form from the queue")
+        self.clear_forms_button.clicked.connect(lambda: self.clear_all_forms(confirm=True))
         queue_filters.addWidget(self.form_search_input, 1)
         queue_filters.addWidget(self.form_filter_combo)
+        queue_filters.addWidget(self.clear_forms_button)
         queue_layout.addLayout(queue_filters)
         self.form_list = QListWidget()
         self.form_list.setObjectName("FormQueueList")
@@ -1661,6 +1668,7 @@ class FormManager(QMainWindow):
         self.forms_data.clear()
         self.save_forms()
         self._refresh_queue_positions()
+        self._on_form_selection_changed(None)
 
     def clear_finished_forms_silently(self):
         i = 0
