@@ -41,6 +41,29 @@ QFrame#CommandBar {
     background: #f5f8fa;
     border-bottom: 1px solid #cbd6df;
 }
+QFrame#CommandBar QPushButton#CommandButton {
+    min-height: 42px;
+    max-height: 42px;
+    padding: 0 14px;
+}
+QFrame#CommandBar QPushButton#CommandButton[variant="secondary"] {
+    background: #ffffff;
+    color: #263747;
+    border: 1px solid #b8c5d1;
+}
+QFrame#CommandBar QPushButton#CommandButton[variant="secondary"]:hover {
+    background: #edf4fa;
+    border-color: #8fa6ba;
+}
+QFrame#CommandBar QPushButton#CommandButton[variant="danger"] {
+    background: #b42318;
+    color: white;
+    border-color: #b42318;
+}
+QFrame#CommandBar QPushButton#CommandButton[variant="danger"]:hover {
+    background: #8f1c13;
+    border-color: #8f1c13;
+}
 QPushButton#IconButton {
     min-width: 34px;
     max-width: 36px;

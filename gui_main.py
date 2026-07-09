@@ -340,6 +340,23 @@ class FormManager(QMainWindow):
                 border-radius: 6px;
                 font-size: 14px;
             }
+            QFrame#CommandBar QPushButton#CommandButton {
+                min-height: 42px;
+                max-height: 42px;
+                padding: 0 14px;
+            }
+            QFrame#CommandBar QPushButton#CommandButton[variant="secondary"] {
+                background-color: #6c757d;
+            }
+            QFrame#CommandBar QPushButton#CommandButton[variant="secondary"]:hover {
+                background-color: #545b62;
+            }
+            QFrame#CommandBar QPushButton#CommandButton[variant="danger"] {
+                background-color: #dc3545;
+            }
+            QFrame#CommandBar QPushButton#CommandButton[variant="danger"]:hover {
+                background-color: #b02a37;
+            }
             QPushButton:hover {
                 background-color: #0056b3;
             }
@@ -489,34 +506,40 @@ class FormManager(QMainWindow):
         command_layout = QHBoxLayout(command_bar)
         command_layout.setContentsMargins(14, 7, 14, 7)
         command_layout.setSpacing(8)
+        command_button_height = 42
         add_sources_button = QPushButton("Add Sources")
-        add_sources_button.setObjectName("Secondary")
-        add_sources_button.setFixedWidth(145)
+        add_sources_button.setObjectName("CommandButton")
+        add_sources_button.setProperty("variant", "secondary")
+        add_sources_button.setFixedHeight(command_button_height)
         add_sources_button.clicked.connect(self.open_manual_add_dialog)
         command_layout.addWidget(add_sources_button)
         scan_source_button = QPushButton("Scan Source")
-        scan_source_button.setFixedWidth(145)
-        scan_source_button.setObjectName("Secondary")
+        scan_source_button.setObjectName("CommandButton")
+        scan_source_button.setProperty("variant", "secondary")
+        scan_source_button.setFixedHeight(command_button_height)
         scan_source_button.setIcon(self.style().standardIcon(QStyle.SP_FileDialogContentsView))
         scan_source_button.setProperty("noAutoIcon", True)
         scan_source_button.clicked.connect(self.open_quick_grade_dialog)
         command_layout.addWidget(scan_source_button)
         self.run_button = QPushButton("Run Grading")
-        self.run_button.setFixedWidth(145)
-        self.run_button.setObjectName("Secondary")
+        self.run_button.setObjectName("CommandButton")
+        self.run_button.setProperty("variant", "secondary")
+        self.run_button.setFixedHeight(command_button_height)
         self.run_button.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
         self.run_button.setProperty("noAutoIcon", True)
         self.run_button.clicked.connect(self.run_grader)
         command_layout.addWidget(self.run_button)
         self.stop_button = QPushButton("Stop Grading")
-        self.stop_button.setObjectName("Danger")
-        self.stop_button.setMaximumWidth(150)
+        self.stop_button.setObjectName("CommandButton")
+        self.stop_button.setProperty("variant", "danger")
+        self.stop_button.setFixedHeight(command_button_height)
         self.stop_button.clicked.connect(self.stop_grading)
         self.stop_button.hide()
         command_layout.addWidget(self.stop_button)
         answer_keys_button = QPushButton("Answer Keys")
-        answer_keys_button.setObjectName("Secondary")
-        answer_keys_button.setFixedWidth(145)
+        answer_keys_button.setObjectName("CommandButton")
+        answer_keys_button.setProperty("variant", "secondary")
+        answer_keys_button.setFixedHeight(command_button_height)
         answer_keys_button.clicked.connect(self.open_answer_key_dashboard)
         command_layout.addWidget(answer_keys_button)
         command_layout.addStretch()
