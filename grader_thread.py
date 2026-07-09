@@ -13,7 +13,7 @@ class GraderThread(QThread):
     finished = pyqtSignal(bool, str)
     progress = pyqtSignal(int, int)
     overall_progress = pyqtSignal(int, int)
-    form_metrics = pyqtSignal(int, int, int, int, int, int)
+    form_metrics = pyqtSignal(int, int, int, int, int, int, int, int, float)
     debug_message = pyqtSignal(str)
     current_form = pyqtSignal(str)
     finished_form = pyqtSignal(str)
@@ -249,6 +249,8 @@ class GraderThread(QThread):
                         print(ls, flush=True)
                     except Exception:
                         pass
+                    if "[DISPATCH METRICS]" in ls or "[HEARTBEAT]" in ls:
+                        self.debug_message.emit(ls)
 
                 # Parse progress messages from main.py
                 if ls.startswith("FormProgress:"):
@@ -287,7 +289,26 @@ class GraderThread(QThread):
                         rejected = 0
                         if len(payload) >= 5:
                             rejected = int(payload[4])
-                        self.form_metrics.emit(completed, total, accepted, review_questions, elapsed, rejected)
+                        extras = {}
+                        for token in payload[5:]:
+                            if "=" not in token:
+                                continue
+                            key, value = token.split("=", 1)
+                            extras[key] = value
+                        det_decisions = int(float(extras.get("det", 0) or 0))
+                        ai_decisions = int(float(extras.get("ai", 0) or 0))
+                        avg_latency_ms = float(extras.get("avg_ms", 0.0) or 0.0)
+                        self.form_metrics.emit(
+                            completed,
+                            total,
+                            accepted,
+                            review_questions,
+                            elapsed,
+                            rejected,
+                            det_decisions,
+                            ai_decisions,
+                            avg_latency_ms,
+                        )
                     except Exception:
                         pass
 

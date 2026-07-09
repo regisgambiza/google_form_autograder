@@ -201,19 +201,64 @@ QScrollBar::handle:vertical { background: #aebdca; min-height: 28px; border-radi
 QScrollBar:horizontal { background: #eef2f6; height: 12px; margin: 0; }
 QScrollBar::handle:horizontal { background: #aebdca; min-width: 28px; border-radius: 5px; }
 QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
-QFrame#FormCard { background: white; border: 1px solid #d7e0ea; border-left: 4px solid #6b7f91; border-radius: 6px; }
+QFrame#FormQueueHeader {
+    background: #e8eef4;
+    border: 1px solid #c8d2dc;
+    border-bottom: 0;
+}
+QLabel#QueueColumnHeader {
+    color: #263747;
+    font-size: 11px;
+    font-weight: 700;
+}
+QListWidget#FormQueueList {
+    background: #ffffff;
+    border: 1px solid #c8d2dc;
+    border-radius: 0;
+    padding: 0;
+}
+QListWidget#FormQueueList::item { border: 0; margin: 0; padding: 0; }
+QListWidget#FormQueueList::item:selected { background: #dcecff; }
+QFrame#FormCard {
+    background: #ffffff;
+    border: 0;
+    border-bottom: 1px solid #e1e7ed;
+    border-left: 3px solid transparent;
+}
+QFrame#FormCard[rowParity="odd"] { background: #f7f9fb; }
 QFrame#FormCard[status="queued"] { border-left-color: #1769aa; }
 QFrame#FormCard[status="running"] { border-left-color: #cc7a00; background: #fff9e8; }
-QFrame#FormCard[status="done"] { border-left-color: #1f8a5b; background: #f2faf6; }
+QFrame#FormCard[status="done"] { border-left-color: #1f8a5b; }
 QFrame#FormCard[status="failed"] { border-left-color: #b42318; background: #fff4f2; }
-QLabel#FormTitle { font-size: 14px; font-weight: 700; color: #1f2937; }
-QLabel#FormMeta { font-size: 11px; color: #5b6775; }
-QLabel#FormUrl { font-size: 11px; color: #1769aa; }
-QLabel#StatusBadge { color: white; background: #6b7f91; border-radius: 9px; padding: 3px 8px; font-weight: 700; }
-QLabel#StatusBadge[status="queued"] { background: #1769aa; }
-QLabel#StatusBadge[status="running"] { background: #cc7a00; }
-QLabel#StatusBadge[status="done"] { background: #1f8a5b; }
-QLabel#StatusBadge[status="failed"] { background: #b42318; }
+QLabel#FormTitle { font-size: 12px; font-weight: 600; color: #1769aa; }
+QLabel#FormMeta { font-size: 10px; color: #637485; }
+QLabel#FormUrl { font-size: 10px; color: #637485; }
+QLabel#StatusBadge {
+    color: #405466;
+    background: transparent;
+    border-radius: 0;
+    padding: 0;
+    font-size: 11px;
+    font-weight: 600;
+}
+QLabel#StatusBadge[status="queued"] { color: #1769aa; }
+QLabel#StatusBadge[status="running"] { color: #8a5200; }
+QLabel#StatusBadge[status="done"] { color: #1f8a5b; }
+QLabel#StatusBadge[status="failed"] { color: #b42318; }
+QLabel#QueueEta { color: #405466; font-size: 11px; }
+QLabel#QueueGlyph { color: #5b8fd6; font-size: 14px; font-weight: 700; }
+QProgressBar#QueueProgress {
+    background: #e7edf3;
+    border: 1px solid #c5d0db;
+    border-radius: 3px;
+    min-height: 16px;
+    max-height: 16px;
+    text-align: center;
+    color: #1f2937;
+    font-size: 10px;
+    font-weight: 700;
+}
+QProgressBar#QueueProgress::chunk { background: #1f8a5b; border-radius: 2px; }
 """
 
 

@@ -127,7 +127,19 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
     forms_total = len(form_urls)
     metrics_lock = threading.Lock()
     counters = {"fetch": 0, "det": 0, "ai": 0, "apply": 0}
-    progress = {"expected_tasks": 0, "completed": 0, "accepted": 0, "review_answers": 0, "rejected": 0, "last_progress_ts": time.time(), "pending_buffer": 0, "ai_backlog": 0}
+    progress = {
+        "expected_tasks": 0,
+        "completed": 0,
+        "accepted": 0,
+        "review_answers": 0,
+        "rejected": 0,
+        "last_progress_ts": time.time(),
+        "pending_buffer": 0,
+        "ai_backlog": 0,
+        "det_decisions": 0,
+        "ai_decisions": 0,
+        "latency_ms_total": 0.0,
+    }
     review_question_ids = set()
     queued_for_apply = set()
     queue_progress = {"last_any_work_ts": time.time(), "last_snapshot": (0, 0, 0, 0)}
@@ -149,6 +161,13 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
     def elapsed_text(seconds: float) -> str:
         seconds = max(0, int(seconds))
         return f"{seconds // 3600:02d}:{(seconds % 3600) // 60:02d}:{seconds % 60:02d}"
+
+    def form_metrics_line(completed: int, expected: int, accepted: int, review: int, elapsed: int,
+                          rejected: int, det_decisions: int, ai_decisions: int, avg_latency_ms: float) -> str:
+        return (
+            f"FormMetrics: {completed}/{expected} {accepted} {review} {elapsed} {rejected} "
+            f"det={det_decisions} ai={ai_decisions} avg_ms={avg_latency_ms:.0f}"
+        )
 
     def announce_stage(stage_no: int, title: str, status: str):
         line = "=" * 90
@@ -817,6 +836,11 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                 apply_q.put(apply_key)
             with metrics_lock:
                 progress["completed"] += 1
+                if bool(getattr(r, "fast_path_used", False)) or str(getattr(r, "stage_reached", "")) == "deterministic":
+                    progress["det_decisions"] += 1
+                else:
+                    progress["ai_decisions"] += 1
+                progress["latency_ms_total"] += max(0.0, float(getattr(r, "latency_ms", 0.0) or 0.0))
                 if r.decision == "YES":
                     progress["accepted"] += 1
                 elif r.decision == "REVIEW":
@@ -832,13 +856,28 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                 # questions. Rejections and accepted audit variants do not
                 # belong in "Needs review".
                 review_now = len(review_question_ids)
+                det_now = int(progress["det_decisions"])
+                ai_now = int(progress["ai_decisions"])
+                avg_latency_now = (
+                    float(progress["latency_ms_total"]) / max(1, completed_now)
+                )
                 progress["last_progress_ts"] = time.time()
             # Machine-readable real-time progress consumed by GraderThread.
             # In staged mode task construction is complete before this worker starts,
             # so the denominator is stable and the percentage cannot move backwards.
             print(f"FormProgress: {completed_now}/{expected_now}", flush=True)
             print(
-                f"FormMetrics: {completed_now}/{expected_now} {accepted_now} {review_now} {int(time.time() - form_started_ts)} {rejected_now}",
+                form_metrics_line(
+                    completed_now,
+                    expected_now,
+                    accepted_now,
+                    review_now,
+                    int(time.time() - form_started_ts),
+                    rejected_now,
+                    det_now,
+                    ai_now,
+                    avg_latency_now,
+                ),
                 flush=True,
             )
             evidence = r.evidence or {}
@@ -950,12 +989,24 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                         expected_metric = int(progress["expected_tasks"])
                         accepted_metric = int(progress["accepted"])
                         rejected_metric = int(progress["rejected"])
+                        det_metric = int(progress["det_decisions"])
+                        ai_metric = int(progress["ai_decisions"])
+                        avg_latency_metric = float(progress["latency_ms_total"]) / max(1, completed_metric)
                         review_metric = len(review_question_ids)
                     # Refresh the GUI only after the review queue is durable,
                     # so clicking the badge cannot lead to an empty screen.
                     print(
-                        f"FormMetrics: {completed_metric}/{expected_metric} {accepted_metric} "
-                        f"{review_metric} {int(time.time() - form_started_ts)} {rejected_metric}",
+                        form_metrics_line(
+                            completed_metric,
+                            expected_metric,
+                            accepted_metric,
+                            review_metric,
+                            int(time.time() - form_started_ts),
+                            rejected_metric,
+                            det_metric,
+                            ai_metric,
+                            avg_latency_metric,
+                        ),
                         flush=True,
                     )
                 if categorized_candidates and question["type"] in {"SHORT_ANSWER", "LONG_ANSWER"}:
@@ -993,8 +1044,21 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                     exp = progress["expected_tasks"]; comp = progress["completed"]; lp = progress["last_progress_ts"]; pb = progress["pending_buffer"]; ai_backlog = progress["ai_backlog"]
                     accepted_total = int(progress["accepted"]); review_total = len(review_question_ids)
                     rejected_total = int(progress["rejected"])
+                    det_total = int(progress["det_decisions"])
+                    ai_total = int(progress["ai_decisions"])
+                    avg_latency_total = float(progress["latency_ms_total"]) / max(1, int(comp))
                 print(
-                    f"FormMetrics: {comp}/{exp} {accepted_total} {review_total} {int(time.time() - form_started_ts)} {rejected_total}",
+                    form_metrics_line(
+                        int(comp),
+                        int(exp),
+                        accepted_total,
+                        review_total,
+                        int(time.time() - form_started_ts),
+                        rejected_total,
+                        det_total,
+                        ai_total,
+                        avg_latency_total,
+                    ),
                     flush=True,
                 )
                 log(

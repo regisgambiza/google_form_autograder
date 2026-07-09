@@ -9,7 +9,7 @@ from PyQt5.QtWidgets import (
     QTextEdit, QLabel, QComboBox, QCheckBox,
     QProgressDialog, QSplitter, QSpinBox, QDialog, QFormLayout, QTabWidget,
     QSystemTrayIcon, QMenu, QAction, QStyle, QFrame, QProgressBar, QDoubleSpinBox,
-    QScrollArea, QFileDialog
+    QScrollArea, QFileDialog, QGridLayout
 )
 
 from PyQt5.QtCore import Qt, QDate, QTimer, QSize
@@ -278,6 +278,8 @@ class FormManager(QMainWindow):
         self.service = None
         self.finished_forms = []
         self.current_form_url = None
+        self.overall_forms_completed = 0
+        self.overall_forms_total = 0
         self.auto_mode = False
         self.auto_timer = None  # Track the QTimer for auto-cycle
         self.debug_lines = []
@@ -379,20 +381,34 @@ class FormManager(QMainWindow):
                 padding: 6px;
             }
             QListWidget#FormQueueList {
-                background-color: #eef3f8;
-                border: 1px solid #c9d5e2;
-                border-radius: 8px;
-                padding: 8px;
+                background-color: #ffffff;
+                border: 1px solid #c8d2dc;
+                border-radius: 0;
+                padding: 0;
             }
             QListWidget#FormQueueList::item {
                 border: none;
-                margin: 4px 0;
+                margin: 0;
+                padding: 0;
+            }
+            QFrame#FormQueueHeader {
+                background-color: #e8eef4;
+                border: 1px solid #c8d2dc;
+                border-bottom: 0;
+            }
+            QLabel#QueueColumnHeader {
+                color: #263747;
+                font-size: 11px;
+                font-weight: 700;
             }
             QFrame#FormCard {
                 background-color: #ffffff;
-                border: 1px solid #d7e0ea;
-                border-left: 5px solid #6c757d;
-                border-radius: 8px;
+                border: 0;
+                border-bottom: 1px solid #e1e7ed;
+                border-left: 3px solid transparent;
+            }
+            QFrame#FormCard[rowParity="odd"] {
+                background-color: #f7f9fb;
             }
             QFrame#FormCard[status="queued"] {
                 border-left-color: #0d6efd;
@@ -403,45 +419,67 @@ class FormManager(QMainWindow):
             }
             QFrame#FormCard[status="done"] {
                 border-left-color: #198754;
-                background-color: #f1fbf5;
             }
             QFrame#FormCard[status="failed"] {
                 border-left-color: #dc3545;
                 background-color: #fff3f3;
             }
             QLabel#FormTitle {
-                font-size: 14px;
-                font-weight: 700;
-                color: #1f2937;
+                font-size: 12px;
+                font-weight: 600;
+                color: #0d6efd;
             }
             QLabel#FormMeta {
-                font-size: 11px;
+                font-size: 10px;
                 color: #5b6775;
             }
             QLabel#FormUrl {
-                font-size: 11px;
-                color: #0d6efd;
+                font-size: 10px;
+                color: #5b6775;
             }
             QLabel#StatusBadge {
                 font-size: 11px;
-                font-weight: 700;
-                color: white;
-                background-color: #6c757d;
-                border-radius: 10px;
-                padding: 3px 8px;
+                font-weight: 600;
+                color: #405466;
+                background-color: transparent;
+                border-radius: 0;
+                padding: 0;
             }
             QLabel#StatusBadge[status="queued"] {
-                background-color: #0d6efd;
+                color: #0d6efd;
             }
             QLabel#StatusBadge[status="running"] {
-                background-color: #f59f00;
-                color: #342100;
+                color: #7b4b00;
             }
             QLabel#StatusBadge[status="done"] {
-                background-color: #198754;
+                color: #198754;
             }
             QLabel#StatusBadge[status="failed"] {
-                background-color: #dc3545;
+                color: #dc3545;
+            }
+            QLabel#QueueEta {
+                color: #405466;
+                font-size: 11px;
+            }
+            QLabel#QueueGlyph {
+                color: #5b8fd6;
+                font-size: 14px;
+                font-weight: 700;
+            }
+            QProgressBar#QueueProgress {
+                background-color: #e7edf3;
+                border: 1px solid #c5d0db;
+                border-radius: 3px;
+                min-height: 16px;
+                max-height: 16px;
+                text-align: center;
+                color: #1f2937;
+                font-size: 10px;
+                font-weight: 700;
+            }
+            QProgressBar#QueueProgress::chunk {
+                background-color: #198754;
+                border-radius: 2px;
             }
             QSplitter::handle {
                 background-color: #d0d0d0;
@@ -600,6 +638,24 @@ class FormManager(QMainWindow):
         queue_filters.addWidget(self.form_filter_combo)
         queue_filters.addWidget(self.clear_forms_button)
         queue_layout.addLayout(queue_filters)
+        queue_table_header = QFrame()
+        queue_table_header.setObjectName("FormQueueHeader")
+        queue_table_layout = QGridLayout(queue_table_header)
+        queue_table_layout.setContentsMargins(10, 5, 10, 5)
+        queue_table_layout.setHorizontalSpacing(8)
+        for col, (text, stretch) in enumerate((
+            ("Name", 5),
+            ("Progress", 2),
+            ("Status", 2),
+            ("ETA", 1),
+        )):
+            label = QLabel(text)
+            label.setObjectName("QueueColumnHeader")
+            if col:
+                label.setAlignment(Qt.AlignCenter)
+            queue_table_layout.addWidget(label, 0, col)
+            queue_table_layout.setColumnStretch(col, stretch)
+        queue_layout.addWidget(queue_table_header)
         self.form_list = QListWidget()
         self.form_list.setObjectName("FormQueueList")
         self.form_list.setSpacing(4)
@@ -632,7 +688,7 @@ class FormManager(QMainWindow):
         detail_layout.addLayout(detail_header)
 
         progress_header = QHBoxLayout()
-        self.detail_progress_text = QLabel("Waiting to start")
+        self.detail_progress_text = QLabel("Overall forms progress")
         self.detail_progress_text.setObjectName("Muted")
         self.detail_progress_value = QLabel("0%")
         self.detail_progress_value.setStyleSheet("font-weight:700;")
@@ -653,6 +709,12 @@ class FormManager(QMainWindow):
         self.metric_rejected = QLabel("0")
         self.metric_review = QLabel('<a href="review">0</a>')
         self.metric_elapsed = QLabel("00:00")
+        self.metric_rate = QLabel("0/min")
+        self.metric_ai_backlog = QLabel("0")
+        self.metric_decision_paths = QLabel("0 / 0")
+        self.metric_current_model = QLabel("Idle")
+        self.metric_avg_latency = QLabel("0s")
+        self.metric_eta = QLabel("--:--")
         self.metric_review.setTextFormat(Qt.RichText)
         self.metric_review.setTextInteractionFlags(Qt.TextBrowserInteraction)
         self.metric_review.setOpenExternalLinks(False)
@@ -676,8 +738,29 @@ class FormManager(QMainWindow):
             metrics_row.addWidget(metric, 1)
         detail_layout.addLayout(metrics_row)
 
+        live_metrics_row = QHBoxLayout()
+        for metric_name, metric_value in (
+            ("Answers / min", self.metric_rate),
+            ("AI backlog", self.metric_ai_backlog),
+            ("Det / AI", self.metric_decision_paths),
+            ("Current model", self.metric_current_model),
+            ("Avg latency", self.metric_avg_latency),
+            ("ETA", self.metric_eta),
+        ):
+            metric = QFrame()
+            metric.setObjectName("Metric")
+            metric_layout = QVBoxLayout(metric)
+            metric_layout.setContentsMargins(12, 10, 12, 10)
+            label = QLabel(metric_name)
+            label.setObjectName("Muted")
+            metric_value.setObjectName("MetricValue")
+            metric_layout.addWidget(label)
+            metric_layout.addWidget(metric_value)
+            live_metrics_row.addWidget(metric, 1)
+        detail_layout.addLayout(live_metrics_row)
+
         pipeline_heading = QHBoxLayout()
-        pipeline_title = QLabel("Current pipeline")
+        pipeline_title = QLabel("Run activity")
         pipeline_title.setObjectName("Section")
         self.pipeline_updated = QLabel("Ready")
         self.pipeline_updated.setObjectName("Muted")
@@ -708,10 +791,10 @@ class FormManager(QMainWindow):
             detail_layout.addWidget(row)
             self.pipeline_rows[key] = (icon_label, detail_label, state_label)
 
-        add_stage("load", "○", "Load form", "Questions and responses", "Waiting")
-        add_stage("validate", "○", "Validate answer keys", "Canonical answers and context", "Waiting")
-        add_stage("evaluate", "○", "Evaluate responses", "Deterministic and semantic checks", "Waiting")
-        add_stage("apply", "○", "Apply grades", "Save grading updates", "Waiting")
+        add_stage("forms", "F", "Forms", "0 completed", "Idle")
+        add_stage("answers", "A", "Answers", "0 / 0 evaluated", "Waiting")
+        add_stage("ai", "Q", "AI queue", "0 waiting", "Idle")
+        add_stage("apply", "R", "Review/apply", "0 review questions", "Waiting")
         detail_layout.addStretch()
         workspace.addWidget(detail_widget)
         workspace.setSizes([340, 900])
@@ -810,15 +893,8 @@ class FormManager(QMainWindow):
         self.detail_badge.style().unpolish(self.detail_badge)
         self.detail_badge.style().polish(self.detail_badge)
         detail = meta.get("detail") or "Waiting to start"
-        self.detail_progress_text.setText(detail)
-        if status == "done":
-            progress = 100
-        elif status == "running":
-            progress = max(1, self.detail_progress.value())
-        else:
-            progress = 0
-        self.detail_progress.setValue(progress)
-        self.detail_progress_value.setText(f"{progress}%")
+        self.detail_progress_text.setText("Overall forms progress")
+        self._update_overall_progress_bar()
         self.pipeline_updated.setText(meta.get("finished_at") or meta.get("started_at") or "Ready")
         self._update_pipeline_rows_for_status(status)
 
@@ -829,6 +905,11 @@ class FormManager(QMainWindow):
         rejected = meta.get("rejected", 0)
         review_questions = meta.get("review_questions", 0)
         elapsed_seconds = meta.get("elapsed", 0)
+        det_decisions = meta.get("det_decisions", 0)
+        ai_decisions = meta.get("ai_decisions", 0)
+        avg_latency_ms = meta.get("avg_latency_ms", 0.0)
+        ai_backlog = meta.get("ai_backlog", 0)
+        current_model = meta.get("current_model", "Idle")
 
         # For inactive forms, dynamically load the most up-to-date review count from disk
         form_id = self.extract_form_id(meta.get("url"))
@@ -840,47 +921,137 @@ class FormManager(QMainWindow):
             except Exception:
                 pass
 
-        self.metric_responses.setText(f"{completed} / {total}")
-        self.metric_accepted.setText(str(accepted))
-        self.metric_rejected.setText(str(rejected))
-        self.metric_review.setText(f'<a href="review">{review_questions}</a>')
-        if isinstance(elapsed_seconds, str):
-            self.metric_elapsed.setText(elapsed_seconds)
-        else:
-            hours, remainder = divmod(max(0, int(elapsed_seconds)), 3600)
-            minutes, seconds = divmod(remainder, 60)
-            self.metric_elapsed.setText(
-                f"{hours:02d}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes:02d}:{seconds:02d}"
-            )
+        self._update_metric_labels(
+            completed,
+            total,
+            accepted,
+            review_questions,
+            elapsed_seconds,
+            rejected,
+            det_decisions,
+            ai_decisions,
+            avg_latency_ms,
+            ai_backlog,
+            current_model,
+        )
+
+    def _format_duration(self, seconds):
+        if isinstance(seconds, str):
+            return seconds
+        seconds = max(0, int(seconds or 0))
+        hours, remainder = divmod(seconds, 3600)
+        minutes, secs = divmod(remainder, 60)
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}" if hours else f"{minutes:02d}:{secs:02d}"
+
+    def _format_latency(self, avg_latency_ms):
+        avg_latency_ms = max(0.0, float(avg_latency_ms or 0.0))
+        if avg_latency_ms >= 1000:
+            return f"{avg_latency_ms / 1000.0:.1f}s"
+        return f"{avg_latency_ms:.0f}ms"
+
+    def _estimate_eta(self, completed, total, elapsed_seconds):
+        try:
+            elapsed = float(elapsed_seconds)
+        except Exception:
+            return "--:--"
+        if completed <= 0 or total <= 0 or completed >= total or elapsed <= 0:
+            return "--:--"
+        remaining = max(0, total - completed)
+        seconds = remaining / (completed / elapsed)
+        return self._format_duration(seconds)
+
+    def _answers_per_minute(self, completed, elapsed_seconds):
+        try:
+            elapsed = float(elapsed_seconds)
+        except Exception:
+            return "0/min"
+        if completed <= 0 or elapsed <= 0:
+            return "0/min"
+        return f"{(completed / elapsed) * 60.0:.1f}/min"
+
+    def _update_metric_labels(
+        self,
+        completed,
+        total,
+        accepted,
+        review_questions,
+        elapsed_seconds,
+        rejected=0,
+        det_decisions=0,
+        ai_decisions=0,
+        avg_latency_ms=0.0,
+        ai_backlog=0,
+        current_model="Idle",
+    ):
+        self.metric_responses.setText(f"{int(completed)} / {int(total)}")
+        self.metric_accepted.setText(str(int(accepted)))
+        self.metric_rejected.setText(str(int(rejected)))
+        self.metric_review.setText(f'<a href="review">{int(review_questions)}</a>')
+        self.metric_elapsed.setText(self._format_duration(elapsed_seconds))
+        self.metric_rate.setText(self._answers_per_minute(int(completed), elapsed_seconds))
+        self.metric_ai_backlog.setText(str(int(ai_backlog or 0)))
+        self.metric_decision_paths.setText(f"{int(det_decisions or 0)} / {int(ai_decisions or 0)}")
+        model_text = str(current_model or "Idle")
+        if model_text == "none":
+            model_text = "Idle"
+        short_model = model_text if len(model_text) <= 18 else model_text[:17] + "..."
+        self.metric_current_model.setText(short_model)
+        self.metric_current_model.setToolTip(model_text)
+        self.metric_avg_latency.setText(self._format_latency(avg_latency_ms))
+        self.metric_eta.setText(self._estimate_eta(int(completed), int(total), elapsed_seconds))
+
+    def _reset_metric_labels(self):
+        self._update_metric_labels(0, 0, 0, 0, 0, 0, 0, 0, 0.0, 0, "Idle")
+
+    def _update_overall_progress_bar(self):
+        total = max(0, int(self.overall_forms_total or 0))
+        completed = max(0, min(total, int(self.overall_forms_completed or 0))) if total else 0
+        percent = int(round((completed / total) * 100)) if total else 0
+        self.detail_progress.setValue(percent)
+        self.detail_progress_value.setText(f"{percent}%")
+        self.detail_progress_text.setText("Overall forms progress")
 
     def _update_pipeline_rows_for_status(self, status):
-        order = ["load", "validate", "evaluate", "apply"]
-        if status == "done":
-            completed = 4
-        elif status == "running":
-            completed = 2
-        elif status == "failed":
-            completed = 2
+        item = self._find_form_item_by_url(self.current_form_url)
+        meta = item.data(Qt.UserRole + 1) if item else {}
+        completed = int(meta.get("completed", 0) or 0)
+        total = int(meta.get("total", 0) or 0)
+        ai_backlog = int(meta.get("ai_backlog", 0) or 0)
+        reviews = int(meta.get("review_questions", 0) or 0)
+        self._set_activity_row(
+            "forms",
+            f"{self.overall_forms_completed} / {self.overall_forms_total} completed",
+            "Running" if self.is_grading else "Idle",
+        )
+        self._set_activity_row(
+            "answers",
+            f"{completed} / {total} evaluated",
+            "Running" if status == "running" and completed < total else "Done" if total and completed >= total else "Waiting",
+        )
+        self._set_activity_row(
+            "ai",
+            f"{ai_backlog} waiting",
+            "Draining" if ai_backlog else "Idle",
+        )
+        self._set_activity_row(
+            "apply",
+            f"{reviews} review questions",
+            "Pending" if reviews else "Waiting",
+        )
+
+    def _set_activity_row(self, key, detail_text, state_text):
+        row = self.pipeline_rows.get(key)
+        if not row:
+            return
+        icon, detail, state = row
+        detail.setText(str(detail_text))
+        state.setText(str(state_text))
+        if state_text in {"Running", "Draining", "Pending"}:
+            icon.setStyleSheet("color:#b36b00; font-weight:700;")
+        elif state_text == "Done":
+            icon.setStyleSheet("color:#16845b; font-weight:700;")
         else:
-            completed = 0
-        for position, key in enumerate(order):
-            icon, _detail, state = self.pipeline_rows[key]
-            if position < completed:
-                icon.setText("✓")
-                icon.setStyleSheet("color:#16845b; font-weight:700;")
-                state.setText("Done")
-            elif position == completed and status == "running":
-                icon.setText("●")
-                icon.setStyleSheet("color:#b36b00;")
-                state.setText("Running")
-            elif status == "failed" and position == completed:
-                icon.setText("!")
-                icon.setStyleSheet("color:#b42318; font-weight:700;")
-                state.setText("Failed")
-            else:
-                icon.setText("○")
-                icon.setStyleSheet("")
-                state.setText("Waiting")
+            icon.setStyleSheet("color:#637485; font-weight:700;")
 
     def set_terminal_state(self, state):
         self.terminal_state = state
@@ -1458,6 +1629,17 @@ class FormManager(QMainWindow):
             "started_at": None,
             "finished_at": None,
             "detail": "Waiting for its turn",
+            "completed": 0,
+            "total": 0,
+            "accepted": 0,
+            "rejected": 0,
+            "review_questions": 0,
+            "elapsed": 0,
+            "det_decisions": 0,
+            "ai_decisions": 0,
+            "avg_latency_ms": 0.0,
+            "ai_backlog": 0,
+            "current_model": "Idle",
         }
 
     def _status_label(self, status):
@@ -1483,44 +1665,97 @@ class FormManager(QMainWindow):
             parts.append(f"Finished: {meta.get('finished_at')}")
         return "  |  ".join(parts)
 
+    def _queue_progress_percent(self, meta):
+        status = str(meta.get("status", "queued"))
+        if status == "done":
+            return 100
+        total = int(meta.get("total", 0) or 0)
+        completed = int(meta.get("completed", 0) or 0)
+        if status == "failed":
+            return 0
+        if status == "queued" and completed <= 0:
+            return 0
+        if total <= 0:
+            return 0
+        return max(0, min(100, int(round((completed / total) * 100))))
+
+    def _queue_eta_text(self, meta):
+        status = str(meta.get("status", "queued"))
+        if status == "done":
+            return "Done"
+        if status == "failed":
+            return "-"
+        completed = int(meta.get("completed", 0) or 0)
+        total = int(meta.get("total", 0) or 0)
+        if status == "queued" and completed <= 0:
+            return "--"
+        eta = self._estimate_eta(
+            completed,
+            total,
+            meta.get("elapsed", 0),
+        )
+        return eta if eta != "--:--" else "--"
+
+    def _queue_detail_text(self, meta):
+        detail = str(meta.get("detail") or "Waiting for its turn")
+        source = str(meta.get("source") or "Queue")
+        if detail and source:
+            return f"{source} | {detail}"
+        return detail or source
+
     def _make_form_row_widget(self, meta):
         card = QFrame()
         card.setObjectName("FormCard")
         card.setProperty("status", meta.get("status", "queued"))
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(12, 9, 12, 9)
-        layout.setSpacing(5)
+        layout = QGridLayout(card)
+        layout.setContentsMargins(8, 4, 10, 4)
+        layout.setHorizontalSpacing(8)
+        layout.setVerticalSpacing(1)
 
-        top = QHBoxLayout()
+        glyph = QLabel(">>")
+        glyph.setObjectName("QueueGlyph")
+        glyph.setAlignment(Qt.AlignCenter)
+        glyph.setFixedWidth(18)
         title = QLabel(meta.get("title", "Untitled"))
         title.setObjectName("FormTitle")
-        title.setWordWrap(True)
+        title.setWordWrap(False)
+        title.setToolTip(meta.get("title", "Untitled"))
+        detail = QLabel(self._queue_detail_text(meta))
+        detail.setObjectName("FormMeta")
+        detail.setWordWrap(False)
+        detail.setToolTip(self._format_form_meta_line(meta))
+        progress = QProgressBar()
+        progress.setObjectName("QueueProgress")
+        progress.setRange(0, 100)
+        progress.setValue(self._queue_progress_percent(meta))
+        progress.setFormat("%p%")
         badge = QLabel(self._status_label(meta.get("status", "queued")))
         badge.setObjectName("StatusBadge")
         badge.setProperty("status", meta.get("status", "queued"))
         badge.setAlignment(Qt.AlignCenter)
-        top.addWidget(title, 1)
-        top.addWidget(badge, 0, Qt.AlignTop)
+        eta = QLabel(self._queue_eta_text(meta))
+        eta.setObjectName("QueueEta")
+        eta.setAlignment(Qt.AlignCenter)
 
-        meta_label = QLabel(self._format_form_meta_line(meta))
-        meta_label.setObjectName("FormMeta")
-        meta_label.setWordWrap(True)
-        detail = QLabel(meta.get("detail", "Waiting for its turn"))
-        detail.setObjectName("FormMeta")
-        detail.setWordWrap(True)
-        url_label = QLabel(self._short_url(meta.get("url", "")))
-        url_label.setObjectName("FormUrl")
-        url_label.setWordWrap(True)
-
-        layout.addLayout(top)
-        layout.addWidget(meta_label)
-        layout.addWidget(detail)
-        layout.addWidget(url_label)
+        layout.addWidget(glyph, 0, 0, 2, 1)
+        layout.addWidget(title, 0, 1)
+        layout.addWidget(detail, 1, 1)
+        layout.addWidget(progress, 0, 2, 2, 1)
+        layout.addWidget(badge, 0, 3, 2, 1)
+        layout.addWidget(eta, 0, 4, 2, 1)
+        layout.setColumnStretch(1, 5)
+        layout.setColumnStretch(2, 2)
+        layout.setColumnStretch(3, 2)
+        layout.setColumnStretch(4, 1)
+        layout.setColumnMinimumWidth(2, 74)
+        layout.setColumnMinimumWidth(3, 68)
+        layout.setColumnMinimumWidth(4, 44)
         card._title_label = title
         card._badge_label = badge
-        card._meta_label = meta_label
         card._detail_label = detail
-        card._url_label = url_label
+        card._progress_bar = progress
+        card._eta_label = eta
+        card._glyph_label = glyph
         return card
 
     def _refresh_form_row(self, item):
@@ -1548,17 +1783,20 @@ class FormManager(QMainWindow):
             self.form_list.setItemWidget(item, widget)
         status = meta.get("status", "queued")
         widget.setProperty("status", status)
+        widget.setProperty("rowParity", "odd" if self.form_list.row(item) % 2 else "even")
         widget.style().unpolish(widget)
         widget.style().polish(widget)
         widget._title_label.setText(meta.get("title", "Untitled"))
+        widget._title_label.setToolTip(meta.get("title", "Untitled"))
         widget._badge_label.setText(self._status_label(status))
         widget._badge_label.setProperty("status", status)
         widget._badge_label.style().unpolish(widget._badge_label)
         widget._badge_label.style().polish(widget._badge_label)
-        widget._meta_label.setText(self._format_form_meta_line(meta))
-        widget._detail_label.setText(meta.get("detail", "Waiting for its turn"))
-        widget._url_label.setText(self._short_url(meta.get("url", "")))
-        item.setSizeHint(QSize(0, max(104, widget.sizeHint().height())))
+        widget._detail_label.setText(self._queue_detail_text(meta))
+        widget._detail_label.setToolTip(self._format_form_meta_line(meta))
+        widget._progress_bar.setValue(self._queue_progress_percent(meta))
+        widget._eta_label.setText(self._queue_eta_text(meta))
+        item.setSizeHint(QSize(0, max(44, widget.sizeHint().height())))
 
     def _title_from_legacy_item(self, item, url):
         text = (item.text() or "").strip()
@@ -2412,14 +2650,19 @@ class FormManager(QMainWindow):
         self.debug_output.clear()
         self.debug_lines = []
         self.finished_forms = []
+        self.overall_forms_completed = 0
+        if target_urls is not None:
+            self.overall_forms_total = len(set(target_urls))
+        else:
+            self.overall_forms_total = sum(
+                1
+                for i in range(self.form_list.count())
+                if (self.form_list.item(i).data(Qt.UserRole + 1) or {}).get("status", "queued") == "queued"
+            )
         self.detail_progress.setValue(0)
         self.detail_progress_value.setText("0%")
-        self.metric_responses.setText("0 / 0")
-        self.metric_accepted.setText("0")
-        self.metric_rejected.setText("0")
-        self.metric_review.setText('<a href="review">0</a>')
-        self.metric_elapsed.setText("00:00")
-        self.detail_progress_text.setText("Preparing form and responses")
+        self._update_overall_progress_bar()
+        self._reset_metric_labels()
         for i in range(self.form_list.count()):
             item = self.form_list.item(i)
             url = item.data(Qt.UserRole)
@@ -2430,6 +2673,17 @@ class FormManager(QMainWindow):
             meta["started_at"] = None
             meta["finished_at"] = None
             meta["detail"] = "Waiting for its turn"
+            meta["completed"] = 0
+            meta["total"] = 0
+            meta["accepted"] = 0
+            meta["rejected"] = 0
+            meta["review_questions"] = 0
+            meta["elapsed"] = 0
+            meta["det_decisions"] = 0
+            meta["ai_decisions"] = 0
+            meta["avg_latency_ms"] = 0.0
+            meta["ai_backlog"] = 0
+            meta["current_model"] = "Idle"
             item.setData(Qt.UserRole + 1, meta)
             self._refresh_form_row(item)
         self._refresh_queue_positions()
@@ -2492,36 +2746,55 @@ class FormManager(QMainWindow):
 
     def update_progress(self, cur, tot):
         if not tot:
-            self.detail_progress.setValue(0)
-            self.detail_progress_value.setText("0%")
             self.metric_responses.setText("0 / 0")
-            self.detail_progress_text.setText("No learner answers to evaluate")
+            self.pipeline_updated.setText("No learner answers")
             return
-        # Round to the nearest whole percent so small real increments are visible.
-        percent = max(0, min(100, int(round((cur / tot) * 100))))
-        self.detail_progress.setValue(percent)
-        self.detail_progress_value.setText(f"{percent}%")
         self.metric_responses.setText(f"{cur} / {tot}")
-        self.detail_progress_text.setText("Evaluating learner answers")
+        self.pipeline_updated.setText("Evaluating answers")
 
     def update_overall_progress(self, cur, tot):
         if not tot:
             return
+        self.overall_forms_completed = cur
+        self.overall_forms_total = tot
+        self._update_overall_progress_bar()
         self.in_queue_label.setText(f"In Queue: {max(0, tot - cur)}")
         self.command_summary.setText(f"{tot} forms · {cur} completed")
+        self._update_pipeline_rows_for_status("running" if self.is_grading else "queued")
 
-    def update_form_metrics(self, completed, total, accepted, review_questions, elapsed_seconds, rejected=0):
-        self.metric_responses.setText(f"{completed} / {total}")
-        self.metric_accepted.setText(str(accepted))
-        self.metric_rejected.setText(str(rejected))
-        self.metric_review.setText(f'<a href="review">{review_questions}</a>')
-        hours, remainder = divmod(max(0, int(elapsed_seconds)), 3600)
-        minutes, seconds = divmod(remainder, 60)
-        self.metric_elapsed.setText(
-            f"{hours:02d}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes:02d}:{seconds:02d}"
+    def update_form_metrics(
+        self,
+        completed,
+        total,
+        accepted,
+        review_questions,
+        elapsed_seconds,
+        rejected=0,
+        det_decisions=0,
+        ai_decisions=0,
+        avg_latency_ms=0.0,
+    ):
+        ai_backlog = 0
+        current_model = "Idle"
+        item = self._find_form_item_by_url(self.current_form_url)
+        if item:
+            meta = item.data(Qt.UserRole + 1) or {}
+            ai_backlog = meta.get("ai_backlog", 0)
+            current_model = meta.get("current_model", "Idle")
+        self._update_metric_labels(
+            completed,
+            total,
+            accepted,
+            review_questions,
+            elapsed_seconds,
+            rejected,
+            det_decisions,
+            ai_decisions,
+            avg_latency_ms,
+            ai_backlog,
+            current_model,
         )
 
-        item = self._find_form_item_by_url(self.current_form_url)
         if item:
             meta = item.data(Qt.UserRole + 1) or {}
             meta["completed"] = completed
@@ -2530,8 +2803,12 @@ class FormManager(QMainWindow):
             meta["rejected"] = rejected
             meta["review_questions"] = review_questions
             meta["elapsed"] = elapsed_seconds
-            meta["review_questions"] = review_questions
+            meta["det_decisions"] = det_decisions
+            meta["ai_decisions"] = ai_decisions
+            meta["avg_latency_ms"] = avg_latency_ms
             item.setData(Qt.UserRole + 1, meta)
+            self._refresh_form_row(item)
+            self._update_pipeline_rows_for_status(meta.get("status", "running"))
 
     def refresh_review_counts(self, form_id: str = None):
         """Recompute pending review counts for a form and update GUI metrics.
@@ -2563,16 +2840,9 @@ class FormManager(QMainWindow):
             item.setData(Qt.UserRole + 1, meta)
 
     def update_current_form(self, url):
-        # Progress belongs to the newly announced form, never the previously
-        # selected/completed one.
-        self.detail_progress.setValue(0)
-        self.detail_progress_value.setText("0%")
-        self.metric_responses.setText("0 / 0")
-        self.metric_accepted.setText("0")
-        self.metric_rejected.setText("0")
-        self.metric_review.setText('<a href="review">0</a>')
-        self.metric_elapsed.setText("00:00")
-        self.detail_progress_text.setText("Preparing form and responses")
+        # The top progress bar tracks the whole run; answer progress lives in metrics.
+        self._update_overall_progress_bar()
+        self._reset_metric_labels()
         self.current_form_url = url
         item = self._find_form_item_by_url(url)
         title = "Current form"
@@ -2588,7 +2858,7 @@ class FormManager(QMainWindow):
             self.form_list.setCurrentItem(item)
         self.current_label.setText(f"Processing: {title[:48]}")
         self.run_state_label.setText("Running")
-        self.pipeline_updated.setText("Updated just now")
+        self.pipeline_updated.setText("Preparing form")
 
     def update_finished_form(self, form_id):
         self.finished_forms.append(form_id)
@@ -2665,8 +2935,46 @@ class FormManager(QMainWindow):
                 payload = message.split("[DISPATCH METRICS]", 1)[1].strip()
                 self._update_worker_tab_queue_counts(payload)
                 return
+            if "[HEARTBEAT]" in message:
+                self._update_current_model_from_heartbeat(message)
+                return
         except Exception:
             pass
+
+    def _update_current_model_from_heartbeat(self, message):
+        model = None
+        match = re.search(r"\bactive_model=([^\s]+)", str(message))
+        if match:
+            model = match.group(1).strip()
+        if not model:
+            return
+        if model == "none":
+            model = "Idle"
+        item = self._find_form_item_by_url(self.current_form_url)
+        if item:
+            meta = item.data(Qt.UserRole + 1) or {}
+            meta["current_model"] = model
+            item.setData(Qt.UserRole + 1, meta)
+        if hasattr(self, "metric_current_model"):
+            current_completed = 0
+            current_total = 0
+            if item:
+                meta = item.data(Qt.UserRole + 1) or {}
+                current_completed = int(meta.get("completed", 0) or 0)
+                current_total = int(meta.get("total", 0) or 0)
+                self._update_metric_labels(
+                    current_completed,
+                    current_total,
+                    int(meta.get("accepted", 0) or 0),
+                    int(meta.get("review_questions", 0) or 0),
+                    meta.get("elapsed", 0),
+                    int(meta.get("rejected", 0) or 0),
+                    int(meta.get("det_decisions", 0) or 0),
+                    int(meta.get("ai_decisions", 0) or 0),
+                    float(meta.get("avg_latency_ms", 0.0) or 0.0),
+                    int(meta.get("ai_backlog", 0) or 0),
+                    model,
+                )
 
     def _reset_worker_tab_titles(self):
         self.log_tabs.setTabText(0, "All")
@@ -2720,6 +3028,25 @@ class FormManager(QMainWindow):
         self.log_tabs.setTabText(2, f"Det Workers (q: {d})")
         self.log_tabs.setTabText(3, f"AI Workers (q: {a})")
         self.log_tabs.setTabText(4, f"Aggregator (q: {r})")
+        item = self._find_form_item_by_url(self.current_form_url)
+        if item and q_ai_display is not None:
+            meta = item.data(Qt.UserRole + 1) or {}
+            meta["ai_backlog"] = q_ai_display
+            item.setData(Qt.UserRole + 1, meta)
+            self._refresh_form_row(item)
+            self._update_metric_labels(
+                int(meta.get("completed", 0) or 0),
+                int(meta.get("total", 0) or 0),
+                int(meta.get("accepted", 0) or 0),
+                int(meta.get("review_questions", 0) or 0),
+                meta.get("elapsed", 0),
+                int(meta.get("rejected", 0) or 0),
+                int(meta.get("det_decisions", 0) or 0),
+                int(meta.get("ai_decisions", 0) or 0),
+                float(meta.get("avg_latency_ms", 0.0) or 0.0),
+                q_ai_display,
+                meta.get("current_model", "Idle"),
+            )
         self._update_pipeline_state(q_fetch, q_pending, q_det, q_ai_display, q_result, done, total)
 
     def _update_pipeline_state(self, q_fetch, q_pending, q_det, q_ai, q_result, done, total):
@@ -2746,6 +3073,18 @@ class FormManager(QMainWindow):
         self.pipeline_state_label.setText(f"Pipeline State: {state}")
         if hasattr(self, "pipeline_updated"):
             self.pipeline_updated.setText(state)
+        self._set_activity_row(
+            "forms",
+            f"{self.overall_forms_completed} / {self.overall_forms_total} completed",
+            "Running" if self.is_grading else "Idle",
+        )
+        if done is not None and total is not None:
+            answer_state = "Done" if total > 0 and done >= total else "Running" if self.is_grading else "Waiting"
+            self._set_activity_row("answers", f"{done} / {total} evaluated", answer_state)
+        ai_waiting = int(q_ai or 0)
+        self._set_activity_row("ai", f"{ai_waiting} waiting", "Draining" if ai_waiting else "Idle")
+        apply_waiting = int(q_result or 0)
+        self._set_activity_row("apply", f"{apply_waiting} result updates pending", "Pending" if apply_waiting else "Waiting")
 
     def append_debug(self, message):
         self.debug_lines.append(message)

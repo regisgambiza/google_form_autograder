@@ -2,7 +2,8 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt5.QtWidgets import QApplication, QPushButton, QSplitter
+from PyQt5.QtWidgets import QApplication, QPushButton, QSplitter, QFrame
+from PyQt5.QtCore import Qt
 
 from app_theme import apply_application_theme
 from gui_main import FormManager
@@ -16,9 +17,10 @@ def test_main_window_uses_approved_workspace_layout():
     window = FormManager()
     buttons = {button.text(): button for button in window.findChildren(QPushButton)}
     assert {"Add Sources", "Scan Source", "Run Grading", "Answer Keys"}.issubset(buttons)
-    assert {buttons[name].width() for name in ("Add Sources", "Scan Source", "Run Grading", "Answer Keys")} == {145}
+    assert {buttons[name].height() for name in ("Add Sources", "Scan Source", "Run Grading", "Answer Keys")} == {42}
     assert not buttons["Scan Source"].icon().isNull()
-    assert buttons["Run Grading"].objectName() == "Secondary"
+    assert buttons["Run Grading"].objectName() == "CommandButton"
+    assert buttons["Run Grading"].property("variant") == "secondary"
     assert not buttons["Run Grading"].icon().isNull()
     splitter = window.findChild(QSplitter, "WorkspaceSplitter")
     assert splitter is not None
@@ -64,14 +66,66 @@ def test_queue_search_and_status_filter_hide_nonmatches():
     assert not second.isHidden()
 
 
+def test_form_queue_uses_compact_table_rows():
+    window = FormManager()
+    window.form_list.clear()
+    window.forms_data.clear()
+    header = window.findChild(QFrame, "FormQueueHeader")
+    assert header is not None
+
+    first = window._add_form_to_queue("https://docs.google.com/forms/d/a/edit", "Algebra", source="Test")
+    second = window._add_form_to_queue("https://docs.google.com/forms/d/b/edit", "Fractions", source="Test")
+    window.current_form_url = first.data(Qt.UserRole)
+    window.update_form_metrics(5, 10, 4, 1, 60, 0, 2, 3, 1200.0)
+
+    first_widget = window.form_list.itemWidget(first)
+    second_widget = window.form_list.itemWidget(second)
+    assert first_widget.property("rowParity") == "even"
+    assert second_widget.property("rowParity") == "odd"
+    assert first_widget._progress_bar.value() == 50
+    assert first_widget._eta_label.text() == "01:00"
+    assert first.sizeHint().height() < 70
+
+
 def test_live_metric_cards_show_accept_review_and_elapsed():
     window = FormManager()
-    window.update_form_metrics(207, 462, 180, 6, 3723, 21)
+    window.update_form_metrics(207, 462, 180, 6, 3723, 21, 80, 127, 4321.0)
     assert window.metric_responses.text() == "207 / 462"
     assert window.metric_accepted.text() == "180"
     assert window.metric_rejected.text() == "21"
     assert ">6<" in window.metric_review.text()
     assert window.metric_elapsed.text() == "01:02:03"
+    assert window.metric_rate.text() == "3.3/min"
+    assert window.metric_decision_paths.text() == "80 / 127"
+    assert window.metric_avg_latency.text() == "4.3s"
+    assert window.metric_eta.text() == "01:16:26"
+
+
+def test_top_progress_tracks_overall_forms_not_answer_progress():
+    window = FormManager()
+    window.update_overall_progress(50, 100)
+    assert window.detail_progress.value() == 50
+    assert window.detail_progress_value.text() == "50%"
+
+    window.update_progress(22, 100)
+    assert window.metric_responses.text() == "22 / 100"
+    assert window.detail_progress.value() == 50
+    assert window.detail_progress_value.text() == "50%"
+
+
+def test_live_dashboard_updates_ai_backlog_and_current_model():
+    window = FormManager()
+    window.form_list.clear()
+    item = window._add_form_to_queue("https://docs.google.com/forms/d/form-1/edit", "Algebra", source="Test")
+    window.form_list.setCurrentItem(item)
+    window.current_form_url = item.data(Qt.UserRole)
+
+    window.update_form_metrics(5, 10, 4, 1, 60, 0, 2, 3, 1200.0)
+    window._update_worker_tab_queue_counts("q_fetch=0 q_det=0 q_ai=1 q_ai_actual=7 q_result=0 done=5/10")
+    assert window.metric_ai_backlog.text() == "7"
+
+    window._update_current_model_from_heartbeat("[HEARTBEAT] active_model=gemma3:12b progress=5/10 q_ai=7")
+    assert window.metric_current_model.text() == "gemma3:12b"
 
 
 def test_review_metric_deep_links_to_current_form(monkeypatch):
