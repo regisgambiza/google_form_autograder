@@ -7,7 +7,7 @@
     "jury_models": {
         "semantic_judge": "llama3.1:8b",
         "factual_judge": "qwen3:8b",
-        "concept_judge": "phi4-mini:3.8b",
+        "concept_judge": "qwen2.5:7b",
         "strict_judge": "qwen3:8b",
         "misconception_judge": "llama3.1:8b",
         "language_filter": "gpt-oss:latest"
@@ -42,7 +42,7 @@
     "enable_deduplication": false,
     "force_ai_jury_for_all_answers": true,
     "model_first_question_batching": true,
-    "judge_answer_batch_size": 4,
+    "judge_answer_batch_size": 1,
     "judge_batch_num_predict": 2048,
     "decision_audit_path": "logs/grading_decisions.jsonl",
     "teacher_benchmark_path": "teacher_benchmark.jsonl",
