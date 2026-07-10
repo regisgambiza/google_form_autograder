@@ -475,12 +475,15 @@ def parse_batch_judge_response(raw: str, expected_indices: List[int]) -> Dict[in
     """Parse a batch judge response into per-answer judge objects."""
     try:
         obj = _extract_json_object(raw)
-    except Exception:
+    except Exception as ex:
+        log("DEBUG", f"[BATCH PARSE] JSON extraction failed: {ex} raw={repr(raw)[:300]}")
         return {}
     if not isinstance(obj, dict):
+        log("DEBUG", f"[BATCH PARSE] top-level response is not a dict: {type(obj)}")
         return {}
     results = obj.get("results")
     if not isinstance(results, list):
+        log("DEBUG", f"[BATCH PARSE] 'results' key missing or not a list; keys={list(obj.keys())}")
         return {}
 
     expected_set = set(expected_indices)
@@ -491,13 +494,20 @@ def parse_batch_judge_response(raw: str, expected_indices: List[int]) -> Dict[in
         try:
             answer_index = int(item.get("answer_index"))
         except (TypeError, ValueError):
+            log("DEBUG", f"[BATCH PARSE] item has no valid answer_index: {item}")
             continue
-        if answer_index not in expected_set or answer_index in parsed:
+        if answer_index not in expected_set:
+            log("DEBUG", f"[BATCH PARSE] unexpected answer_index={answer_index} (expected {sorted(expected_set)})")
+            continue
+        if answer_index in parsed:
             continue
         normalized = _normalize_decision(dict(item))
         normalized = _fill_judge_defaults(normalized)
         if _valid(normalized):
             parsed[answer_index] = normalized
+        else:
+            log("DEBUG", f"[BATCH PARSE] answer_index={answer_index} failed validation: "
+                f"decision={normalized.get('decision')} category={_failure_category(str(item))}")
     return parsed
 
 
@@ -562,8 +572,16 @@ def _get_ollama_options(role: str) -> Dict[str, object]:
 def _get_batch_ollama_options(role: str, batch_size: int) -> Dict[str, object]:
     out = _get_ollama_options(role)
     cfg = load_config()
-    batch_predict = int(cfg.get("judge_batch_num_predict", max(768, int(out.get("num_predict", 512)) * max(1, batch_size))))
+    # Each answer needs ~350 output tokens for a full judge JSON object.
+    # Scale generously so later answers in the batch are never truncated.
+    per_answer_tokens = int(cfg.get("judge_batch_tokens_per_answer", 350))
+    min_predict = per_answer_tokens * max(1, batch_size)
+    batch_predict = int(cfg.get("judge_batch_num_predict", max(1024, min_predict)))
     out["num_predict"] = max(int(out.get("num_predict", 512)), batch_predict)
+    # Ensure context window is wide enough for prompt + all student answers + full response.
+    # The default 2048 is far too small for batches of 3+; scale with batch_size.
+    min_ctx = max(4096, batch_size * 1024)
+    out["num_ctx"] = max(int(out.get("num_ctx", 2048)), min_ctx)
     return out
 
 
