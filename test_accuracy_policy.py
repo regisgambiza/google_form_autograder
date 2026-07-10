@@ -127,3 +127,43 @@ def test_adaptive_math_jury_reviews_if_adjudicator_is_not_confident():
     judges = _votes(confidence=0.70)
     decision, _, reason, _ = adaptive_math_jury_decision(judges, MODELS)
     assert (decision, reason) == ("REVIEW", "adjudicator_low_confidence")
+
+
+def test_adaptive_math_jury_rejects_unanimous_primary_no_with_low_confidence_adjudicator():
+    judges = [
+        {
+            "role": "semantic_judge",
+            "decision": "NO",
+            "confidence": 1.0,
+            "reason_short": "contradicts canonical 130",
+            "requirements_missing": ["numeric value matches canonical"],
+            "contradictions": [],
+        },
+        {
+            "role": "factual_judge",
+            "decision": "NO",
+            "confidence": 1.0,
+            "reason_short": "incorrect numeric value",
+            "requirements_missing": ["correct numeric answer"],
+            "contradictions": [],
+        },
+        {
+            "role": "concept_judge",
+            "decision": "NO",
+            "confidence": 1.0,
+            "reason_short": "student answer does not match teacher answer",
+            "requirements_missing": ["correct estimated sum"],
+            "contradictions": ["numeric value 120 contradicts 130"],
+        },
+        {
+            "role": "strict_judge",
+            "decision": "NO",
+            "confidence": 0.05,
+            "reason_short": "contradicts canonical",
+        },
+    ]
+
+    decision, confidence, reason, _ = adaptive_math_jury_decision(judges, MODELS)
+
+    assert (decision, reason) == ("NO", "primary_unanimous_rejection")
+    assert confidence == 1.0

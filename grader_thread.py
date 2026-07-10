@@ -156,8 +156,12 @@ class GraderThread(QThread):
                     verdict = str(judge.get("decision", "ERROR")).upper()
                     jicon = "✓" if verdict == "YES" else "✗" if verdict == "NO" else "?"
                     confidence = float(judge.get("confidence", 0.0) or 0.0) * 100
+                    provider = str(judge.get("provider") or "").strip()
+                    model_label = str(judge.get("model") or judge.get("role") or "")
+                    if provider:
+                        model_label = f"{provider} / {model_label}"
                     lines.append(
-                        f"{jicon} {esc(judge.get('model') or judge.get('role'))}: "
+                        f"{jicon} {esc(model_label)}: "
                         f"{esc(verdict)} ({confidence:.0f}%) — {esc(judge.get('reason'))}"
                     )
                     missing = judge.get("requirements_missing") or []
@@ -249,7 +253,16 @@ class GraderThread(QThread):
                         print(ls, flush=True)
                     except Exception:
                         pass
-                    if "[DISPATCH METRICS]" in ls or "[HEARTBEAT]" in ls:
+                    provider_tags = (
+                        "[PROVIDER METRICS]",
+                        "[PROVIDER WORKER]",
+                        "[PROVIDER ROUTE]",
+                        "[PROVIDER RETRY]",
+                        "[PROVIDER FAILOVER]",
+                        "[PROVIDER RECOVERY]",
+                        "[PROVIDER]",
+                    )
+                    if "[DISPATCH METRICS]" in ls or "[HEARTBEAT]" in ls or any(tag in ls for tag in provider_tags):
                         self.debug_message.emit(ls)
 
                 # Parse progress messages from main.py

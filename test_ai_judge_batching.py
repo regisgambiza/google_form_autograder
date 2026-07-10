@@ -49,6 +49,7 @@ def test_call_judge_role_batch_sync_uses_one_ollama_call_for_three_answers(monke
         "load_config",
         lambda: {
             "jury_models": {"semantic_judge": "model-a"},
+            "provider_manager_enabled": False,
             "judge_timeout_seconds": 30,
             "judge_http_timeout_seconds": 30,
             "judge_http_semaphore_wait_seconds": 30,
@@ -87,6 +88,7 @@ def test_call_judge_role_batch_sync_falls_back_for_missing_answer(monkeypatch):
         "load_config",
         lambda: {
             "jury_models": {"semantic_judge": "model-a"},
+            "provider_manager_enabled": False,
             "judge_timeout_seconds": 30,
             "judge_http_timeout_seconds": 30,
             "judge_http_semaphore_wait_seconds": 30,

@@ -4,15 +4,24 @@ from pathlib import Path
 import grader_thread
 
 
-def test_current_jury_models_use_reliability_first_independent_roles():
+def test_current_jury_models_use_configured_fast_local_roles():
     cfg = json.loads(Path("config.json").read_text(encoding="utf-8"))
-    assert cfg["jury_models"]["semantic_judge"] == "mistral-nemo:12b"
-    assert cfg["jury_models"]["factual_judge"] == "gemma3:12b"
-    assert cfg["jury_models"]["concept_judge"] == "phi4:14b"
-    assert cfg["jury_models"]["strict_judge"] == "gpt-oss:latest"
-    assert len(set(cfg["jury_models"][role] for role in ("semantic_judge", "factual_judge", "concept_judge", "strict_judge"))) == 4
+    assert cfg["jury_models"]["semantic_judge"] == "llama3.1:8b"
+    assert cfg["jury_models"]["factual_judge"] == "qwen3:8b"
+    assert cfg["jury_models"]["concept_judge"] == "qwen2.5:7b"
+    assert cfg["jury_models"]["strict_judge"] == "qwen3:8b"
     assert "rubric_model" not in cfg
     assert cfg["reasoning_model"] == "phi4:14b"
+
+
+def test_provider_manager_prefers_openrouter_with_ollama_failover():
+    cfg = json.loads(Path("config.json").read_text(encoding="utf-8"))
+    assert cfg["provider_manager_enabled"] is True
+    assert cfg["provider_priority"] == ["openrouter", "ollama"]
+    assert cfg["openrouter_worker_count"] >= 1
+    assert cfg["ollama_worker_count"] == 1
+    assert cfg["openrouter_api_key"] == "env:OPENROUTER_API_KEY"
+    assert "openrouter/free" in cfg["openrouter_fallback_models"]
 
 
 def test_patient_ai_mode_avoids_short_timeout_fallbacks():
@@ -38,10 +47,10 @@ def test_jury_uses_three_blind_roles_and_conditional_gpt_adjudicator():
     assert adaptive["primary_roles"] == ["semantic_judge", "factual_judge", "concept_judge"]
     assert adaptive["adjudicator_role"] == "strict_judge"
     assert cfg["active_judge_roles"] == ["semantic_judge", "factual_judge", "concept_judge", "strict_judge"]
-    assert cfg["jury_models"][adaptive["primary_roles"][0]] == "mistral-nemo:12b"
-    assert cfg["jury_models"][adaptive["primary_roles"][1]] == "gemma3:12b"
-    assert cfg["jury_models"][adaptive["primary_roles"][2]] == "phi4:14b"
-    assert cfg["jury_models"][adaptive["adjudicator_role"]] == "gpt-oss:latest"
+    assert cfg["jury_models"][adaptive["primary_roles"][0]] == "llama3.1:8b"
+    assert cfg["jury_models"][adaptive["primary_roles"][1]] == "qwen3:8b"
+    assert cfg["jury_models"][adaptive["primary_roles"][2]] == "qwen2.5:7b"
+    assert cfg["jury_models"][adaptive["adjudicator_role"]] == "qwen3:8b"
 
 
 def test_teacher_key_validator_was_removed_for_teacher_answer_master_flow():

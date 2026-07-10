@@ -20,6 +20,8 @@ from evaluator_config import load_config
 from logger import log, update_runtime_state
 from ollama_diagnostics import log_post_inference_gpu_probe_once
 from ollama_options import build_ollama_options
+from provider_manager import get_provider_manager, make_request_id
+from provider_types import ProviderError, ProviderRequest
 
 _JUDGE_HTTP_LIMIT_LOCK = threading.Lock()
 _JUDGE_HTTP_SEMAPHORE = None
@@ -89,14 +91,32 @@ def prewarm_judge_runtime():
         timeout_s = max(5, int(cfg.get("judge_prewarm_timeout_seconds", 20)))
         payload = {
             "model": model,
-            "messages": [{"role": "user", "content": "Reply with: OK"}],
+            "messages": [{"role": "user", "content": 'Return only JSON: {"ok": true}'}],
             "stream": False,
             "options": {"num_predict": 8, "temperature": 0.0},
             "keep_alive": cfg.get("ollama_options", {}).get("keep_alive", "30m"),
+            "format": {
+                "type": "object",
+                "properties": {"ok": {"type": "boolean"}},
+                "required": ["ok"],
+            },
         }
         log("INFO", f"[JUDGES] prewarm START model={model}")
-        resp = requests.post(_ollama_chat_url(), json=payload, timeout=(5, timeout_s))
-        resp.raise_for_status()
+        if bool(cfg.get("provider_manager_enabled", True)):
+            get_provider_manager().ask(
+                ProviderRequest(
+                    request_id=make_request_id("prewarm"),
+                    judge_name="semantic_judge",
+                    payload=payload,
+                    timeout_s=timeout_s,
+                    schema=payload["format"],
+                    retries=1,
+                    metadata={"request_kind": "prewarm", "provider_priority": ["ollama"]},
+                )
+            )
+        else:
+            resp = requests.post(_ollama_chat_url(), json=payload, timeout=(5, timeout_s))
+            resp.raise_for_status()
         log("INFO", f"[JUDGES] prewarm DONE model={model}")
     except Exception as ex:
         log("WARNING", f"[JUDGES] prewarm failed: {ex}")
@@ -138,6 +158,62 @@ def _ollama_chat_url() -> str:
     cfg = load_config()
     base = str(cfg.get("ollama_api_base_url", "http://127.0.0.1:11434")).rstrip("/")
     return f"{base}/api/chat"
+
+
+def _provider_manager_enabled() -> bool:
+    return bool(load_config().get("provider_manager_enabled", True))
+
+
+def _provider_schema(payload: Dict[str, object]) -> Optional[Dict[str, object]]:
+    fmt = payload.get("format")
+    return fmt if isinstance(fmt, dict) else None
+
+
+def _ask_provider(role: str, payload: Dict[str, object], timeout_s: int, request_kind: str) -> Dict[str, object]:
+    response = get_provider_manager().ask(
+        ProviderRequest(
+            request_id=make_request_id(request_kind),
+            judge_name=role,
+            payload=payload,
+            timeout_s=timeout_s,
+            schema=_provider_schema(payload),
+            metadata={"request_kind": request_kind},
+        )
+    )
+    out = dict(response.payload)
+    out["_provider_info"] = {
+        "provider": response.provider,
+        "model": response.model,
+        "latency_ms": response.latency_ms,
+        "queue_wait_ms": response.queue_wait_ms,
+        "retry_count": response.retry_count,
+        "tokens": response.tokens,
+    }
+    return out
+
+
+def _provider_info(response: Dict[str, object]) -> Dict[str, object]:
+    info = response.get("_provider_info")
+    return info if isinstance(info, dict) else {}
+
+
+def _chat_response(role: str, payload: Dict[str, object], timeout_s: int, request_kind: str) -> Dict[str, object]:
+    if _provider_manager_enabled():
+        return _ask_provider(role, payload, timeout_s, request_kind)
+    resp = requests.post(_ollama_chat_url(), json=payload, timeout=(10, timeout_s))
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _annotate_provider_result(obj: Dict[str, object], response: Dict[str, object], fallback_model: str) -> Dict[str, object]:
+    info = _provider_info(response)
+    obj["model"] = str(info.get("model") or fallback_model)
+    if info:
+        obj["provider"] = str(info.get("provider") or "")
+        obj["provider_latency_ms"] = float(info.get("latency_ms", 0.0) or 0.0)
+        obj["provider_queue_wait_ms"] = float(info.get("queue_wait_ms", 0.0) or 0.0)
+        obj["provider_retry_count"] = int(info.get("retry_count", 0) or 0)
+    return obj
 
 
 def parse_judge_response(raw: str) -> Dict[str, object]:
@@ -516,12 +592,18 @@ async def call_judge_async(
             payload["messages"][1]["content"] = (
                 base_prompt + "\n\nREPAIR: Your previous response was invalid. Output only the required JSON object."
             )
-        if not sem.acquire(timeout=sem_wait):
-            log("WARNING", f"Judge {role} semaphore wait timeout ({sem_wait}s)")
-            continue
+        acquired = False
+        if not _provider_manager_enabled():
+            if not sem.acquire(timeout=sem_wait):
+                log("WARNING", f"Judge {role} semaphore wait timeout ({sem_wait}s)")
+                continue
+            acquired = True
         try:
-            async with session.post(_ollama_chat_url(), json=payload, timeout=judge_http_timeout_s) as resp:
-                data = await resp.json()
+            if _provider_manager_enabled():
+                data = await asyncio.to_thread(_chat_response, role, payload, judge_http_timeout_s, "judge")
+            else:
+                async with session.post(_ollama_chat_url(), json=payload, timeout=judge_http_timeout_s) as resp:
+                    data = await resp.json()
 
             content = data.get("message", {}).get("content", "")
 
@@ -543,10 +625,10 @@ async def call_judge_async(
             obj = _fill_judge_defaults(obj)
             if _valid(obj):
                 obj["role"] = role
-                obj["model"] = model
+                obj = _annotate_provider_result(obj, data, model)
                 duration_ms = (time.perf_counter() - start) * 1000
                 log_post_inference_gpu_probe_once("judge_async")
-                _log_judge_result(role, model, duration_ms, obj.get("decision", "ERROR"), obj.get("confidence", 0.0), obj)
+                _log_judge_result(role, str(obj.get("model") or model), duration_ms, obj.get("decision", "ERROR"), obj.get("confidence", 0.0), obj)
                 _write_heartbeat_if_needed()
                 return obj
             log("WARNING", f"Judge {role} invalid output category={_failure_category(content)} raw={repr(content)[:1000]}")
@@ -560,10 +642,11 @@ async def call_judge_async(
             log("WARNING", f"Judge {role} failed: {ex}")
             log("WARNING", f"  Content: {repr(content)[:200]}")
         finally:
-            try:
-                sem.release()
-            except Exception:
-                pass
+            if acquired:
+                try:
+                    sem.release()
+                except Exception:
+                    pass
 
     out = _abstain("retries_exhausted")
     out.update({"role": role, "model": model})
@@ -572,11 +655,12 @@ async def call_judge_async(
 
 def _log_judge_result(role: str, model: str, duration_ms: float, decision: str, confidence: float, evidence=None):
     """Log judge completion with timing and result."""
-    log("INFO", f"END judge_{role} duration_ms={duration_ms:.0f} decision={decision} confidence={confidence:.2f} (model={model})")
+    provider = f" provider={evidence.get('provider')}" if isinstance(evidence, dict) and evidence.get("provider") else ""
+    log("INFO", f"END judge_{role} duration_ms={duration_ms:.0f} decision={decision} confidence={confidence:.2f} (model={model}{provider})")
     if isinstance(evidence, dict):
         log(
             "INFO",
-            f"[JUDGE EVIDENCE] role={role} model={model} reason={evidence.get('reason_short', '')!r} "
+            f"[JUDGE EVIDENCE] role={role} model={model} provider={evidence.get('provider', '')!r} reason={evidence.get('reason_short', '')!r} "
             f"met={evidence.get('requirements_met', [])!r} missing={evidence.get('requirements_missing', [])!r} "
             f"contradictions={evidence.get('contradictions', [])!r} calculation={evidence.get('calculation_check', '')!r}",
         )
@@ -624,22 +708,27 @@ def call_judge_role_sync(
         }
         sem = _get_judge_http_semaphore()
         sem_wait = max(3, int(cfg.get("judge_http_semaphore_wait_seconds", TIMEOUT_SECONDS)))
-        if not sem.acquire(timeout=sem_wait):
-            log("WARNING", f"Judge {role} semaphore wait timeout ({sem_wait}s); no verdict produced")
-            duration_ms = (time.perf_counter() - start) * 1000
-            _log_judge_result(role, role_model, duration_ms, "ERROR", 0.0)
-            out = _abstain("semaphore_timeout")
-            out.update({"role": role, "model": role_model})
-            return out
+        acquired = False
+        if not _provider_manager_enabled():
+            if not sem.acquire(timeout=sem_wait):
+                log("WARNING", f"Judge {role} semaphore wait timeout ({sem_wait}s); no verdict produced")
+                duration_ms = (time.perf_counter() - start) * 1000
+                _log_judge_result(role, role_model, duration_ms, "ERROR", 0.0)
+                out = _abstain("semaphore_timeout")
+                out.update({"role": role, "model": role_model})
+                return out
+            acquired = True
 
         try:
-            resp = requests.post(
-                _ollama_chat_url(),
-                json=payload,
-                timeout=(10, TIMEOUT_SECONDS),
-            )
-            resp.raise_for_status()
-            response = resp.json()
+            response = _chat_response(role, payload, TIMEOUT_SECONDS, "judge")
+        except ProviderError as ex:
+            category = getattr(ex, "category", "provider_error")
+            log("WARNING", f"Judge {role} provider attempt failed category={category}: {ex}")
+            duration_ms = (time.perf_counter() - start) * 1000
+            _log_judge_result(role, role_model, duration_ms, "ERROR", 0.0)
+            out = _abstain(category)
+            out.update({"role": role, "model": role_model})
+            return out
         except requests.Timeout:
             log("WARNING", f"Judge {role} timed out after {TIMEOUT_SECONDS}s without a binary verdict")
             duration_ms = (time.perf_counter() - start) * 1000
@@ -655,10 +744,11 @@ def call_judge_role_sync(
             out.update({"role": role, "model": role_model})
             return out
         finally:
-            try:
-                sem.release()
-            except Exception:
-                pass
+            if acquired:
+                try:
+                    sem.release()
+                except Exception:
+                    pass
 
         raw = response.get("message", {}).get("content", "")
         obj = parse_judge_response(raw) if isinstance(raw, str) else raw
@@ -667,9 +757,9 @@ def call_judge_role_sync(
         duration_ms = (time.perf_counter() - start) * 1000
         if _valid(obj):
             obj["role"] = role
-            obj["model"] = role_model
+            obj = _annotate_provider_result(obj, response, role_model)
             log_post_inference_gpu_probe_once("judge_sync")
-            _log_judge_result(role, role_model, duration_ms, obj.get("decision", "ERROR"), obj.get("confidence", 0.0), obj)
+            _log_judge_result(role, str(obj.get("model") or role_model), duration_ms, obj.get("decision", "ERROR"), obj.get("confidence", 0.0), obj)
             _write_heartbeat_if_needed()
             return obj
         _log_judge_result(role, role_model, duration_ms, "ERROR", 0.0)
@@ -747,20 +837,20 @@ def call_judge_role_batch_sync(
         }
         sem = _get_judge_http_semaphore()
         sem_wait = max(3, int(cfg.get("judge_http_semaphore_wait_seconds", TIMEOUT_SECONDS)))
-        if not sem.acquire(timeout=sem_wait):
-            log("WARNING", f"Judge {role} batch semaphore wait timeout ({sem_wait}s); falling back")
-            return {}
+        acquired = False
+        if not _provider_manager_enabled():
+            if not sem.acquire(timeout=sem_wait):
+                log("WARNING", f"Judge {role} batch semaphore wait timeout ({sem_wait}s); falling back")
+                return {}
+            acquired = True
         raw = ""
         try:
-            resp = requests.post(
-                _ollama_chat_url(),
-                json=payload,
-                timeout=(10, TIMEOUT_SECONDS),
-            )
-            resp.raise_for_status()
-            response = resp.json()
+            response = _chat_response(role, payload, TIMEOUT_SECONDS, "judge-batch")
             raw = response.get("message", {}).get("content", "")
             parsed = parse_batch_judge_response(raw, [idx for idx, _ in indexed_answers])
+        except ProviderError as ex:
+            log("WARNING", f"Judge {role} batch provider attempt failed category={ex.category}: {ex}; falling back")
+            parsed = {}
         except requests.Timeout:
             log("WARNING", f"Judge {role} batch timed out after {TIMEOUT_SECONDS}s; falling back")
             parsed = {}
@@ -768,10 +858,11 @@ def call_judge_role_batch_sync(
             log("WARNING", f"Judge {role} batch attempt failed: {ex}")
             parsed = {}
         finally:
-            try:
-                sem.release()
-            except Exception:
-                pass
+            if acquired:
+                try:
+                    sem.release()
+                except Exception:
+                    pass
 
         duration_ms = (time.perf_counter() - start) * 1000
         log("INFO", f"END judge_{role}_batch duration_ms={duration_ms:.0f} parsed={len(parsed)}/{len(answers)} (model={role_model})")
@@ -779,7 +870,7 @@ def call_judge_role_batch_sync(
             log("WARNING", f"Judge {role} batch incomplete parsed={len(parsed)}/{len(answers)} raw={repr(raw)[:1000]}")
         for result in parsed.values():
             result["role"] = role
-            result["model"] = role_model
+            _annotate_provider_result(result, response if "response" in locals() else {}, role_model)
         if parsed:
             log_post_inference_gpu_probe_once("judge_batch_sync")
         _write_heartbeat_if_needed()
@@ -979,20 +1070,23 @@ def _run_judges_sync(
         }
         sem = _get_judge_http_semaphore()
         sem_wait = max(3, int(cfg.get("judge_http_semaphore_wait_seconds", TIMEOUT_SECONDS)))
-        if not sem.acquire(timeout=sem_wait):
-            log("WARNING", f"Judge {role} semaphore wait timeout ({sem_wait}s); no verdict produced")
-            duration_ms = (time.perf_counter() - start) * 1000
-            _log_judge_result(role, role_model, duration_ms, "ERROR", 0.0)
-            out = _abstain("semaphore_timeout"); out.update({"role": role, "model": role_model}); return out
+        acquired = False
+        if not _provider_manager_enabled():
+            if not sem.acquire(timeout=sem_wait):
+                log("WARNING", f"Judge {role} semaphore wait timeout ({sem_wait}s); no verdict produced")
+                duration_ms = (time.perf_counter() - start) * 1000
+                _log_judge_result(role, role_model, duration_ms, "ERROR", 0.0)
+                out = _abstain("semaphore_timeout"); out.update({"role": role, "model": role_model}); return out
+            acquired = True
 
         try:
-            resp = requests.post(
-                _ollama_chat_url(),
-                json=payload,
-                timeout=(10, TIMEOUT_SECONDS),
-            )
-            resp.raise_for_status()
-            response = resp.json()
+            response = _chat_response(role, payload, TIMEOUT_SECONDS, "judge")
+        except ProviderError as ex:
+            category = getattr(ex, "category", "provider_error")
+            log("WARNING", f"Judge {role} provider attempt failed category={category}: {ex}")
+            duration_ms = (time.perf_counter() - start) * 1000
+            _log_judge_result(role, role_model, duration_ms, "ERROR", 0.0)
+            out = _abstain(category); out.update({"role": role, "model": role_model}); return out
         except requests.Timeout:
             log("WARNING", f"Judge {role} timed out after {TIMEOUT_SECONDS}s without a binary verdict")
             duration_ms = (time.perf_counter() - start) * 1000
@@ -1004,10 +1098,11 @@ def _run_judges_sync(
             _log_judge_result(role, role_model, duration_ms, "ERROR", 0.0)
             out = _abstain("exception"); out.update({"role": role, "model": role_model}); return out
         finally:
-            try:
-                sem.release()
-            except Exception:
-                pass
+            if acquired:
+                try:
+                    sem.release()
+                except Exception:
+                    pass
 
         raw = response.get("message", {}).get("content", "")
         obj = parse_judge_response(raw) if isinstance(raw, str) else raw
@@ -1016,9 +1111,9 @@ def _run_judges_sync(
         duration_ms = (time.perf_counter() - start) * 1000
         if _valid(obj):
             obj["role"] = role
-            obj["model"] = role_model
+            obj = _annotate_provider_result(obj, response, role_model)
             log_post_inference_gpu_probe_once("judge_sync")
-            _log_judge_result(role, role_model, duration_ms, obj.get("decision", "ERROR"), obj.get("confidence", 0.0), obj)
+            _log_judge_result(role, str(obj.get("model") or role_model), duration_ms, obj.get("decision", "ERROR"), obj.get("confidence", 0.0), obj)
             _write_heartbeat_if_needed()
             return obj
         _log_judge_result(role, role_model, duration_ms, "ERROR", 0.0)

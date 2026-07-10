@@ -15,7 +15,7 @@ def test_gui_answer_event_renders_teacher_facing_narrative():
         "answer": "50,9 cm",
         "formatting": {"proven": True, "reason": "decimal comma normalized", "details": ["Unit cm matches"]},
         "judges": [
-            {"model": "mistral-nemo:12b", "decision": "YES", "confidence": 0.99, "reason": "same value"},
+            {"provider": "openrouter", "model": "mistral-nemo:12b", "decision": "YES", "confidence": 0.99, "reason": "same value"},
             {"model": "gemma3:12b", "decision": "YES", "confidence": 0.98, "reason": "verified"},
         ],
         "decision": "YES",
@@ -28,6 +28,7 @@ def test_gui_answer_event_renders_teacher_facing_narrative():
 
     assert "Student answer: 50,9 cm" in rendered
     assert "AI evaluation:" in rendered
+    assert "openrouter / mistral-nemo:12b" in rendered
     assert "Final decision: ✓ ACCEPTED" in rendered
     assert "q_ai" not in rendered
     assert "heartbeat" not in rendered.casefold()

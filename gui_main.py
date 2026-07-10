@@ -43,9 +43,9 @@ BANGKOK_TZ = timezone(timedelta(hours=7))
 EXECUTION_MODE_PRESETS = {
     "Maximum accuracy: independent unanimous jury + review": {
         "deterministic_worker_count": 4,
-        "ai_worker_count": 1,
+        "ai_worker_count": 4,
         "max_concurrent_judge_http": 1,
-        "max_concurrent_jury_answers": 1,
+        "max_concurrent_jury_answers": 4,
         "enable_async_judges": False,
         "sync_judge_parallelism": 1,
         "active_judge_roles": ["semantic_judge", "factual_judge", "concept_judge", "strict_judge"],
@@ -794,6 +794,7 @@ class FormManager(QMainWindow):
         add_stage("forms", "F", "Forms", "0 completed", "Idle")
         add_stage("answers", "A", "Answers", "0 / 0 evaluated", "Waiting")
         add_stage("ai", "Q", "AI queue", "0 waiting", "Idle")
+        add_stage("provider", "P", "AI providers", "OpenRouter: - | Ollama: -", "Idle")
         add_stage("apply", "R", "Review/apply", "0 review questions", "Waiting")
         detail_layout.addStretch()
         workspace.addWidget(detail_widget)
@@ -849,8 +850,14 @@ class FormManager(QMainWindow):
         self.producer_output = self._make_log_textedit()
         self.det_output = self._make_log_textedit()
         self.ai_output = self._make_log_textedit()
+        self.provider_output = self._make_log_textedit()
         self.agg_output = self._make_log_textedit()
         self.log_tabs.addTab(self.debug_output, "AI grading")
+        self.log_tabs.addTab(self.producer_output, "Producer (q: -)")
+        self.log_tabs.addTab(self.det_output, "Det Workers (q: -)")
+        self.log_tabs.addTab(self.ai_output, "AI Workers (q: -)")
+        self.log_tabs.addTab(self.provider_output, "Providers (OR: - | OL: -)")
+        self.log_tabs.addTab(self.agg_output, "Aggregator (q: -)")
         self._reset_worker_tab_titles()
         terminal_layout.addWidget(self.log_tabs, 1)
         self.terminal_state = "collapsed"
@@ -1077,7 +1084,7 @@ class FormManager(QMainWindow):
 
     def clear_logs(self):
         self.debug_lines = []
-        for output in (self.debug_output, self.producer_output, self.det_output, self.ai_output, self.agg_output):
+        for output in (self.debug_output, self.producer_output, self.det_output, self.ai_output, self.provider_output, self.agg_output):
             output.clear()
 
     def _setup_system_tray(self):
@@ -1539,9 +1546,13 @@ class FormManager(QMainWindow):
             preset = EXECUTION_MODE_PRESETS.get(selected_mode, EXECUTION_MODE_PRESETS[DEFAULT_EXECUTION_MODE])
             for key, value in preset.items():
                 config_data[key] = value
-            # Keep Ollama fully serial so one model at a time owns the GPU.
+            # Keep provider-level capacity in ProviderManager; application workers may
+            # process multiple questions while Ollama remains capped by ollama_worker_count.
             config_data["max_concurrent_judge_http"] = 1
-            config_data["max_concurrent_jury_answers"] = 1
+            config_data["max_concurrent_jury_answers"] = max(
+                1,
+                int(config_data.get("ai_worker_count", 1) or 1),
+            )
             config_data["enable_async_judges"] = False
             config_data["sync_judge_parallelism"] = 1
             # User-facing accuracy controls override the preset defaults.
@@ -2913,6 +2924,8 @@ class FormManager(QMainWindow):
             self.det_output.append(message)
         if "[Worker: AI]" in message:
             self.ai_output.append(message)
+        if "[PROVIDER " in message or "[PROVIDER]" in message:
+            self.provider_output.append(message)
         if "[Worker: Aggregator]" in message:
             self.agg_output.append(message)
         # Global dispatcher logs (fallback routing when worker tags are absent).
@@ -2937,6 +2950,14 @@ class FormManager(QMainWindow):
                 return
             if "[HEARTBEAT]" in message:
                 self._update_current_model_from_heartbeat(message)
+                return
+            if "[PROVIDER METRICS]" in message:
+                payload = message.split("[PROVIDER METRICS]", 1)[1].strip()
+                self._update_provider_metrics(payload)
+                return
+            if "[PROVIDER WORKER]" in message:
+                payload = message.split("[PROVIDER WORKER]", 1)[1].strip()
+                self._update_provider_worker(payload)
                 return
         except Exception:
             pass
@@ -2981,7 +3002,8 @@ class FormManager(QMainWindow):
         self.log_tabs.setTabText(1, "Producer (q: -)")
         self.log_tabs.setTabText(2, "Det Workers (q: -)")
         self.log_tabs.setTabText(3, "AI Workers (q: -)")
-        self.log_tabs.setTabText(4, "Aggregator (q: -)")
+        self.log_tabs.setTabText(4, "Providers (OR: - | OL: -)")
+        self.log_tabs.setTabText(5, "Aggregator (q: -)")
 
     def _extract_metric_int(self, payload, key):
         token = f"{key}="
@@ -3027,7 +3049,7 @@ class FormManager(QMainWindow):
         self.log_tabs.setTabText(1, f"Producer (q: {p}, buf: {pb})")
         self.log_tabs.setTabText(2, f"Det Workers (q: {d})")
         self.log_tabs.setTabText(3, f"AI Workers (q: {a})")
-        self.log_tabs.setTabText(4, f"Aggregator (q: {r})")
+        self.log_tabs.setTabText(5, f"Aggregator (q: {r})")
         item = self._find_form_item_by_url(self.current_form_url)
         if item and q_ai_display is not None:
             meta = item.data(Qt.UserRole + 1) or {}
@@ -3086,6 +3108,57 @@ class FormManager(QMainWindow):
         apply_waiting = int(q_result or 0)
         self._set_activity_row("apply", f"{apply_waiting} result updates pending", "Pending" if apply_waiting else "Waiting")
 
+    def _extract_metric_value(self, payload, key):
+        token = f"{key}="
+        if token not in payload:
+            return None
+        try:
+            return payload.split(token, 1)[1].split()[0].strip()
+        except Exception:
+            return None
+
+    def _update_provider_metrics(self, payload):
+        q_openrouter = self._extract_metric_value(payload, "q_openrouter") or "-"
+        q_ollama = self._extract_metric_value(payload, "q_ollama") or "-"
+        or_health = self._extract_metric_value(payload, "openrouter_health") or "-"
+        ol_health = self._extract_metric_value(payload, "ollama_health") or "-"
+        or_done = self._extract_metric_value(payload, "openrouter_done") or "0"
+        ol_done = self._extract_metric_value(payload, "ollama_done") or "0"
+        or_failed = self._extract_metric_value(payload, "openrouter_failed") or "0"
+        ol_failed = self._extract_metric_value(payload, "ollama_failed") or "0"
+        retries = self._extract_metric_value(payload, "retries") or "0"
+        failovers = self._extract_metric_value(payload, "failovers") or "0"
+        rpm = self._extract_metric_value(payload, "rpm") or "0"
+        avg_ms = self._extract_metric_value(payload, "avg_ms") or "0"
+        or_model = (self._extract_metric_value(payload, "openrouter_last_model") or "-").replace("_", " ")
+        ol_model = (self._extract_metric_value(payload, "ollama_last_model") or "-").replace("_", " ")
+
+        self.log_tabs.setTabText(4, f"Providers (OR: {q_openrouter} | OL: {q_ollama})")
+        detail = (
+            f"OpenRouter {or_health} q:{q_openrouter} ok/fail:{or_done}/{or_failed} "
+            f"| Ollama {ol_health} q:{q_ollama} ok/fail:{ol_done}/{ol_failed}"
+        )
+        state = f"{rpm}/min avg {avg_ms}ms retry {retries} failover {failovers}"
+        self._set_activity_row("provider", detail, state)
+        if or_model != "-" or ol_model != "-":
+            active_model = or_model if or_model != "-" else ol_model
+            if active_model and active_model != "-":
+                self.metric_current_model.setText(active_model[:28] + ("..." if len(active_model) > 28 else ""))
+                self.metric_current_model.setToolTip(f"OpenRouter: {or_model}\nOllama: {ol_model}")
+
+    def _update_provider_worker(self, payload):
+        provider = self._extract_metric_value(payload, "provider") or "-"
+        status = self._extract_metric_value(payload, "status") or "-"
+        model = (self._extract_metric_value(payload, "model") or "-").replace("_", " ")
+        request_id = self._extract_metric_value(payload, "request") or "-"
+        latency_ms = self._extract_metric_value(payload, "latency_ms") or "0"
+        queue_wait_ms = self._extract_metric_value(payload, "queue_wait_ms") or "0"
+        if status == "running":
+            detail = f"{provider}: {model} request {request_id}"
+        else:
+            detail = f"{provider}: {status} last {latency_ms}ms wait {queue_wait_ms}ms"
+        self._set_activity_row("provider", detail, status.title())
+
     def append_debug(self, message):
         self.debug_lines.append(message)
         self._update_worker_metrics_label(message)
@@ -3105,6 +3178,7 @@ class FormManager(QMainWindow):
         self.producer_output.clear()
         self.det_output.clear()
         self.ai_output.clear()
+        self.provider_output.clear()
         self.agg_output.clear()
         for line in lines:
             self.debug_output.append(line)

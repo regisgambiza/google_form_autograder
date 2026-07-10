@@ -42,8 +42,48 @@
     "enable_deduplication": false,
     "force_ai_jury_for_all_answers": true,
     "model_first_question_batching": true,
-    "judge_answer_batch_size": 1,
-    "judge_batch_num_predict": 2048,
+    "judge_answer_batch_size": 25,
+    "judge_batch_num_predict": 8192,
+    "provider_manager_enabled": true,
+    "provider_priority": [
+        "openrouter",
+        "ollama"
+    ],
+    "provider_retry_count": 2,
+    "provider_timeout_seconds": 60,
+    "provider_queue_size": 500,
+    "provider_circuit_failure_threshold": 3,
+    "provider_circuit_recovery_seconds": 60,
+    "provider_health_check_interval_seconds": 30,
+    "openrouter_worker_count": 4,
+    "ollama_worker_count": 1,
+    "openrouter_api_base_url": "https://openrouter.ai/api/v1",
+    "openrouter_api_key": "env:OPENROUTER_API_KEY",
+    "openrouter_models": {
+        "semantic_judge": [
+            "nvidia/nemotron-3-nano-30b-a3b:free"
+        ],
+        "factual_judge": [
+            "nvidia/nemotron-3-nano-30b-a3b:free"
+        ],
+        "concept_judge": [
+            "poolside/laguna-m.1:free"
+        ],
+        "strict_judge": [
+            "nvidia/nemotron-3-nano-30b-a3b:free"
+        ],
+        "misconception_judge": [
+            "nvidia/nemotron-3-nano-30b-a3b:free"
+        ],
+        "language_filter": [
+            "nvidia/nemotron-3-nano-30b-a3b:free"
+        ]
+    },
+    "openrouter_fallback_models": [
+        "nvidia/nemotron-3-nano-30b-a3b:free",
+        "poolside/laguna-m.1:free",
+        "openrouter/free"
+    ],
     "decision_audit_path": "logs/grading_decisions.jsonl",
     "teacher_benchmark_path": "teacher_benchmark.jsonl",
     "accuracy_policy": {
@@ -77,7 +117,7 @@
     },
     "enable_pipeline_workers": true,
     "deterministic_worker_count": 4,
-    "ai_worker_count": 1,
+    "ai_worker_count": 4,
     "worker_queue_size": 1200,
     "global_prefetch_mode": true,
     "dispatch_mode": "global",
@@ -98,7 +138,7 @@
     "adaptive_target_latency_ms": 15000,
     "adaptive_timeout_rate_threshold": 0.2,
     "adaptive_chunk_size": 12,
-    "max_concurrent_jury_answers": 1,
+    "max_concurrent_jury_answers": 4,
     "jury_semaphore_acquire_timeout_seconds": 21600,
     "enable_async_judges": false,
     "sync_judge_parallelism": 1,

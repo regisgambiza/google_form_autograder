@@ -92,8 +92,6 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
         bool(cfg.get("model_first_question_batching", False))
         and bool(cfg.get("force_ai_jury_for_all_answers", False))
     )
-    if model_first_batching:
-        ai_workers = 1
     max_latency = float(cfg.get("max_latency_per_answer_seconds", 30.0))
     patient_mode = bool(cfg.get("patient_ai_mode", False))
     read_rate_per_min = float(cfg.get("forms_expensive_reads_per_minute", 160))

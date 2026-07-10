@@ -44,6 +44,10 @@ def conservative_jury_decision(
                 "confidence": float(j.get("confidence", 0.0) or 0.0),
                 "reason": str(j.get("reason_short", "")),
                 "model": str(j.get("model", jury_models.get(role, ""))),
+                "provider": str(j.get("provider", "")),
+                "provider_latency_ms": float(j.get("provider_latency_ms", 0.0) or 0.0),
+                "provider_queue_wait_ms": float(j.get("provider_queue_wait_ms", 0.0) or 0.0),
+                "provider_retry_count": int(j.get("provider_retry_count", 0) or 0),
                 "requirements_met": list(j.get("requirements_met", []) or []),
                 "requirements_missing": list(j.get("requirements_missing", []) or []),
                 "contradictions": list(j.get("contradictions", []) or []),
@@ -94,6 +98,10 @@ def adaptive_math_jury_decision(
                 "confidence": float(j.get("confidence", 0.0) or 0.0),
                 "reason": str(j.get("reason_short", "")),
                 "model": str(j.get("model", jury_models.get(role, ""))),
+                "provider": str(j.get("provider", "")),
+                "provider_latency_ms": float(j.get("provider_latency_ms", 0.0) or 0.0),
+                "provider_queue_wait_ms": float(j.get("provider_queue_wait_ms", 0.0) or 0.0),
+                "provider_retry_count": int(j.get("provider_retry_count", 0) or 0),
                 "requirements_met": list(j.get("requirements_met", []) or []),
                 "requirements_missing": list(j.get("requirements_missing", []) or []),
                 "contradictions": list(j.get("contradictions", []) or []),
@@ -112,6 +120,8 @@ def adaptive_math_jury_decision(
         # Roles may share one physical model when they use blind, specialized
         # prompts. Still require at least two distinct primary model families.
         independent = _role_models_are_independent(primary_roles, jury_models)
+        if len(set(decisions)) == 1 and decisions[0] == "NO" and min(confidences) >= min_confidence:
+            return "NO", min(confidences), "primary_unanimous_rejection", evidence
         if evidence_clean and len(set(decisions)) == 1 and min(confidences) >= min_confidence and (independent or not require_distinct_models):
             return decisions[0], min(confidences), "primary_unanimous_agreement", evidence
 

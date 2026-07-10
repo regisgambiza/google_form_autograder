@@ -339,10 +339,15 @@ def evaluate_answer(
                 required_roles=accuracy_cfg.get("required_accept_roles", ["semantic_judge", "factual_judge", "strict_judge"]),
                 require_distinct_models=bool(accuracy_cfg.get("require_distinct_models", True)),
             )
-        # Domain/deterministic checks are diagnostic evidence only. The AI
-        # jury is authoritative and must never be changed from NO/REVIEW to
-        # YES by a parser result, even when that result claims PROVEN.
+        # Domain/deterministic PROVEN evidence is diagnostic only: it must not
+        # turn a jury rejection/review into an auto-accept. CONTRADICTED is
+        # asymmetric and safe for exact numeric/date/math mismatches, so it can
+        # force a rejection even when a judge reports low confidence.
         policy_evidence["deterministic_evidence_non_authoritative"] = domain.to_dict()
+        if domain.status == "CONTRADICTED" and float(domain.confidence) >= 0.99:
+            decision = "NO"
+            confidence = max(float(confidence), float(domain.confidence))
+            reason = f"domain_contradiction_{domain.domain}"
         stage = "jury" if decision in {"YES", "NO"} else "review"
         policy_evidence["policy_reason"] = reason
         factual = float(agg["factual_accuracy"])

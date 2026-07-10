@@ -84,3 +84,66 @@ def test_exact_answer_still_reaches_full_ai_jury_when_forced(monkeypatch):
 
     assert contradicted.decision == "NO"
     assert contradicted.evidence["policy"]["deterministic_evidence_non_authoritative"]["status"] == "PROVEN"
+
+
+def test_forced_ai_rejects_proven_numeric_contradiction_even_with_low_confidence_judge(monkeypatch):
+    cfg = {
+        "force_ai_jury_for_all_answers": True,
+        "numeric_tolerance": 0.000001,
+        "max_latency_per_answer_seconds": 60,
+        "embedding_thresholds": {"auto_reject": 0.9},
+        "patient_ai_mode": True,
+        "enable_jury_circuit_breaker": False,
+        "jury_semaphore_acquire_timeout_seconds": 60,
+        "judge_total_hard_timeout_seconds": 60,
+        "retry_attempts": 1,
+        "max_concurrent_jury_answers": 1,
+        "adaptive_math_jury": {
+            "enabled": True,
+            "primary_roles": ["semantic_judge", "factual_judge", "concept_judge"],
+            "adjudicator_role": "strict_judge",
+            "minimum_primary_confidence": 0.9,
+        },
+        "accuracy_policy": {"minimum_judge_confidence": 0.9, "require_distinct_models": True},
+        "jury_models": {
+            "strict_judge": "gpt-oss:latest",
+            "factual_judge": "gemma3:12b",
+            "semantic_judge": "llama3.1:8b",
+            "concept_judge": "llama3.1:8b",
+        },
+        "persist_result_cache": False,
+    }
+    monkeypatch.setattr(pipeline, "load_config", lambda: cfg)
+    monkeypatch.setattr(pipeline, "combine_scores", lambda *_a, **_k: 0.01)
+    monkeypatch.setattr(pipeline, "record_decision", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        pipeline,
+        "validate_answer_domain",
+        lambda *_a, **_k: DomainValidation(
+            "CONTRADICTED",
+            "numeric",
+            1.0,
+            "numeric value contradicts canonical",
+            False,
+            {"candidate": "120", "canonical": "130"},
+        ),
+    )
+
+    def unanimous_no(*_args, **_kwargs):
+        return [
+            {"role": "semantic_judge", "decision": "NO", "confidence": 0.0, "reason_short": "numeric contradiction"},
+            {"role": "factual_judge", "decision": "NO", "confidence": 0.95, "reason_short": "numeric value contradicts canonical"},
+            {"role": "concept_judge", "decision": "NO", "confidence": 1.0, "reason_short": "does not match"},
+            {"role": "strict_judge", "decision": "NO", "confidence": 0.95, "reason_short": "contradicts canonical"},
+        ]
+
+    monkeypatch.setattr(pipeline, "run_judges", unanimous_no)
+    pipeline.RESULT_CACHE.clear()
+    pipeline.JURY_SEMAPHORE = None
+
+    result = pipeline.evaluate_answer("120", ["130"], "1a")
+
+    assert result.decision == "NO"
+    assert result.stage_reached == "jury"
+    assert result.confidence == 1.0
+    assert result.evidence["policy"]["policy_reason"] == "domain_contradiction_numeric"
