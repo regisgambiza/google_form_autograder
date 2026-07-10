@@ -3,6 +3,8 @@ import json
 from accuracy_policy import adaptive_math_jury_decision, conservative_jury_decision
 from benchmark import evaluate_benchmark, save_teacher_labels, summarize_recorded_decisions
 from deterministic_checks import run_deterministic_checks
+from domain_validation import DomainValidation, validate_answer_domain
+from evaluation_pipeline import _domain_contradiction_can_force_rejection
 from ai_judges import _get_judge_format, _make_judge_prompt, _normalize_decision
 from rubric_generator import _make_fallback, rubric_format
 
@@ -167,3 +169,86 @@ def test_adaptive_math_jury_rejects_unanimous_primary_no_with_low_confidence_adj
 
     assert (decision, reason) == ("NO", "primary_unanimous_rejection")
     assert confidence == 1.0
+
+
+def test_adaptive_math_jury_rejects_clear_unanimous_no_even_with_low_no_confidence():
+    judges = [
+        {
+            "role": "semantic_judge",
+            "decision": "NO",
+            "confidence": 0.0,
+            "reason_short": "incorrect value",
+            "requirements_missing": ["correct answer"],
+        },
+        {
+            "role": "factual_judge",
+            "decision": "NO",
+            "confidence": 0.0,
+            "reason_short": "does not match expected answer",
+            "requirements_missing": ["matches teacher answer"],
+        },
+        {
+            "role": "concept_judge",
+            "decision": "NO",
+            "confidence": 0.99,
+            "reason_short": "553 is a number, not the operation name",
+            "requirements_missing": ["operation name"],
+        },
+        {
+            "role": "strict_judge",
+            "decision": "NO",
+            "confidence": 0.05,
+            "reason_short": "incorrect form",
+        },
+    ]
+
+    decision, confidence, reason, _ = adaptive_math_jury_decision(judges, MODELS)
+
+    assert (decision, reason) == ("NO", "primary_unanimous_rejection_with_evidence")
+    assert confidence == 0.99
+
+
+def test_adaptive_math_jury_keeps_borderline_low_confidence_no_for_review():
+    judges = [
+        {"role": "semantic_judge", "decision": "NO", "confidence": 0.0, "reason_short": "insufficient match"},
+        {"role": "factual_judge", "decision": "NO", "confidence": 0.0, "reason_short": "does not match expected answer"},
+        {"role": "concept_judge", "decision": "NO", "confidence": 0.8, "reason_short": "verb form, not noun form"},
+        {"role": "strict_judge", "decision": "NO", "confidence": 0.05, "reason_short": "incorrect form"},
+    ]
+
+    decision, _, reason, _ = adaptive_math_jury_decision(judges, MODELS)
+
+    assert (decision, reason) == ("REVIEW", "adjudicator_low_confidence")
+
+
+def test_symbolic_math_contradiction_does_not_force_rejection_over_jury():
+    domain = DomainValidation(
+        "CONTRADICTED",
+        "mathematics",
+        0.99,
+        "mathematical contradiction or answer-type mismatch",
+        False,
+        {"candidate": "a(2a-3)", "canonical": "Since 2a^2 = 2a * a, the factorisation should be a(2a - 3)"},
+    )
+
+    assert not _domain_contradiction_can_force_rejection(domain)
+
+
+def test_hard_numeric_contradiction_can_still_force_rejection():
+    domain = DomainValidation(
+        "CONTRADICTED",
+        "numeric",
+        1.0,
+        "numeric value contradicts canonical",
+        False,
+        {"candidate": "120", "canonical": "130"},
+    )
+
+    assert _domain_contradiction_can_force_rejection(domain)
+
+
+def test_missing_teacher_answer_key_is_review_even_for_blank_student_answer():
+    domain = validate_answer_domain("", [""], "8 c)")
+
+    assert domain.status == "REVIEW"
+    assert domain.domain == "missing_key"

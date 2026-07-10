@@ -91,6 +91,27 @@ QLabel#DetailBadge[status="failed"] { background: #ffebe8; color: #8f1c13; }
 QFrame#Metric { background: white; border-bottom: 1px solid #cbd6df; }
 QLabel#MetricValue { color: #1d2a36; font-size: 20px; font-weight: 700; }
 QFrame#PipelineRow { background: white; border-bottom: 1px solid #d9e1e7; }
+QFrame#WorkerCard {
+    background: #ffffff;
+    border: 1px solid #d7e0ea;
+    border-radius: 6px;
+}
+QFrame#WorkerCard[status="running"] { border-color: #d49b3a; background: #fffaf0; }
+QFrame#WorkerCard[status="failed"] { border-color: #d35b4f; background: #fff7f5; }
+QFrame#WorkerCard[status="done"] { border-color: #8fc5aa; background: #f5fbf8; }
+QLabel#WorkerTitle { color: #1d2a36; font-size: 12px; font-weight: 700; }
+QLabel#WorkerPrimary { color: #1d2a36; font-size: 12px; font-weight: 600; }
+QLabel#WorkerStatus {
+    color: #405466;
+    background: #eef3f7;
+    border-radius: 3px;
+    padding: 2px 5px;
+    font-size: 10px;
+    font-weight: 700;
+}
+QLabel#WorkerStatus[status="running"] { color: #7b4b00; background: #fff0cc; }
+QLabel#WorkerStatus[status="failed"] { color: #8f1c13; background: #ffe1dc; }
+QLabel#WorkerStatus[status="done"] { color: #126341; background: #dff3e9; }
 QFrame#TerminalFrame { background: #172028; border-top: 1px solid #0d151b; }
 QPushButton#TerminalToggle, QPushButton#TerminalAction {
     background: transparent;

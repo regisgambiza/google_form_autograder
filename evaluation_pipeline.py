@@ -99,6 +99,25 @@ def _expected_text(expected: Union[str, List[str]]) -> str:
     return expected
 
 
+def _domain_contradiction_can_force_rejection(domain) -> bool:
+    """Only hard deterministic contradictions may overrule the AI jury."""
+    hard_domains = {
+        "blank",
+        "irrelevant",
+        "numeric",
+        "numeric_range",
+        "date",
+        "inequality",
+        "units",
+        "copied_question",
+    }
+    return (
+        domain.status == "CONTRADICTED"
+        and domain.domain in hard_domains
+        and float(domain.confidence) >= 0.99
+    )
+
+
 def _qhash(question: str, expected: Union[str, List[str]]) -> str:
     return hashlib.sha256(f"{question}:{_expected_text(expected)}".encode()).hexdigest()
 
@@ -176,7 +195,7 @@ def evaluate_answer(
         return res
 
     domain = validate_answer_domain(answer, expected if isinstance(expected, list) else [expected], question)
-    if not force_ai_for_all and domain.status in {"PROVEN", "CONTRADICTED", "REVIEW"}:
+    if (not force_ai_for_all and domain.status in {"PROVEN", "CONTRADICTED", "REVIEW"}) or domain.domain == "missing_key":
         lat = (time.perf_counter() - start) * 1000.0
         decision = {"PROVEN": "YES", "CONTRADICTED": "NO", "REVIEW": "REVIEW"}[domain.status]
         evidence = {
@@ -340,11 +359,11 @@ def evaluate_answer(
                 require_distinct_models=bool(accuracy_cfg.get("require_distinct_models", True)),
             )
         # Domain/deterministic PROVEN evidence is diagnostic only: it must not
-        # turn a jury rejection/review into an auto-accept. CONTRADICTED is
-        # asymmetric and safe for exact numeric/date/math mismatches, so it can
-        # force a rejection even when a judge reports low confidence.
+        # turn a jury rejection/review into an auto-accept. Only hard
+        # deterministic contradictions may force a rejection; broad symbolic
+        # math checks can be too brittle when the mark scheme is prose.
         policy_evidence["deterministic_evidence_non_authoritative"] = domain.to_dict()
-        if domain.status == "CONTRADICTED" and float(domain.confidence) >= 0.99:
+        if _domain_contradiction_can_force_rejection(domain):
             decision = "NO"
             confidence = max(float(confidence), float(domain.confidence))
             reason = f"domain_contradiction_{domain.domain}"

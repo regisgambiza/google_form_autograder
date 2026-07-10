@@ -134,6 +134,78 @@ def test_call_judge_role_batch_sync_falls_back_for_missing_answer(monkeypatch):
     assert out["c"]["decision"] == "YES"
 
 
+def test_judge_answer_batch_size_is_provider_specific():
+    cfg = {
+        "provider_manager_enabled": True,
+        "provider_priority": ["openrouter", "ollama"],
+        "judge_answer_batch_size": 9,
+        "ollama_judge_answer_batch_size": 1,
+        "openrouter_judge_answer_batch_size": 2,
+    }
+
+    assert ai_judges._preferred_batch_provider(cfg) == "openrouter"
+    assert ai_judges._judge_answer_batch_size(cfg) == 2
+    assert ai_judges._judge_answer_batch_size(cfg, "ollama") == 1
+    assert ai_judges._judge_answer_batch_size(cfg, "openrouter") == 2
+
+
+def test_judge_answer_batch_size_uses_ollama_when_provider_manager_disabled():
+    cfg = {
+        "provider_manager_enabled": False,
+        "judge_answer_batch_size": 9,
+        "ollama_judge_answer_batch_size": 1,
+        "openrouter_judge_answer_batch_size": 2,
+    }
+
+    assert ai_judges._preferred_batch_provider(cfg) == "ollama"
+    assert ai_judges._judge_answer_batch_size(cfg) == 1
+
+
+def test_oversized_provider_batch_splits_to_ollama_sized_chunks(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(
+        ai_judges,
+        "load_config",
+        lambda: {
+            "jury_models": {"semantic_judge": "model-a"},
+            "provider_manager_enabled": True,
+            "provider_priority": ["openrouter", "ollama"],
+            "judge_timeout_seconds": 30,
+            "judge_http_timeout_seconds": 30,
+            "ollama_options": {"judge_num_ctx": 2048, "judge_num_predict": 512},
+            "judge_batch_num_predict": 1024,
+            "judge_answer_batch_size": 18,
+            "ollama_judge_answer_batch_size": 5,
+            "openrouter_judge_answer_batch_size": 18,
+        },
+    )
+    monkeypatch.setattr(ai_judges, "log_post_inference_gpu_probe_once", lambda *_args, **_kwargs: None)
+
+    def fake_chat_response(role, payload, timeout_s, request_kind, metadata=None):
+        answer_count = int((metadata or {}).get("batch_answer_count", 1))
+        calls.append(answer_count)
+        if answer_count > 5:
+            raise ai_judges.ProviderError("OpenRouter rate limited", "rate_limited")
+        return _batch_payload([_judge_result(i) for i in range(1, answer_count + 1)])
+
+    monkeypatch.setattr(ai_judges, "_chat_response", fake_chat_response)
+
+    answers = [f"a{i}" for i in range(18)]
+    out = ai_judges.call_judge_role_batch_sync(
+        "semantic_judge",
+        answers,
+        "question",
+        "expected",
+        {answer: {} for answer in answers},
+        retries=5,
+    )
+
+    assert calls == [18, 5, 5, 5, 3]
+    assert set(out) == set(answers)
+    assert all(result["decision"] == "YES" for result in out.values())
+
+
 def test_model_first_judging_refreshes_answer_batch_size_between_roles(monkeypatch):
     config_calls = []
     batch_calls = []

@@ -86,6 +86,8 @@ class ProviderManager:
         for provider_name in self._provider_order(request):
             if not self._provider_available(provider_name):
                 continue
+            if not self._provider_accepts_request(provider_name, request):
+                continue
             if tried_provider and first_provider is False:
                 self._record_failover(provider_name, str(last_error or "provider unavailable"))
             first_provider = False
@@ -306,6 +308,29 @@ class ProviderManager:
             if model and model not in out:
                 out.append(model)
         return out
+
+    def _provider_accepts_request(self, provider_name: str, request: ProviderRequest) -> bool:
+        """Prevent oversized batched prompts from falling back into local Ollama."""
+        if provider_name != "ollama":
+            return True
+        try:
+            batch_count = int(request.metadata.get("batch_answer_count", 1) or 1)
+        except Exception:
+            batch_count = 1
+        if batch_count <= 1:
+            return True
+        cfg = load_config()
+        legacy = int(cfg.get("judge_answer_batch_size", 1) or 1)
+        ollama_limit = max(1, int(cfg.get("ollama_judge_answer_batch_size", legacy) or legacy))
+        if batch_count <= ollama_limit:
+            return True
+        log(
+            "WARNING",
+            f"[PROVIDER ROUTE] skip provider=ollama request={request.request_id} "
+            f"judge={request.judge_name} batch_answers={batch_count} "
+            f"ollama_limit={ollama_limit}; batch will fall back to smaller judge calls",
+        )
+        return False
 
     def _provider_available(self, provider_name: str) -> bool:
         with self._lock:

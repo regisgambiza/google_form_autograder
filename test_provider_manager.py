@@ -46,6 +46,34 @@ def _request(judge_name="semantic_judge"):
     )
 
 
+def _batch_request(answer_count, judge_name="semantic_judge"):
+    schema = {
+        "type": "object",
+        "required": ["results"],
+        "properties": {
+            "results": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["answer_index", "decision", "confidence", "reason_short"],
+                },
+            }
+        },
+    }
+    return ProviderRequest(
+        request_id="req-batch-1",
+        judge_name=judge_name,
+        payload={
+            "model": "ollama-semantic",
+            "messages": [{"role": "user", "content": "grade this batch"}],
+            "format": schema,
+        },
+        timeout_s=5,
+        schema=schema,
+        metadata={"request_kind": "judge-batch", "batch_answer_count": answer_count},
+    )
+
+
 def _make_manager(monkeypatch, cfg, openrouter, ollama):
     monkeypatch.setattr(provider_manager, "load_config", lambda: cfg)
     manager = ProviderManager()
@@ -112,6 +140,65 @@ def test_provider_manager_fails_over_to_ollama_after_malformed_openrouter(monkey
     assert response.model == "ollama-semantic"
     assert snapshot["metrics"]["failovers"] == 1
     assert snapshot["metrics"]["validation_failed"] == 1
+
+
+def test_provider_manager_does_not_send_oversized_batch_to_ollama_fallback(monkeypatch):
+    cfg = {
+        "provider_priority": ["openrouter", "ollama"],
+        "provider_retry_count": 1,
+        "openrouter_worker_count": 1,
+        "ollama_worker_count": 1,
+        "provider_circuit_failure_threshold": 3,
+        "judge_answer_batch_size": 25,
+        "ollama_judge_answer_batch_size": 5,
+        "openrouter_models": {"semantic_judge": ["openrouter-model"]},
+        "openrouter_fallback_models": [],
+        "jury_models": {"semantic_judge": "ollama-semantic"},
+    }
+    openrouter = _FakeProvider([{"message": {"content": "not-json"}}])
+    ollama = _FakeProvider([
+        _ollama_response({
+            "results": [
+                {"answer_index": i, "decision": "YES", "confidence": 0.9, "reason_short": "ok"}
+                for i in range(1, 26)
+            ]
+        })
+    ])
+    manager = _make_manager(monkeypatch, cfg, openrouter, ollama)
+
+    with pytest.raises(ProviderError):
+        manager.ask(_batch_request(25))
+
+    assert len(openrouter.calls) == 1
+    assert ollama.calls == []
+
+
+def test_provider_manager_allows_ollama_batch_within_configured_limit(monkeypatch):
+    cfg = {
+        "provider_priority": ["ollama"],
+        "provider_retry_count": 1,
+        "openrouter_worker_count": 1,
+        "ollama_worker_count": 1,
+        "judge_answer_batch_size": 25,
+        "ollama_judge_answer_batch_size": 5,
+        "openrouter_models": {},
+        "openrouter_fallback_models": [],
+        "jury_models": {"semantic_judge": "ollama-semantic"},
+    }
+    ollama = _FakeProvider([
+        _ollama_response({
+            "results": [
+                {"answer_index": i, "decision": "YES", "confidence": 0.9, "reason_short": "ok"}
+                for i in range(1, 6)
+            ]
+        })
+    ])
+    manager = _make_manager(monkeypatch, cfg, _FakeProvider([]), ollama)
+
+    response = manager.ask(_batch_request(5))
+
+    assert response.provider == "ollama"
+    assert len(ollama.calls) == 1
 
 
 def test_provider_manager_skips_missing_openrouter_model_without_retry_or_circuit(monkeypatch):

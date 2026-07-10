@@ -26,8 +26,12 @@ class GraderThread(QThread):
         self._stop_requested = False
         self._gui_log_fh = None
         self._gui_jsonl_fh = None
+        self._decision_log_fh = None
+        self._decision_jsonl_fh = None
         self.gui_log_path = "logs/gui_terminal.log"
         self.gui_jsonl_path = "logs/gui_terminal.jsonl"
+        self.gui_decision_log_path = "logs/gui_decisions.log"
+        self.gui_decision_jsonl_path = "logs/gui_decisions.jsonl"
 
     @staticmethod
     def _terminate_process_tree(pid):
@@ -88,16 +92,27 @@ class GraderThread(QThread):
             pass
         self.gui_log_path = str(cfg.get("gui_terminal_log_path", self.gui_log_path))
         self.gui_jsonl_path = str(cfg.get("gui_terminal_jsonl_path", self.gui_jsonl_path))
-        for path in (self.gui_log_path, self.gui_jsonl_path):
+        self.gui_decision_log_path = str(cfg.get("gui_decision_log_path", self.gui_decision_log_path))
+        self.gui_decision_jsonl_path = str(cfg.get("gui_decision_jsonl_path", self.gui_decision_jsonl_path))
+        for path in (
+            self.gui_log_path,
+            self.gui_jsonl_path,
+            self.gui_decision_log_path,
+            self.gui_decision_jsonl_path,
+        ):
             os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         self._gui_log_fh = open(self.gui_log_path, "w", encoding="utf-8")
         self._gui_jsonl_fh = open(self.gui_jsonl_path, "w", encoding="utf-8")
+        self._decision_log_fh = open(self.gui_decision_log_path, "w", encoding="utf-8")
+        self._decision_jsonl_fh = open(self.gui_decision_jsonl_path, "w", encoding="utf-8")
         started = datetime.now(timezone.utc).isoformat()
         self._gui_log_fh.write(f"GUI grading transcript started {started}\n\n")
+        self._decision_log_fh.write(f"GUI decision audit started {started}\n\n")
         self._gui_log_fh.flush()
+        self._decision_log_fh.flush()
 
     def _close_gui_terminal_logs(self):
-        for fh in (self._gui_log_fh, self._gui_jsonl_fh):
+        for fh in (self._gui_log_fh, self._gui_jsonl_fh, self._decision_log_fh, self._decision_jsonl_fh):
             try:
                 if fh:
                     fh.flush()
@@ -106,6 +121,8 @@ class GraderThread(QThread):
                 pass
         self._gui_log_fh = None
         self._gui_jsonl_fh = None
+        self._decision_log_fh = None
+        self._decision_jsonl_fh = None
 
     @staticmethod
     def _plain_gui_event(rendered_html):
@@ -121,6 +138,95 @@ class GraderThread(QThread):
             timestamp = str(event.get("timestamp", ""))
             self._gui_log_fh.write(f"[{timestamp}]\n{self._plain_gui_event(rendered_html)}\n\n")
             self._gui_log_fh.flush()
+        if event.get("type") == "answer_result":
+            self._write_decision_audit_event(event)
+
+    @staticmethod
+    def _decision_audit_record(event):
+        judges = []
+        for judge in event.get("judges") or []:
+            judges.append({
+                "role": judge.get("role", ""),
+                "provider": judge.get("provider", ""),
+                "model": judge.get("model", ""),
+                "decision": str(judge.get("decision", "")).upper(),
+                "confidence": float(judge.get("confidence", 0.0) or 0.0),
+                "reason": judge.get("reason", ""),
+                "requirements_missing": list(judge.get("requirements_missing") or []),
+                "contradictions": list(judge.get("contradictions") or []),
+            })
+        return {
+            "timestamp": event.get("timestamp", ""),
+            "run_id": event.get("run_id", ""),
+            "answer_number": int(event.get("current", 0) or 0),
+            "total_answers": int(event.get("total", 0) or 0),
+            "question_number": int(event.get("question_number", 0) or 0),
+            "question": event.get("question", ""),
+            "expected": event.get("expected", ""),
+            "student_answer": event.get("answer", ""),
+            "formatting": event.get("formatting") or {},
+            "judges": judges,
+            "final_decision": str(event.get("decision", "REVIEW")).upper(),
+            "policy_reason": event.get("policy_reason", ""),
+            "action": event.get("action", ""),
+            "counts": {
+                "accepted": int(event.get("accepted", 0) or 0),
+                "needs_review": int(event.get("review", 0) or 0),
+                "rejected": int(event.get("rejected", 0) or 0),
+            },
+            "elapsed": event.get("elapsed", ""),
+        }
+
+    @staticmethod
+    def _format_decision_audit_record(record):
+        lines = [
+            f"Answer {record['answer_number']} / {record['total_answers']}",
+            f"Question {record['question_number']}: {record['question']}",
+            f"Expected: {record['expected']}",
+            f"Student answer: {record['student_answer']}",
+        ]
+        formatting = record.get("formatting") or {}
+        if formatting:
+            lines.extend([
+                "",
+                f"Formatting: {'PROVEN' if formatting.get('proven') else 'NOT PROVEN'} - {formatting.get('reason', '')}",
+            ])
+            for detail in formatting.get("details", []):
+                lines.append(f"  - {detail}")
+        if record.get("judges"):
+            lines.extend(["", "Judge votes:"])
+            for judge in record["judges"]:
+                label = " / ".join(part for part in (judge.get("provider"), judge.get("model") or judge.get("role")) if part)
+                lines.append(
+                    f"  - {label}: {judge['decision']} ({judge['confidence'] * 100:.0f}%) - {judge.get('reason', '')}"
+                )
+                if judge.get("requirements_missing"):
+                    lines.append(f"    missing: {'; '.join(map(str, judge['requirements_missing']))}")
+                if judge.get("contradictions"):
+                    lines.append(f"    contradictions: {'; '.join(map(str, judge['contradictions']))}")
+        lines.extend([
+            "",
+            f"Final decision: {record['final_decision']}",
+            f"Why: {record.get('policy_reason') or 'not provided'}",
+            f"Action: {record.get('action', '')}",
+            (
+                f"Counts: accepted={record['counts']['accepted']} "
+                f"review={record['counts']['needs_review']} rejected={record['counts']['rejected']}"
+            ),
+            f"Elapsed: {record.get('elapsed', '')}",
+            "-" * 72,
+        ])
+        return "\n".join(lines)
+
+    def _write_decision_audit_event(self, event):
+        record = self._decision_audit_record(event)
+        if self._decision_jsonl_fh:
+            self._decision_jsonl_fh.write(json.dumps(record, ensure_ascii=True) + "\n")
+            self._decision_jsonl_fh.flush()
+        if self._decision_log_fh:
+            timestamp = str(record.get("timestamp", ""))
+            self._decision_log_fh.write(f"[{timestamp}]\n{self._format_decision_audit_record(record)}\n\n")
+            self._decision_log_fh.flush()
 
     @staticmethod
     def _format_gui_event(event):
@@ -261,6 +367,7 @@ class GraderThread(QThread):
                         "[PROVIDER FAILOVER]",
                         "[PROVIDER RECOVERY]",
                         "[PROVIDER]",
+                        "[APP WORKER]",
                     )
                     if "[DISPATCH METRICS]" in ls or "[HEARTBEAT]" in ls or any(tag in ls for tag in provider_tags):
                         self.debug_message.emit(ls)

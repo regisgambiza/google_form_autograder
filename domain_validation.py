@@ -242,10 +242,10 @@ def validate_answer_domain(answer: str, expected_values: Sequence[str], question
     candidate = _clean(answer)
     expected = _clean(expected_values[0] if expected_values else "")
     base = {"candidate": candidate, "canonical": expected}
-    if not candidate:
-        return DomainValidation("CONTRADICTED", "blank", 1.0, "blank answer", False, base)
     if not expected:
         return DomainValidation("REVIEW", "missing_key", 0.0, "no teacher canonical answer", False, base)
+    if not candidate:
+        return DomainValidation("CONTRADICTED", "blank", 1.0, "blank answer", False, base)
     if normalize(candidate) == normalize(expected):
         return DomainValidation("PROVEN", "exact", 1.0, "exact normalized match", True, base)
     if normalize(candidate) == normalize(question) or len(re.sub(r"\W", "", candidate)) < 1:

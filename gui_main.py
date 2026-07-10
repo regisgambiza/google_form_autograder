@@ -794,8 +794,51 @@ class FormManager(QMainWindow):
         add_stage("forms", "F", "Forms", "0 completed", "Idle")
         add_stage("answers", "A", "Answers", "0 / 0 evaluated", "Waiting")
         add_stage("ai", "Q", "AI queue", "0 waiting", "Idle")
-        add_stage("provider", "P", "AI providers", "OpenRouter: - | Ollama: -", "Idle")
         add_stage("apply", "R", "Review/apply", "0 review questions", "Waiting")
+
+        worker_heading = QHBoxLayout()
+        worker_title = QLabel("Worker threads")
+        worker_title.setObjectName("Section")
+        self.worker_summary = QLabel("Waiting for workers")
+        self.worker_summary.setObjectName("Muted")
+        worker_heading.addWidget(worker_title)
+        worker_heading.addStretch()
+        worker_heading.addWidget(self.worker_summary)
+        detail_layout.addSpacing(12)
+        detail_layout.addLayout(worker_heading)
+
+        app_worker_header = QHBoxLayout()
+        app_worker_label = QLabel("Application workers")
+        app_worker_label.setObjectName("Muted")
+        self.app_worker_summary = QLabel("AI workers: -")
+        self.app_worker_summary.setObjectName("Muted")
+        app_worker_header.addWidget(app_worker_label)
+        app_worker_header.addStretch()
+        app_worker_header.addWidget(self.app_worker_summary)
+        detail_layout.addLayout(app_worker_header)
+        self.app_worker_grid = QGridLayout()
+        self.app_worker_grid.setHorizontalSpacing(8)
+        self.app_worker_grid.setVerticalSpacing(8)
+        detail_layout.addLayout(self.app_worker_grid)
+
+        provider_worker_header = QHBoxLayout()
+        provider_worker_label = QLabel("Provider workers")
+        provider_worker_label.setObjectName("Muted")
+        self.provider_worker_summary = QLabel("OpenRouter: - | Ollama: -")
+        self.provider_worker_summary.setObjectName("Muted")
+        provider_worker_header.addWidget(provider_worker_label)
+        provider_worker_header.addStretch()
+        provider_worker_header.addWidget(self.provider_worker_summary)
+        detail_layout.addSpacing(6)
+        detail_layout.addLayout(provider_worker_header)
+        self.provider_worker_grid = QGridLayout()
+        self.provider_worker_grid.setHorizontalSpacing(8)
+        self.provider_worker_grid.setVerticalSpacing(8)
+        detail_layout.addLayout(self.provider_worker_grid)
+
+        self.app_worker_cards = {}
+        self.provider_worker_cards = {}
+        self._initialize_worker_cards()
         detail_layout.addStretch()
         workspace.addWidget(detail_widget)
         workspace.setSizes([340, 900])
@@ -1009,6 +1052,114 @@ class FormManager(QMainWindow):
 
     def _reset_metric_labels(self):
         self._update_metric_labels(0, 0, 0, 0, 0, 0, 0, 0, 0.0, 0, "Idle")
+
+    def _configured_worker_counts(self):
+        try:
+            with open("config.json", "r", encoding="utf-8") as fh:
+                cfg = json.load(fh)
+        except Exception:
+            cfg = {}
+        return {
+            "ai": max(1, int(cfg.get("ai_worker_count", 4) or 4)),
+            "openrouter": max(0, int(cfg.get("openrouter_worker_count", 4) or 4)),
+            "ollama": max(0, int(cfg.get("ollama_worker_count", 1) or 1)),
+        }
+
+    def _initialize_worker_cards(self):
+        counts = self._configured_worker_counts()
+        for index in range(counts["ai"]):
+            self._ensure_worker_card("app", f"ai-{index + 1}", "AI worker")
+        for index in range(counts["openrouter"]):
+            self._ensure_worker_card("provider", f"openrouter-{index + 1}", "OpenRouter")
+        for index in range(counts["ollama"]):
+            self._ensure_worker_card("provider", f"ollama-{index + 1}", "Ollama")
+        self._refresh_worker_summaries()
+
+    def _ensure_worker_card(self, group, worker_id, title_prefix):
+        cards = self.app_worker_cards if group == "app" else self.provider_worker_cards
+        if worker_id in cards:
+            return cards[worker_id]
+        card = QFrame()
+        card.setObjectName("WorkerCard")
+        card.setProperty("status", "idle")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(3)
+
+        top = QHBoxLayout()
+        title = QLabel(f"{title_prefix} {worker_id.split('-', 1)[-1]}")
+        title.setObjectName("WorkerTitle")
+        status = QLabel("Idle")
+        status.setObjectName("WorkerStatus")
+        status.setProperty("status", "idle")
+        top.addWidget(title)
+        top.addStretch()
+        top.addWidget(status)
+        primary = QLabel("Waiting")
+        primary.setObjectName("WorkerPrimary")
+        secondary = QLabel("No request")
+        secondary.setObjectName("Muted")
+        stats = QLabel("latency - | wait -")
+        stats.setObjectName("Muted")
+        for label in (primary, secondary, stats):
+            label.setWordWrap(True)
+        layout.addLayout(top)
+        layout.addWidget(primary)
+        layout.addWidget(secondary)
+        layout.addWidget(stats)
+
+        cards[worker_id] = {
+            "frame": card,
+            "title": title,
+            "status": status,
+            "primary": primary,
+            "secondary": secondary,
+            "stats": stats,
+            "state": "idle",
+        }
+        grid = self.app_worker_grid if group == "app" else self.provider_worker_grid
+        col_count = 4 if group == "app" else 5
+        idx = len(cards) - 1
+        grid.addWidget(card, idx // col_count, idx % col_count)
+        return cards[worker_id]
+
+    def _set_worker_card(self, group, worker_id, title_prefix, status, primary, secondary, stats):
+        card = self._ensure_worker_card(group, worker_id, title_prefix)
+        state = str(status or "idle").lower()
+        card["state"] = state
+        card["status"].setText(state.title())
+        card["status"].setProperty("status", state)
+        card["frame"].setProperty("status", state)
+        card["primary"].setText(str(primary or "Waiting"))
+        card["secondary"].setText(str(secondary or "No request"))
+        card["stats"].setText(str(stats or "latency - | wait -"))
+        for widget in (card["status"], card["frame"]):
+            widget.style().unpolish(widget)
+            widget.style().polish(widget)
+        self._refresh_worker_summaries()
+
+    def _refresh_worker_summaries(self):
+        def counts(cards):
+            running = sum(1 for card in cards.values() if card.get("state") == "running")
+            done = sum(1 for card in cards.values() if card.get("state") == "done")
+            failed = sum(1 for card in cards.values() if card.get("state") == "failed")
+            total = len(cards)
+            return total, running, done, failed
+
+        app_total, app_running, app_done, app_failed = counts(getattr(self, "app_worker_cards", {}))
+        provider_total, provider_running, provider_done, provider_failed = counts(getattr(self, "provider_worker_cards", {}))
+        self.app_worker_summary.setText(f"{app_running}/{app_total} running")
+        self.provider_worker_summary.setText(
+            getattr(self, "_provider_summary_text", "") or f"{provider_running}/{provider_total} running"
+        )
+        self.worker_summary.setText(
+            f"App {app_running}/{app_total} active · Providers {provider_running}/{provider_total} active"
+        )
+        if app_failed or provider_failed:
+            self.worker_summary.setText(
+                f"App {app_running}/{app_total} active, {app_failed} failed · "
+                f"Providers {provider_running}/{provider_total} active, {provider_failed} failed"
+            )
 
     def _update_overall_progress_bar(self):
         total = max(0, int(self.overall_forms_total or 0))
@@ -1265,12 +1416,24 @@ class FormManager(QMainWindow):
 
         report_checkbox = QCheckBox("Generate Report", dialog)
         dedup_checkbox.setChecked(cfg.get("enable_deduplication", True))
-        judge_answer_batch_size_spin = QSpinBox(dialog)
-        judge_answer_batch_size_spin.setRange(1, 20)
-        judge_answer_batch_size_spin.setValue(max(1, int(cfg.get("judge_answer_batch_size", 3))))
-        judge_answer_batch_size_spin.setToolTip(
-            "How many student answers are sent to each judge LLM call. "
-            "Use 1 for maximum JSON reliability; higher values can be faster but require stricter model output."
+        legacy_judge_answer_batch_size = max(1, int(cfg.get("judge_answer_batch_size", 3)))
+        ollama_judge_answer_batch_size_spin = QSpinBox(dialog)
+        ollama_judge_answer_batch_size_spin.setRange(1, 20)
+        ollama_judge_answer_batch_size_spin.setValue(
+            max(1, int(cfg.get("ollama_judge_answer_batch_size", legacy_judge_answer_batch_size)))
+        )
+        ollama_judge_answer_batch_size_spin.setToolTip(
+            "How many student answers are sent to each local Ollama judge call. "
+            "Use 1 for best reliability on local models and limited hardware."
+        )
+        openrouter_judge_answer_batch_size_spin = QSpinBox(dialog)
+        openrouter_judge_answer_batch_size_spin.setRange(1, 50)
+        openrouter_judge_answer_batch_size_spin.setValue(
+            max(1, int(cfg.get("openrouter_judge_answer_batch_size", legacy_judge_answer_batch_size)))
+        )
+        openrouter_judge_answer_batch_size_spin.setToolTip(
+            "How many student answers are sent to each OpenRouter judge call. "
+            "Higher values can improve throughput but may increase malformed JSON risk."
         )
         batch_size_spin = QSpinBox(dialog)
         batch_size_spin.setRange(1, 200)
@@ -1419,7 +1582,8 @@ class FormManager(QMainWindow):
         )
         form.addRow("AI Evaluation:", force_ai_checkbox)
         form.addRow("Answer Processing:", dedup_checkbox)
-        form.addRow("Judge Answers per Call:", judge_answer_batch_size_spin)
+        form.addRow("Ollama Answers per Judge Call:", ollama_judge_answer_batch_size_spin)
+        form.addRow("OpenRouter Answers per Judge Call:", openrouter_judge_answer_batch_size_spin)
 
         buttons = QWidget(dialog)
         b = QHBoxLayout(buttons)
@@ -1579,7 +1743,9 @@ class FormManager(QMainWindow):
                 config_data["judge_prewarm_enabled"] = False
 
             config_data["enable_deduplication"] = dedup_checkbox.isChecked()
-            config_data["judge_answer_batch_size"] = int(judge_answer_batch_size_spin.value())
+            config_data["ollama_judge_answer_batch_size"] = int(ollama_judge_answer_batch_size_spin.value())
+            config_data["openrouter_judge_answer_batch_size"] = int(openrouter_judge_answer_batch_size_spin.value())
+            config_data["judge_answer_batch_size"] = int(openrouter_judge_answer_batch_size_spin.value())
 
             # Save Heartbeat monitor settings
             config_data["heartbeat_timeout"] = heartbeat_timeout_spin.value()
@@ -2924,6 +3090,8 @@ class FormManager(QMainWindow):
             self.det_output.append(message)
         if "[Worker: AI]" in message:
             self.ai_output.append(message)
+        if "[APP WORKER]" in message:
+            self.ai_output.append(message)
         if "[PROVIDER " in message or "[PROVIDER]" in message:
             self.provider_output.append(message)
         if "[Worker: Aggregator]" in message:
@@ -2950,6 +3118,10 @@ class FormManager(QMainWindow):
                 return
             if "[HEARTBEAT]" in message:
                 self._update_current_model_from_heartbeat(message)
+                return
+            if "[APP WORKER]" in message:
+                payload = message.split("[APP WORKER]", 1)[1].strip()
+                self._update_app_worker(payload)
                 return
             if "[PROVIDER METRICS]" in message:
                 payload = message.split("[PROVIDER METRICS]", 1)[1].strip()
@@ -3134,19 +3306,32 @@ class FormManager(QMainWindow):
         ol_model = (self._extract_metric_value(payload, "ollama_last_model") or "-").replace("_", " ")
 
         self.log_tabs.setTabText(4, f"Providers (OR: {q_openrouter} | OL: {q_ollama})")
-        detail = (
-            f"OpenRouter {or_health} q:{q_openrouter} ok/fail:{or_done}/{or_failed} "
-            f"| Ollama {ol_health} q:{q_ollama} ok/fail:{ol_done}/{ol_failed}"
+        self._provider_summary_text = (
+            f"OR {or_health} q:{q_openrouter} ok/fail:{or_done}/{or_failed} · "
+            f"OL {ol_health} q:{q_ollama} ok/fail:{ol_done}/{ol_failed} · "
+            f"{rpm}/min avg {avg_ms}ms retry {retries} failover {failovers}"
         )
-        state = f"{rpm}/min avg {avg_ms}ms retry {retries} failover {failovers}"
-        self._set_activity_row("provider", detail, state)
+        self._refresh_worker_summaries()
         if or_model != "-" or ol_model != "-":
             active_model = or_model if or_model != "-" else ol_model
             if active_model and active_model != "-":
                 self.metric_current_model.setText(active_model[:28] + ("..." if len(active_model) > 28 else ""))
                 self.metric_current_model.setToolTip(f"OpenRouter: {or_model}\nOllama: {ol_model}")
 
+    def _update_app_worker(self, payload):
+        worker_id = self._extract_metric_value(payload, "id") or "ai"
+        status = self._extract_metric_value(payload, "status") or "idle"
+        current = self._extract_metric_value(payload, "current") or "-"
+        answers = self._extract_metric_value(payload, "answers") or "0"
+        latency_ms = self._extract_metric_value(payload, "latency_ms") or "0"
+        queue_wait_ms = self._extract_metric_value(payload, "queue_wait_ms") or "0"
+        primary = f"{answers} answer{'s' if str(answers) != '1' else ''}"
+        secondary = "Waiting" if current == "-" else f"Current: {current}"
+        stats = f"latency {latency_ms}ms | wait {queue_wait_ms}ms"
+        self._set_worker_card("app", worker_id, "AI worker", status, primary, secondary, stats)
+
     def _update_provider_worker(self, payload):
+        worker_id = self._extract_metric_value(payload, "id") or "-"
         provider = self._extract_metric_value(payload, "provider") or "-"
         status = self._extract_metric_value(payload, "status") or "-"
         model = (self._extract_metric_value(payload, "model") or "-").replace("_", " ")
@@ -3157,7 +3342,11 @@ class FormManager(QMainWindow):
             detail = f"{provider}: {model} request {request_id}"
         else:
             detail = f"{provider}: {status} last {latency_ms}ms wait {queue_wait_ms}ms"
-        self._set_activity_row("provider", detail, status.title())
+        title_prefix = "OpenRouter" if provider == "openrouter" else "Ollama" if provider == "ollama" else provider.title()
+        primary = model if status == "running" else f"Last {latency_ms}ms"
+        secondary = f"request {request_id}" if request_id != "-" else detail
+        stats = f"latency {latency_ms}ms | wait {queue_wait_ms}ms"
+        self._set_worker_card("provider", worker_id, title_prefix, status, primary, secondary, stats)
 
     def append_debug(self, message):
         self.debug_lines.append(message)

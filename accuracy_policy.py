@@ -6,6 +6,7 @@ from typing import Dict, List, Sequence, Tuple
 
 
 REQUIRED_ACCEPT_ROLES = ("semantic_judge", "factual_judge", "concept_judge", "strict_judge")
+STRONG_REJECTION_CONFIDENCE = 0.90
 
 
 def judge_role(result: Dict[str, object]) -> str:
@@ -22,6 +23,30 @@ def _role_models_are_independent(roles: Sequence[str], jury_models: Dict[str, st
     return all(
         len(group_roles) == 1 or set(group_roles) <= {"semantic_judge", "concept_judge"}
         for group_roles in groups.values()
+    )
+
+
+def _has_strong_rejection_evidence(judge: Dict[str, object], min_confidence: float = STRONG_REJECTION_CONFIDENCE) -> bool:
+    """Treat low numeric confidence on a NO as usable only with clear evidence."""
+    if str(judge.get("decision", "")).upper() != "NO":
+        return False
+    confidence = float(judge.get("confidence", 0.0) or 0.0)
+    if confidence < min_confidence:
+        return False
+    if judge.get("requirements_missing") or judge.get("contradictions"):
+        return True
+    reason = str(judge.get("reason_short", judge.get("reason", ""))).casefold()
+    return any(
+        marker in reason
+        for marker in (
+            "contradict",
+            "incorrect",
+            "does not match",
+            "not match",
+            "different",
+            "not equivalent",
+            "wrong",
+        )
     )
 
 
@@ -122,6 +147,17 @@ def adaptive_math_jury_decision(
         independent = _role_models_are_independent(primary_roles, jury_models)
         if len(set(decisions)) == 1 and decisions[0] == "NO" and min(confidences) >= min_confidence:
             return "NO", min(confidences), "primary_unanimous_rejection", evidence
+        if len(set(decisions)) == 1 and decisions[0] == "NO" and any(_has_strong_rejection_evidence(j) for j in primary):
+            evidence["low_confidence_no_votes"] = [
+                {
+                    "role": judge_role(j),
+                    "confidence": float(j.get("confidence", 0.0) or 0.0),
+                    "reason": str(j.get("reason_short", j.get("reason", ""))),
+                }
+                for j in primary
+                if float(j.get("confidence", 0.0) or 0.0) < min_confidence
+            ]
+            return "NO", max(confidences), "primary_unanimous_rejection_with_evidence", evidence
         if evidence_clean and len(set(decisions)) == 1 and min(confidences) >= min_confidence and (independent or not require_distinct_models):
             return decisions[0], min(confidences), "primary_unanimous_agreement", evidence
 

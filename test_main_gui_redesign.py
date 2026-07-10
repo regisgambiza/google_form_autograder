@@ -128,6 +128,31 @@ def test_live_dashboard_updates_ai_backlog_and_current_model():
     assert window.metric_current_model.text() == "gemma3:12b"
 
 
+def test_detail_panel_shows_live_worker_cards():
+    window = FormManager()
+    cards = window.findChildren(QFrame, "WorkerCard")
+    assert cards
+    assert len(window.app_worker_cards) >= 1
+    assert len(window.provider_worker_cards) >= 1
+
+    window._update_app_worker(
+        "id=ai-1 type=ai status=running current=f1:q123 answers=30 latency_ms=0 queue_wait_ms=42"
+    )
+    app_card = window.app_worker_cards["ai-1"]
+    assert app_card["status"].text() == "Running"
+    assert "30 answers" in app_card["primary"].text()
+    assert "f1:q123" in app_card["secondary"].text()
+
+    window._update_provider_worker(
+        "id=openrouter-1 provider=openrouter status=running model=nvidia/test:free "
+        "request=judge-batch-1 latency_ms=0 queue_wait_ms=5"
+    )
+    provider_card = window.provider_worker_cards["openrouter-1"]
+    assert provider_card["status"].text() == "Running"
+    assert provider_card["primary"].text() == "nvidia/test:free"
+    assert "judge-batch-1" in provider_card["secondary"].text()
+
+
 def test_review_metric_deep_links_to_current_form(monkeypatch):
     window = FormManager()
     window.current_form_url = "https://docs.google.com/forms/d/form-1/edit"
@@ -151,6 +176,10 @@ def test_settings_exposes_cache_and_history_clear_action(monkeypatch):
     assert "Send every answer through the full AI jury" in source
     assert "Answer Processing:" in source
     assert "raw mode; take every response exactly as read from the form" in source
+    assert "Ollama Answers per Judge Call:" in source
+    assert "OpenRouter Answers per Judge Call:" in source
+    assert 'config_data["ollama_judge_answer_batch_size"]' in source
+    assert 'config_data["openrouter_judge_answer_batch_size"]' in source
 
 
 def test_settings_hides_low_level_expert_controls():

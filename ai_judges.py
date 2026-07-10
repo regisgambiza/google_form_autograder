@@ -169,7 +169,16 @@ def _provider_schema(payload: Dict[str, object]) -> Optional[Dict[str, object]]:
     return fmt if isinstance(fmt, dict) else None
 
 
-def _ask_provider(role: str, payload: Dict[str, object], timeout_s: int, request_kind: str) -> Dict[str, object]:
+def _ask_provider(
+    role: str,
+    payload: Dict[str, object],
+    timeout_s: int,
+    request_kind: str,
+    metadata: Optional[Dict[str, object]] = None,
+) -> Dict[str, object]:
+    request_metadata = {"request_kind": request_kind}
+    if metadata:
+        request_metadata.update(metadata)
     response = get_provider_manager().ask(
         ProviderRequest(
             request_id=make_request_id(request_kind),
@@ -177,7 +186,7 @@ def _ask_provider(role: str, payload: Dict[str, object], timeout_s: int, request
             payload=payload,
             timeout_s=timeout_s,
             schema=_provider_schema(payload),
-            metadata={"request_kind": request_kind},
+            metadata=request_metadata,
         )
     )
     out = dict(response.payload)
@@ -197,9 +206,15 @@ def _provider_info(response: Dict[str, object]) -> Dict[str, object]:
     return info if isinstance(info, dict) else {}
 
 
-def _chat_response(role: str, payload: Dict[str, object], timeout_s: int, request_kind: str) -> Dict[str, object]:
+def _chat_response(
+    role: str,
+    payload: Dict[str, object],
+    timeout_s: int,
+    request_kind: str,
+    metadata: Optional[Dict[str, object]] = None,
+) -> Dict[str, object]:
     if _provider_manager_enabled():
-        return _ask_provider(role, payload, timeout_s, request_kind)
+        return _ask_provider(role, payload, timeout_s, request_kind, metadata)
     resp = requests.post(_ollama_chat_url(), json=payload, timeout=(10, timeout_s))
     resp.raise_for_status()
     return resp.json()
@@ -782,14 +797,41 @@ def _chunked(items: List[str], size: int) -> List[List[str]]:
     return [items[i:i + size] for i in range(0, len(items), size)]
 
 
-def _judge_answer_batch_size(cfg: Optional[Dict[str, object]] = None) -> int:
-    """Read the current judge answer batch size from config.
+def _preferred_batch_provider(cfg: Optional[Dict[str, object]] = None) -> str:
+    cfg = cfg if cfg is not None else load_config()
+    if not bool(cfg.get("provider_manager_enabled", True)):
+        return "ollama"
+    priority = cfg.get("provider_priority", ["openrouter", "ollama"])
+    if not isinstance(priority, list):
+        priority = ["openrouter", "ollama"]
+    for provider in priority:
+        provider_name = str(provider).strip().lower()
+        if provider_name in {"openrouter", "ollama"}:
+            return provider_name
+    return "openrouter"
+
+
+def _judge_answer_batch_size(cfg: Optional[Dict[str, object]] = None, provider: Optional[str] = None) -> int:
+    """Read provider-specific judge answer batch size from config.
 
     This is intentionally cheap and called during model-first judging so a
     Settings save can affect later roles/chunks in a running grading process.
+    The legacy judge_answer_batch_size remains a fallback for older configs.
     """
     cfg = cfg if cfg is not None else load_config()
-    return max(1, int(cfg.get("judge_answer_batch_size", 3)))
+    provider_name = (provider or _preferred_batch_provider(cfg)).strip().lower()
+    legacy = int(cfg.get("judge_answer_batch_size", 3))
+    if provider_name == "ollama":
+        return max(1, int(cfg.get("ollama_judge_answer_batch_size", legacy)))
+    if provider_name == "openrouter":
+        return max(1, int(cfg.get("openrouter_judge_answer_batch_size", legacy)))
+    return max(1, legacy)
+
+
+def _ollama_answer_batch_size(cfg: Optional[Dict[str, object]] = None) -> int:
+    cfg = cfg if cfg is not None else load_config()
+    legacy = int(cfg.get("judge_answer_batch_size", 1) or 1)
+    return max(1, int(cfg.get("ollama_judge_answer_batch_size", legacy) or legacy))
 
 
 def call_judge_role_batch_sync(
@@ -815,8 +857,12 @@ def call_judge_role_batch_sync(
         i + 1: rubrics_by_answer.get(answer, {})
         for i, answer in enumerate(answers)
     }
+    last_provider_error_category = ""
+    split_fallback_used = False
 
     def _call_once(repair: bool = False) -> Dict[int, Dict[str, object]]:
+        nonlocal last_provider_error_category
+        last_provider_error_category = ""
         _write_heartbeat_if_needed()
         start = time.perf_counter()
         log("INFO", f"START judge_{role}_batch (model={role_model}, answers={len(answers)})")
@@ -845,10 +891,17 @@ def call_judge_role_batch_sync(
             acquired = True
         raw = ""
         try:
-            response = _chat_response(role, payload, TIMEOUT_SECONDS, "judge-batch")
+            response = _chat_response(
+                role,
+                payload,
+                TIMEOUT_SECONDS,
+                "judge-batch",
+                metadata={"batch_answer_count": len(answers)},
+            )
             raw = response.get("message", {}).get("content", "")
             parsed = parse_batch_judge_response(raw, [idx for idx, _ in indexed_answers])
         except ProviderError as ex:
+            last_provider_error_category = ex.category
             log("WARNING", f"Judge {role} batch provider attempt failed category={ex.category}: {ex}; falling back")
             parsed = {}
         except requests.Timeout:
@@ -864,13 +917,20 @@ def call_judge_role_batch_sync(
                 except Exception:
                     pass
 
-        duration_ms = (time.perf_counter() - start) * 1000
-        log("INFO", f"END judge_{role}_batch duration_ms={duration_ms:.0f} parsed={len(parsed)}/{len(answers)} (model={role_model})")
-        if len(parsed) != len(answers):
-            log("WARNING", f"Judge {role} batch incomplete parsed={len(parsed)}/{len(answers)} raw={repr(raw)[:1000]}")
         for result in parsed.values():
             result["role"] = role
             _annotate_provider_result(result, response if "response" in locals() else {}, role_model)
+        duration_ms = (time.perf_counter() - start) * 1000
+        provider_info = _provider_info(response) if "response" in locals() else {}
+        actual_provider = str(provider_info.get("provider") or ("ollama" if not _provider_manager_enabled() else "-"))
+        actual_model = str(provider_info.get("model") or role_model)
+        log(
+            "INFO",
+            f"END judge_{role}_batch duration_ms={duration_ms:.0f} parsed={len(parsed)}/{len(answers)} "
+            f"(provider={actual_provider}, model={actual_model}, requested_model={role_model})",
+        )
+        if len(parsed) != len(answers):
+            log("WARNING", f"Judge {role} batch incomplete parsed={len(parsed)}/{len(answers)} raw={repr(raw)[:1000]}")
         if parsed:
             log_post_inference_gpu_probe_once("judge_batch_sync")
         _write_heartbeat_if_needed()
@@ -881,6 +941,37 @@ def call_judge_role_batch_sync(
         parsed_by_index = _call_once(repair=attempt > 0)
         if len(parsed_by_index) == len(answers):
             break
+        ollama_limit = _ollama_answer_batch_size()
+        if (
+            not split_fallback_used
+            and _provider_manager_enabled()
+            and len(answers) > ollama_limit
+            and last_provider_error_category in {"rate_limited", "out_of_credits", "unavailable", "disabled"}
+        ):
+            split_fallback_used = True
+            log(
+                "WARNING",
+                f"Judge {role} batch switching to Ollama-sized chunks after provider "
+                f"{last_provider_error_category}; answers={len(answers)} chunk_size={ollama_limit}",
+            )
+            chunked_by_index: Dict[int, Dict[str, object]] = {}
+            for chunk_start in range(0, len(indexed_answers), ollama_limit):
+                indexed_chunk = indexed_answers[chunk_start:chunk_start + ollama_limit]
+                chunk_answers = [answer for _index, answer in indexed_chunk]
+                chunk_results = call_judge_role_batch_sync(
+                    role,
+                    chunk_answers,
+                    question,
+                    expected,
+                    rubrics_by_answer,
+                    retries=1,
+                )
+                for index, answer in indexed_chunk:
+                    if answer in chunk_results:
+                        chunked_by_index[index] = chunk_results[answer]
+            parsed_by_index = chunked_by_index
+            if len(parsed_by_index) == len(answers):
+                break
         log("WARNING", f"Judge {role} batch returned incomplete results on attempt {attempt + 1}/{max(1, retries)}; retrying")
 
     out: Dict[str, Dict[str, object]] = {}
@@ -905,12 +996,15 @@ def run_judges_model_first(
     roles = _selected_roles(cfg)
     out: Dict[str, List[Dict[str, object]]] = {answer: [] for answer in answers}
     adaptive_cfg = cfg.get("adaptive_math_jury", {})
-    initial_batch_size = _judge_answer_batch_size(cfg)
+    initial_batch_provider = _preferred_batch_provider(cfg)
+    initial_batch_size = _judge_answer_batch_size(cfg, initial_batch_provider)
 
     def run_role_for_answers(role: str, role_answers: List[str]) -> None:
         if not role_answers:
             return
-        batch_size = _judge_answer_batch_size()
+        runtime_cfg = load_config()
+        batch_provider = _preferred_batch_provider(runtime_cfg)
+        batch_size = _judge_answer_batch_size(runtime_cfg, batch_provider)
         if batch_size <= 1:
             for answer in role_answers:
                 out[answer].append(call_judge_role_sync(role, answer, question, expected, rubrics_by_answer.get(answer, {}), retries))
@@ -920,7 +1014,11 @@ def run_judges_model_first(
             for answer in chunk:
                 out[answer].append(batch_results[answer])
 
-    log("INFO", f"[JUDGES] Model-first question batch START answers={len(answers)} roles={roles} answer_batch_size={initial_batch_size}")
+    log(
+        "INFO",
+        f"[JUDGES] Model-first question batch START answers={len(answers)} roles={roles} "
+        f"batch_provider={initial_batch_provider} answer_batch_size={initial_batch_size}",
+    )
     if bool(adaptive_cfg.get("enabled", False)):
         primary_roles = [
             role for role in adaptive_cfg.get("primary_roles", ["semantic_judge", "factual_judge", "concept_judge"])

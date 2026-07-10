@@ -652,8 +652,9 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                 except Exception:
                     pass
 
-    def ai_worker():
-        log("INFO", "[Worker: AI] START ai_worker")
+    def ai_worker(worker_id: str):
+        log("INFO", f"[Worker: AI] START ai_worker id={worker_id}")
+        log("INFO", f"[APP WORKER] id={worker_id} type=ai status=idle current=- answers=0 latency_ms=0 queue_wait_ms=0")
         if model_first_batching:
             while not stop.is_set():
                 try:
@@ -664,21 +665,30 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                         completed = int(progress.get("completed", 0))
                         backlog = int(progress.get("ai_backlog", 0))
                     if expected > 0 and completed >= expected and backlog <= 0:
-                        log("INFO", "[Worker: AI] DONE ai_worker (all batched work complete)")
+                        log("INFO", f"[Worker: AI] DONE ai_worker id={worker_id} (all batched work complete)")
+                        log("INFO", f"[APP WORKER] id={worker_id} type=ai status=done current=- answers=0 latency_ms=0 queue_wait_ms=0")
                         return
                     continue
                 if batch is None:
-                    log("INFO", "[Worker: AI] DONE ai_worker")
+                    log("INFO", f"[Worker: AI] DONE ai_worker id={worker_id}")
+                    log("INFO", f"[APP WORKER] id={worker_id} type=ai status=done current=- answers=0 latency_ms=0 queue_wait_ms=0")
                     return
 
                 qid = batch.question.get("questionId")
                 queue_wait_s = max(0.0, time.monotonic() - batch.queued_monotonic)
+                queue_wait_ms = int(queue_wait_s * 1000)
                 update_runtime_state(
                     active_task=f"f{batch.form_idx}:q{qid}:batch",
                     active_form=batch.form_id,
                     active_question=qid,
                     active_model="model-first-jury",
                     active_since=time.time(),
+                )
+                log(
+                    "INFO",
+                    f"[APP WORKER] id={worker_id} type=ai status=running "
+                    f"current=f{batch.form_idx}:q{qid} answers={len(batch.tasks)} "
+                    f"latency_ms=0 queue_wait_ms={queue_wait_ms}",
                 )
                 log(
                     "INFO",
@@ -710,10 +720,16 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                     ai_progress["last_ai_done_ts"] = time.time()
                     progress["ai_backlog"] = max(0, progress["ai_backlog"] - len(batch.tasks))
                 elapsed_s = time.perf_counter() - started
+                latency_ms = int(elapsed_s * 1000)
                 log(
                     "INFO",
                     f"[BATCH END] form_id={batch.form_id} question_id={qid} "
                     f"answers={len(batch.tasks)} duration_s={elapsed_s:.2f}",
+                )
+                log(
+                    "INFO",
+                    f"[APP WORKER] id={worker_id} type=ai status=idle current=f{batch.form_idx}:q{qid} "
+                    f"answers={len(batch.tasks)} latency_ms={latency_ms} queue_wait_ms={queue_wait_ms}",
                 )
                 update_runtime_state(active_task="", active_model="idle", active_since=0.0)
             return
@@ -727,20 +743,28 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                     completed = int(progress.get("completed", 0))
                     backlog = int(progress.get("ai_backlog", 0))
                 if expected > 0 and completed >= expected and backlog <= 0:
-                    log("INFO", "[Worker: AI] DONE ai_worker (all work complete)")
+                    log("INFO", f"[Worker: AI] DONE ai_worker id={worker_id} (all work complete)")
+                    log("INFO", f"[APP WORKER] id={worker_id} type=ai status=done current=- answers=0 latency_ms=0 queue_wait_ms=0")
                     return
                 continue
             if t is None:
-                log("INFO", "[Worker: AI] DONE ai_worker")
+                log("INFO", f"[Worker: AI] DONE ai_worker id={worker_id}")
+                log("INFO", f"[APP WORKER] id={worker_id} type=ai status=done current=- answers=0 latency_ms=0 queue_wait_ms=0")
                 return
 
             started = time.perf_counter()
             tid = task_id(t)
             queue_wait_s = max(0.0, time.monotonic() - t.queued_monotonic)
+            queue_wait_ms = int(queue_wait_s * 1000)
             update_runtime_state(
                 active_task=tid, active_form=t.form_id,
                 active_question=t.question.get("questionId", ""),
                 active_model="jury", active_since=time.time(),
+            )
+            log(
+                "INFO",
+                f"[APP WORKER] id={worker_id} type=ai status=running current={tid} "
+                f"answers=1 latency_ms=0 queue_wait_ms={queue_wait_ms}",
             )
             answer_for_log = safe_text(t.answer) if bool(cfg.get("external_log_student_answers", True)) else "[hidden]"
             log(
@@ -783,6 +807,11 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                 "INFO",
                 f"[TASK END] task={tid} decision={r.decision} confidence={r.confidence:.3f} "
                 f"stage={r.stage_reached} policy={policy_reason or 'n/a'} duration_s={elapsed_s:.2f}",
+            )
+            log(
+                "INFO",
+                f"[APP WORKER] id={worker_id} type=ai status=idle current={tid} "
+                f"answers=1 latency_ms={int(elapsed_s * 1000)} queue_wait_ms={queue_wait_ms}",
             )
             update_runtime_state(active_task="", active_model="idle", active_since=0.0)
 
@@ -1128,7 +1157,10 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
     tf = threading.Thread(target=fetch_stage, daemon=False)
     tb = threading.Thread(target=task_builder, daemon=False)
     da = [] if model_first_batching else [threading.Thread(target=det_worker, daemon=False) for _ in range(det_workers)]
-    aw = [threading.Thread(target=ai_worker, daemon=False) for _ in range(ai_workers)]
+    aw = [
+        threading.Thread(target=ai_worker, args=(f"ai-{i + 1}",), daemon=False, name=f"ai-{i + 1}")
+        for i in range(ai_workers)
+    ]
     ag = threading.Thread(target=result_aggregator, daemon=False)
     ap = threading.Thread(target=incremental_apply_worker, daemon=False)
     mr = threading.Thread(target=metrics_reporter, daemon=False)
