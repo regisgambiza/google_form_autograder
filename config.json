@@ -45,7 +45,7 @@
     "force_ai_jury_for_all_answers": true,
     "model_first_question_batching": true,
     "judge_answer_batch_size": 25,
-    "ollama_judge_answer_batch_size": 5,
+    "ollama_judge_answer_batch_size": 1,
     "openrouter_judge_answer_batch_size": 25,
     "judge_batch_num_predict": 8192,
     "provider_manager_enabled": true,
