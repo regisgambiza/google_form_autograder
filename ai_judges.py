@@ -1025,6 +1025,7 @@ def call_judge_role_batch_sync(
                     expected,
                     rubrics_by_answer,
                     retries=1,
+                    avoid_models=avoid_models,
                 )
                 for index, answer in indexed_chunk:
                     if answer in chunk_results:
@@ -1039,7 +1040,15 @@ def call_judge_role_batch_sync(
         result = parsed_by_index.get(index)
         if result is None:
             log("WARNING", f"Judge {role} batch missing answer_index={index}; falling back to single-answer judge")
-            result = call_judge_role_sync(role, answer, question, expected, rubrics_by_answer.get(answer, {}), retries)
+            result = call_judge_role_sync(
+                role,
+                answer,
+                question,
+                expected,
+                rubrics_by_answer.get(answer, {}),
+                retries,
+                avoid_models=avoid_models,
+            )
         out[answer] = result
     return out
 
@@ -1055,19 +1064,32 @@ def run_judges_model_first(
     cfg = load_config()
     roles = _selected_roles(cfg)
     out: Dict[str, List[Dict[str, object]]] = {answer: [] for answer in answers}
+    used_openrouter_models_by_answer: Dict[str, List[str]] = {answer: [] for answer in answers}
     adaptive_cfg = cfg.get("adaptive_math_jury", {})
     initial_batch_provider = _preferred_batch_provider(cfg)
     initial_batch_size = _judge_answer_batch_size(cfg, initial_batch_provider)
 
-    def run_role_for_answers(role: str, role_answers: List[str], avoid_models: Optional[List[str]] = None) -> List[str]:
+    def avoid_models_for_chunk(role_answers: List[str]) -> List[str]:
+        seen: Dict[str, None] = {}
+        for answer in role_answers:
+            for model in used_openrouter_models_by_answer.get(answer, []):
+                seen.setdefault(model, None)
+        return list(seen)
+
+    def remember_used_model(answer: str, result: Dict[str, object]) -> None:
+        used_model = _openrouter_model_used(result)
+        if used_model and used_model not in used_openrouter_models_by_answer.setdefault(answer, []):
+            used_openrouter_models_by_answer[answer].append(used_model)
+
+    def run_role_for_answers(role: str, role_answers: List[str]) -> None:
         if not role_answers:
-            return []
-        role_used_models: set[str] = set()
+            return
         runtime_cfg = load_config()
         batch_provider = _preferred_batch_provider(runtime_cfg)
         batch_size = _judge_answer_batch_size(runtime_cfg, batch_provider)
         if batch_size <= 1:
             for answer in role_answers:
+                avoid_models = avoid_models_for_chunk([answer])
                 result = call_judge_role_sync(
                     role,
                     answer,
@@ -1078,11 +1100,10 @@ def run_judges_model_first(
                     avoid_models=avoid_models,
                 )
                 out[answer].append(result)
-                used_model = _openrouter_model_used(result)
-                if used_model:
-                    role_used_models.add(used_model)
-            return sorted(role_used_models)
+                remember_used_model(answer, result)
+            return
         for chunk in _chunked(role_answers, batch_size):
+            avoid_models = avoid_models_for_chunk(chunk)
             batch_results = call_judge_role_batch_sync(
                 role,
                 chunk,
@@ -1095,10 +1116,7 @@ def run_judges_model_first(
             for answer in chunk:
                 result = batch_results[answer]
                 out[answer].append(result)
-                used_model = _openrouter_model_used(result)
-                if used_model:
-                    role_used_models.add(used_model)
-        return sorted(role_used_models)
+                remember_used_model(answer, result)
 
     log(
         "INFO",
@@ -1116,11 +1134,9 @@ def run_judges_model_first(
             "ambiguity_markers", ["ambiguous", "uncertain", "unclear", "insufficient", "depends"]
         ))
 
-        used_openrouter_models: List[str] = []
         for role in primary_roles:
             log("INFO", f"[JUDGES] Model-first role START role={role} answers={len(answers)}")
-            used_openrouter_models.extend(run_role_for_answers(role, answers, avoid_models=used_openrouter_models))
-            used_openrouter_models = list(dict.fromkeys(used_openrouter_models))
+            run_role_for_answers(role, answers)
             log("INFO", f"[JUDGES] Model-first role DONE role={role}")
 
         needs_adjudication: List[str] = []
@@ -1144,19 +1160,15 @@ def run_judges_model_first(
 
         if needs_adjudication and adjudicator_role in roles:
             log("INFO", f"[JUDGES] Model-first adjudicator START role={adjudicator_role} answers={len(needs_adjudication)}")
-            used_openrouter_models.extend(
-                run_role_for_answers(adjudicator_role, needs_adjudication, avoid_models=used_openrouter_models)
-            )
+            run_role_for_answers(adjudicator_role, needs_adjudication)
             log("INFO", f"[JUDGES] Model-first adjudicator DONE role={adjudicator_role}")
         else:
             log("INFO", "[JUDGES] Model-first adjudicator skipped")
         return out
 
-    used_openrouter_models: List[str] = []
     for role in roles:
         log("INFO", f"[JUDGES] Model-first role START role={role} answers={len(answers)}")
-        used_openrouter_models.extend(run_role_for_answers(role, answers, avoid_models=used_openrouter_models))
-        used_openrouter_models = list(dict.fromkeys(used_openrouter_models))
+        run_role_for_answers(role, answers)
         log("INFO", f"[JUDGES] Model-first role DONE role={role}")
     return out
 

@@ -24,6 +24,27 @@ def test_strict_dedup_keeps_spacing_case_and_symbol_variants_separate():
     ]
 
 
+def test_missing_answer_key_questions_only_flags_answered_questions():
+    structure = [
+        {"questionId": "q1", "itemId": "item1", "index": 0, "title": "Answered missing key"},
+        {"questionId": "q2", "itemId": "item2", "index": 1, "title": "Answered keyed"},
+        {"questionId": "q3", "itemId": "item3", "index": 2, "title": "Unanswered missing key"},
+    ]
+
+    missing = gd.missing_answer_key_questions(
+        structure,
+        {"item1": [""], "item2": ["7"], "item3": []},
+        {"q1": ["student"], "q2": ["7"], "q3": []},
+    )
+
+    assert missing == [{
+        "question_id": "q1",
+        "question_number": 1,
+        "title": "Answered missing key",
+        "responses": 1,
+    }]
+
+
 class _FakeReq:
     def __init__(self, payload):
         self._payload = payload

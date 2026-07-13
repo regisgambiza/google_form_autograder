@@ -13,6 +13,12 @@ class ModelStats:
     failures: int = 0
     validation_failures: int = 0
     rate_limits: int = 0
+    quality_audits: int = 0
+    quality_flags: int = 0
+    too_strict_flags: int = 0
+    too_lenient_flags: int = 0
+    alignment_total: float = 0.0
+    suspicion_total: float = 0.0
     total_latency_ms: float = 0.0
     last_ok: float = 0.0
     last_failure: float = 0.0
@@ -28,6 +34,14 @@ class ModelStats:
     def success_rate(self) -> float:
         total = self.successes + self.failures
         return self.successes / total if total else 0.5
+
+    @property
+    def avg_suspicion(self) -> float:
+        return self.suspicion_total / self.quality_audits if self.quality_audits else 0.0
+
+    @property
+    def avg_alignment(self) -> float:
+        return self.alignment_total / self.quality_audits if self.quality_audits else 1.0
 
 
 class OpenRouterModelRegistry:
@@ -109,8 +123,14 @@ class OpenRouterModelRegistry:
                 preferred_rank = base.index(model)
                 latency_penalty = min(stats.avg_latency_ms / 10000.0, 3.0)
                 failure_penalty = stats.failures + stats.validation_failures + (stats.rate_limits * 2)
+                quality_penalty = (
+                    stats.avg_suspicion * 4.0
+                    + max(0.0, 1.0 - stats.avg_alignment) * 3.0
+                    + (stats.quality_flags * 0.5)
+                )
                 return (
                     0 if available else 1,
+                    quality_penalty,
                     0 if role_fit else 1,
                     failure_penalty,
                     latency_penalty,
@@ -119,9 +139,63 @@ class OpenRouterModelRegistry:
 
             ordered = sorted(base, key=sort_key)
             available = [model for model in ordered if self._models[model].cooldown_until <= now]
+            if bool(cfg.get("model_selection_trace_enabled", False)):
+                self._write_registry_trace(role, base, ordered, available, now, cfg)
             if available or not bool(cfg.get("openrouter_use_cooling_models_when_all_unavailable", False)):
                 return available
         return ordered
+
+    def _write_registry_trace(
+        self,
+        role: str,
+        base: List[str],
+        ordered: List[str],
+        available: List[str],
+        now: float,
+        cfg: Dict[str, Any],
+    ) -> None:
+        try:
+            import json
+            import os
+            path = str(cfg.get("model_selection_trace_path", "logs/model_selection.jsonl"))
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            diagnostics = []
+            for index, model in enumerate(ordered):
+                stats = self._models[model]
+                diagnostics.append({
+                    "rank": index,
+                    "model": model,
+                    "available": stats.cooldown_until <= now,
+                    "cooldown_remaining_s": max(0.0, stats.cooldown_until - now),
+                    "successes": stats.successes,
+                    "failures": stats.failures,
+                    "validation_failures": stats.validation_failures,
+                    "rate_limits": stats.rate_limits,
+                    "avg_latency_ms": stats.avg_latency_ms,
+                    "success_rate": stats.success_rate,
+                    "quality_audits": stats.quality_audits,
+                    "quality_flags": stats.quality_flags,
+                    "avg_suspicion": stats.avg_suspicion,
+                    "avg_alignment": stats.avg_alignment,
+                    "roles": sorted(stats.roles),
+                    "last_error": stats.last_error,
+                })
+            record = {
+                "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "event": "registry_order",
+                "role": role,
+                "base_count": len(base),
+                "ordered_count": len(ordered),
+                "available_count": len(available),
+                "base": base,
+                "ordered": ordered,
+                "available": available,
+                "diagnostics": diagnostics,
+            }
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(record, ensure_ascii=True, default=str) + "\n")
+        except Exception:
+            pass
 
     def record_success(self, model: str, latency_ms: float, role: str = "") -> None:
         if not model:
@@ -160,6 +234,28 @@ class OpenRouterModelRegistry:
                     f"seconds={cooldown}",
                 )
 
+    def record_quality_audit(self, model: str, audit: Dict[str, Any], role: str = "") -> None:
+        if not model:
+            return
+        suspicion = max(0.0, min(1.0, float(audit.get("suspicion_score", 0.0) or 0.0)))
+        alignment = max(0.0, min(1.0, float(audit.get("alignment_score", 1.0) or 1.0)))
+        too_strict = bool(audit.get("too_strict", False))
+        too_lenient = bool(audit.get("too_lenient", False))
+        reliable = bool(audit.get("reliable", True))
+        with self._lock:
+            stats = self._models.setdefault(model, ModelStats(model))
+            stats.quality_audits += 1
+            stats.suspicion_total += suspicion
+            stats.alignment_total += alignment
+            if not reliable or suspicion >= 0.60 or alignment <= 0.50:
+                stats.quality_flags += 1
+            if too_strict:
+                stats.too_strict_flags += 1
+            if too_lenient:
+                stats.too_lenient_flags += 1
+            if role:
+                stats.roles.add(role)
+
     def snapshot(self) -> Dict[str, Any]:
         now = time.monotonic()
         with self._lock:
@@ -169,6 +265,12 @@ class OpenRouterModelRegistry:
                     "failures": stats.failures,
                     "validation_failures": stats.validation_failures,
                     "rate_limits": stats.rate_limits,
+                    "quality_audits": stats.quality_audits,
+                    "quality_flags": stats.quality_flags,
+                    "too_strict_flags": stats.too_strict_flags,
+                    "too_lenient_flags": stats.too_lenient_flags,
+                    "avg_suspicion": stats.avg_suspicion,
+                    "avg_alignment": stats.avg_alignment,
                     "avg_latency_ms": stats.avg_latency_ms,
                     "success_rate": stats.success_rate,
                     "cooldown_remaining_s": max(0.0, stats.cooldown_until - now),

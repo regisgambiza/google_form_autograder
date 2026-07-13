@@ -17,6 +17,7 @@ class GraderThread(QThread):
     debug_message = pyqtSignal(str)
     current_form = pyqtSignal(str)
     finished_form = pyqtSignal(str)
+    skipped_form = pyqtSignal(str, str)
 
     def __init__(self, grade_recent_only=False, form_urls=None):
         super().__init__()
@@ -289,6 +290,26 @@ class GraderThread(QThread):
                 "────────────────────────────────────",
             ])
             return "<br>".join(lines)
+        if kind == "form_skipped":
+            lines = [
+                f"<b>Skipped form: {esc(event.get('form_title'))}</b>",
+                esc(event.get("message") or event.get("reason") or "Form skipped."),
+            ]
+            missing = event.get("missing_questions") or []
+            if missing:
+                lines.extend(["", "<b>Missing teacher answers:</b>"])
+                for item in missing[:10]:
+                    if not isinstance(item, dict):
+                        continue
+                    lines.append(
+                        f"Q{int(item.get('question_number', 0) or 0)}: "
+                        f"{esc(item.get('title'))} "
+                        f"({int(item.get('responses', 0) or 0)} response(s))"
+                    )
+                if len(missing) > 10:
+                    lines.append(f"+{len(missing) - 10} more")
+            lines.append("â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€")
+            return "<br>".join(lines)
         if kind == "run_complete":
             return (
                 f"<b>Grading finished</b><br>Accepted: {int(event.get('accepted', 0))} | "
@@ -350,6 +371,8 @@ class GraderThread(QThread):
                         rendered = self._format_gui_event(event)
                         self._write_gui_terminal_event(event, rendered)
                         self.debug_message.emit(rendered)
+                        if event.get("type") == "form_skipped":
+                            self.skipped_form.emit(str(event.get("form_id") or ""), str(event.get("reason") or "Skipped"))
                     except Exception:
                         pass
                 else:

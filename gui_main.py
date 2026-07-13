@@ -12,7 +12,7 @@ from PyQt5.QtWidgets import (
     QScrollArea, QFileDialog, QGridLayout
 )
 
-from PyQt5.QtCore import Qt, QDate, QTimer, QSize
+from PyQt5.QtCore import Qt, QDate, QTimer, QSize, QThread, pyqtSignal
 from PyQt5.QtGui import QColor, QBrush, QFont, QPalette
 from datetime import datetime, timedelta, timezone, time
 import ctypes
@@ -39,6 +39,39 @@ from answer_key_manager import load_pending_review_records, keep_teacher_answers
 import re
 
 BANGKOK_TZ = timezone(timedelta(hours=7))
+
+
+class SourceScanThread(QThread):
+    progress = pyqtSignal(str)
+    finished = pyqtSignal(object)
+    failed = pyqtSignal(str)
+
+    def __init__(self, sources, mode="all_forms", from_dt=None, to_dt=None):
+        super().__init__()
+        self.sources = list(sources or [])
+        self.mode = mode
+        self.from_dt = from_dt
+        self.to_dt = to_dt
+
+    def run(self):
+        try:
+            self.progress.emit(f"Starting scan in {len(self.sources)} source(s)")
+            if self.mode == "with_submissions":
+                forms = find_forms_with_submissions_in_range(
+                    self.sources,
+                    from_dt=self.from_dt,
+                    to_dt=self.to_dt,
+                    progress_callback=lambda msg: self.progress.emit(str(msg)),
+                )
+            else:
+                forms = find_all_forms_in_sources(
+                    self.sources,
+                    progress_callback=lambda msg: self.progress.emit(str(msg)),
+                )
+            self.progress.emit(f"Scan completed. Found {len(forms)} form(s)")
+            self.finished.emit(forms)
+        except Exception as exc:
+            self.failed.emit(str(exc))
 
 AI_WORKER_DISPLAY_NAMES = [
     "Optimus Prime",
@@ -474,6 +507,9 @@ class FormManager(QMainWindow):
             QLabel#StatusBadge[status="failed"] {
                 color: #dc3545;
             }
+            QLabel#StatusBadge[status="skipped"] {
+                color: #9a3412;
+            }
             QLabel#QueueEta {
                 color: #405466;
                 font-size: 11px;
@@ -645,7 +681,7 @@ class FormManager(QMainWindow):
         self.form_search_input.setPlaceholderText("Search forms")
         self.form_search_input.textChanged.connect(self._filter_form_queue)
         self.form_filter_combo = QComboBox()
-        self.form_filter_combo.addItems(["All", "Running", "Queued", "Done", "Failed"])
+        self.form_filter_combo.addItems(["All", "Running", "Queued", "Done", "Skipped", "Failed"])
         self.form_filter_combo.currentTextChanged.connect(self._filter_form_queue)
         self.clear_forms_button = QPushButton("Clear All")
         self.clear_forms_button.setObjectName("Danger")
@@ -1909,6 +1945,7 @@ class FormManager(QMainWindow):
             "running": "RUNNING",
             "done": "DONE",
             "failed": "FAILED",
+            "skipped": "SKIPPED",
         }.get(status, str(status).upper())
 
     def _format_form_meta_line(self, meta):
@@ -1932,7 +1969,7 @@ class FormManager(QMainWindow):
             return 100
         total = int(meta.get("total", 0) or 0)
         completed = int(meta.get("completed", 0) or 0)
-        if status == "failed":
+        if status in {"failed", "skipped"}:
             return 0
         if status == "queued" and completed <= 0:
             return 0
@@ -1946,6 +1983,8 @@ class FormManager(QMainWindow):
             return "Done"
         if status == "failed":
             return "-"
+        if status == "skipped":
+            return "Skipped"
         completed = int(meta.get("completed", 0) or 0)
         total = int(meta.get("total", 0) or 0)
         if status == "queued" and completed <= 0:
@@ -2137,14 +2176,14 @@ class FormManager(QMainWindow):
         now = datetime.now().strftime("%H:%M:%S")
         if status == "running" and not meta.get("started_at"):
             meta["started_at"] = now
-        if status in {"done", "failed"}:
+        if status in {"done", "failed", "skipped"}:
             meta["finished_at"] = now
         item.setData(Qt.UserRole + 1, meta)
         self._refresh_form_row(item)
         self._refresh_queue_positions()
 
     def _refresh_queue_positions(self):
-        counts = {"queued": 0, "running": 0, "done": 0, "failed": 0}
+        counts = {"queued": 0, "running": 0, "done": 0, "skipped": 0, "failed": 0}
         total = self.form_list.count()
         for i in range(total):
             item = self.form_list.item(i)
@@ -2158,8 +2197,9 @@ class FormManager(QMainWindow):
             active = counts.get("queued", 0) + counts.get("running", 0)
             self.form_queue_summary.setText(f"{active} in queue")
             self.form_queue_summary.setToolTip(
-                f"{counts.get('queued', 0)} queued · {counts.get('running', 0)} running · "
-                f"{counts.get('done', 0)} done · {counts.get('failed', 0)} failed"
+                f"{counts.get('queued', 0)} queued | {counts.get('running', 0)} running | "
+                f"{counts.get('done', 0)} done | {counts.get('skipped', 0)} skipped | "
+                f"{counts.get('failed', 0)} failed"
             )
         if hasattr(self, "command_summary"):
             self.command_summary.setText(f"{total} form{'s' if total != 1 else ''} · {counts.get('done', 0)} completed")
@@ -2292,31 +2332,10 @@ class FormManager(QMainWindow):
                 QMessageBox.warning(self, "Empty Input", "Please enter at least one URL")
                 return
 
-            # Record existing forms to compute newly added ones
-            before = set(self.forms_data.keys())
-            for src in parts:
-                try:
-                    # Do not start grading yet for each; defer to a single run later
-                    self.grade_url_immediately(src, start_grading=False)
-                except Exception as e:
-                    self.append_debug(f"[GRADE NOW] Failed to add source {src}: {e}")
-
-            # Persist and update UI
-            self.update_in_queue_label()
-            self.save_forms()
-
-            # Determine newly added form URLs
-            after = set(self.forms_data.keys())
-            new_urls = list(after - before)
-
             if action[0] == "grade":
-                if not new_urls:
-                    QMessageBox.information(self, "No New Forms", "No new forms were found to grade.")
-                    return
-                # Start grading only the newly added forms
-                self.run_grader(target_urls=new_urls)
+                self._start_source_scan(parts, "grade_new", mode="all_forms")
             else:
-                self.append_debug(f"✅ Scan/Add: Added {len(new_urls)} new form(s) to queue")
+                self._start_source_scan(parts, "add", mode="all_forms")
 
     def update_evaluator(self, text):
         if "Semantic Pipeline" in text:
@@ -2387,6 +2406,88 @@ class FormManager(QMainWindow):
         except Exception as e:
             print(f"Error loading config: {e}")
             self.grading_mode = "Whole Form"
+
+    def _start_source_scan(self, sources, action, mode="all_forms", from_dt=None, to_dt=None):
+        if hasattr(self, "source_scan_thread") and self.source_scan_thread and self.source_scan_thread.isRunning():
+            QMessageBox.information(self, "Scan Running", "A source scan is already running.")
+            return
+
+        sources = list(sources or [])
+        if not sources:
+            QMessageBox.warning(self, "No Sources", "Add at least one folder or form URL.")
+            return
+
+        self.source_scan_action = action
+        self.source_scan_before = set(self.forms_data.keys())
+        self.source_scan_progress = QProgressDialog(
+            "Scanning sources...", "", 0, 0, self
+        )
+        self.source_scan_progress.setWindowTitle("Scanning Sources")
+        self.source_scan_progress.setWindowModality(Qt.WindowModal)
+        self.source_scan_progress.setMinimumDuration(0)
+        self.source_scan_progress.setCancelButton(None)
+        self.source_scan_progress.setLabelText(
+            f"Scanning {len(sources)} source(s). The app will stay responsive."
+        )
+        self.source_scan_progress.show()
+
+        self.append_debug(f"[SCAN] Starting source scan for {len(sources)} source(s)")
+        self.source_scan_thread = SourceScanThread(
+            sources,
+            mode=mode,
+            from_dt=from_dt,
+            to_dt=to_dt,
+        )
+        self.source_scan_thread.progress.connect(self._on_source_scan_progress)
+        self.source_scan_thread.finished.connect(self._on_source_scan_finished)
+        self.source_scan_thread.failed.connect(self._on_source_scan_failed)
+        self.source_scan_thread.start()
+
+    def _on_source_scan_progress(self, message):
+        text = str(message)
+        if hasattr(self, "source_scan_progress") and self.source_scan_progress:
+            self.source_scan_progress.setLabelText(text)
+        self.append_debug(f"[SCAN] {text}")
+
+    def _on_source_scan_finished(self, forms):
+        if hasattr(self, "source_scan_progress") and self.source_scan_progress:
+            self.source_scan_progress.close()
+        forms = list(forms or [])
+        if not forms:
+            QMessageBox.information(self, "No Forms Found", "No accessible forms were found in the selected source(s).")
+            return
+
+        new_added = 0
+        for form_data in forms:
+            form_url = form_data.get("url")
+            form_title = form_data.get("title", "Untitled")
+            if form_url and form_url not in self.forms_data:
+                source = "Grade All" if self.source_scan_action == "grade_all" else "Scan Source"
+                self._add_form_to_queue(form_url, form_title, source=source)
+                new_added += 1
+
+        self.save_forms()
+        self.update_in_queue_label()
+        self.grading_mode = "Whole Form"
+        after = set(self.forms_data.keys())
+        new_urls = list(after - getattr(self, "source_scan_before", set()))
+        self.append_debug(
+            f"[SCAN] Found {len(forms)} form(s), added {new_added} new form(s) to queue"
+        )
+
+        if self.source_scan_action == "grade_new":
+            if not new_urls:
+                QMessageBox.information(self, "No New Forms", "No new forms were found to grade.")
+                return
+            self.run_grader(target_urls=new_urls)
+        elif self.source_scan_action == "grade_all":
+            self.run_grader()
+
+    def _on_source_scan_failed(self, error):
+        if hasattr(self, "source_scan_progress") and self.source_scan_progress:
+            self.source_scan_progress.close()
+        QMessageBox.critical(self, "Scan Failed", str(error))
+        self.append_debug(f"[SCAN] Failed: {error}")
 
     def grade_url_immediately(self, url, start_grading=True):
         """Grade a folder or form URL immediately without checking last submissions"""
@@ -2494,37 +2595,13 @@ class FormManager(QMainWindow):
             from_dt = datetime(1970, 1, 1, tzinfo=timezone.utc)
             to_dt = datetime.now(timezone.utc) + timedelta(days=1)
 
-            forms = find_forms_with_submissions_in_range(
+            self._start_source_scan(
                 folders,
+                "grade_all",
+                mode="with_submissions",
                 from_dt=from_dt,
                 to_dt=to_dt,
-                progress_callback=lambda msg: self.append_debug(f"[GRADE ALL] {msg}"),
             )
-
-            if not forms:
-                QMessageBox.information(
-                    self,
-                    "No Forms Found",
-                    "No accessible forms with responses were found in your predefined folders/forms.",
-                )
-                return
-
-            new_added = 0
-            for form in forms:
-                form_url = form.get("url")
-                form_title = form.get("title", "Untitled")
-                if form_url and form_url not in self.forms_data:
-                    self._add_form_to_queue(form_url, form_title, source="Grade All")
-                    new_added += 1
-
-            self.save_forms()
-            self.update_in_queue_label()
-            self.append_debug(
-                f"✅ Grade All: Found {len(forms)} form(s), added {new_added} new form(s) to queue"
-            )
-
-            self.grading_mode = "Whole Form"
-            self.run_grader()
 
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Grade All failed: {str(e)}")
@@ -3003,6 +3080,7 @@ class FormManager(QMainWindow):
         self.grader_thread.debug_message.connect(self.append_debug)
         self.grader_thread.current_form.connect(self.update_current_form)
         self.grader_thread.finished_form.connect(self.update_finished_form)
+        self.grader_thread.skipped_form.connect(self.update_skipped_form)
         self.grader_thread.start()
 
     def update_progress(self, cur, tot):
@@ -3134,6 +3212,13 @@ class FormManager(QMainWindow):
         self.finished_label.setText(f"Finished: {len(self.finished_forms)}")
         # After a form finishes, if the grader has become idle, start the next queued forms.
         QTimer.singleShot(800, self._maybe_start_next_after_finish)
+
+    def update_skipped_form(self, form_id, reason):
+        item = self._find_form_item_by_id(form_id)
+        if not item:
+            return
+        detail = str(reason or "Skipped")
+        self._set_form_status(item, "skipped", detail)
 
     def _maybe_start_next_after_finish(self):
         # Only start next run if not currently grading and no grader thread running

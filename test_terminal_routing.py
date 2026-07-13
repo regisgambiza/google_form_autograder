@@ -63,6 +63,21 @@ def test_gui_terminal_events_are_persisted_as_text_and_jsonl(tmp_path):
     assert json.loads(jsonl_path.read_text(encoding="utf-8"))["accepted"] == 8
 
 
+def test_form_skipped_renders_missing_answer_keys():
+    rendered = GraderThread._format_gui_event({
+        "type": "form_skipped",
+        "form_title": "Algebra Check",
+        "message": "Skipped this form because one or more answered questions have no teacher canonical answer.",
+        "missing_questions": [
+            {"question_number": 5, "title": "8 c)", "responses": 2},
+        ],
+    })
+
+    assert "Skipped form: Algebra Check" in rendered
+    assert "Missing teacher answers" in rendered
+    assert "Q5: 8 c)" in rendered
+
+
 def test_answer_results_are_persisted_to_decision_audit_logs(tmp_path):
     worker = GraderThread()
     text_path = tmp_path / "gui.log"

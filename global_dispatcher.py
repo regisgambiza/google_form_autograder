@@ -59,6 +59,29 @@ def remove_exact_duplicate_answers(answers: List[str]) -> List[str]:
     return list(dict.fromkeys(answers))
 
 
+def missing_answer_key_questions(
+    structure: List[Dict],
+    expected_by_item_id: Dict[str, List[str]],
+    answers_by_qid: Dict[str, List[str]],
+) -> List[Dict[str, object]]:
+    missing: List[Dict[str, object]] = []
+    for q in structure:
+        qid = str(q.get("questionId") or "")
+        if not qid or not answers_by_qid.get(qid):
+            continue
+        expected = get_effective_expected(q, expected_by_item_id.get(q.get("itemId"), []))
+        canonical = str(expected[0]).strip() if expected else ""
+        if canonical:
+            continue
+        missing.append({
+            "question_id": qid,
+            "question_number": int(q.get("index", 0)) + 1,
+            "title": str(q.get("title") or "Untitled Question"),
+            "responses": len(answers_by_qid.get(qid, [])),
+        })
+    return missing
+
+
 class TokenBucket:
     def __init__(self, rate_per_sec: float, capacity: int):
         self.rate = rate_per_sec
@@ -428,6 +451,32 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                     form_context = build_form_context(form_id, title, form_data, structure, expected_by_item_id)
                     structure = apply_question_context(structure, form_context)
                 item["structure"] = structure
+
+                missing_keys = missing_answer_key_questions(structure, expected_by_item_id, answers_by_qid)
+                if missing_keys:
+                    detail = "; ".join(
+                        f"Q{entry['question_number']} {entry['title']!r} ({entry['responses']} response(s))"
+                        for entry in missing_keys[:8]
+                    )
+                    if len(missing_keys) > 8:
+                        detail += f"; +{len(missing_keys) - 8} more"
+                    log(
+                        "WARNING",
+                        f"[FORM SKIPPED] form_id={form_id} title={title!r} "
+                        f"missing_teacher_answer_keys={len(missing_keys)} details={detail}",
+                    )
+                    gui_event(
+                        "form_skipped",
+                        form_title=title,
+                        form_id=form_id,
+                        reason="Missing teacher answer key",
+                        message=(
+                            "Skipped this form because one or more answered questions have no teacher canonical answer. "
+                            "Add the missing answer key(s), then run grading again."
+                        ),
+                        missing_questions=missing_keys,
+                    )
+                    continue
 
                 for q in structure:
                     qid = q.get("questionId")
@@ -1201,6 +1250,8 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
         ag.start()
         ap.start()
         mr.start()
+        if expected_at_start == 0:
+            result_q.put(None)
     else:
         tf.start(); tb.start(); [t.start() for t in da]; [t.start() for t in aw]; ag.start(); ap.start(); mr.start()
         tf.join(); tb.join()
@@ -1212,6 +1263,8 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
             transcript_path=str(cfg.get("gui_terminal_log_path", "logs/gui_terminal.log")),
             jsonl_path=str(cfg.get("gui_terminal_jsonl_path", "logs/gui_terminal.jsonl")),
         )
+        if expected_at_start == 0:
+            result_q.put(None)
 
     [t.join() for t in da]
     for _ in range(ai_workers):

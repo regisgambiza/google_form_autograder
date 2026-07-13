@@ -101,6 +101,22 @@ def test_form_queue_uses_compact_table_rows():
     assert first.sizeHint().height() < 70
 
 
+def test_skipped_form_badge_is_shown_on_queue_row():
+    window = FormManager()
+    window.form_list.clear()
+    window.forms_data.clear()
+    item = window._add_form_to_queue("https://docs.google.com/forms/d/form-1/edit", "Algebra", source="Test")
+
+    window.update_skipped_form("form-1", "Missing teacher answer key")
+
+    widget = window.form_list.itemWidget(item)
+    meta = item.data(Qt.UserRole + 1) or {}
+    assert meta["status"] == "skipped"
+    assert widget._badge_label.text() == "SKIPPED"
+    assert widget._eta_label.text() == "Skipped"
+    assert "Missing teacher answer key" in widget._detail_label.text()
+
+
 def test_live_metric_cards_show_accept_review_and_elapsed():
     window = FormManager()
     window.update_form_metrics(207, 462, 180, 6, 3723, 21, 80, 127, 4321.0)

@@ -1,10 +1,11 @@
 import json
+from pathlib import Path
 
 import pytest
 
 import provider_manager
-from provider_manager import ProviderManager
-from provider_types import ProviderError, ProviderRequest
+from provider_manager import ProviderManager, _AuditItem
+from provider_types import ProviderError, ProviderRequest, ProviderValidationError
 
 
 class _FakeProvider:
@@ -28,6 +29,10 @@ def _ollama_response(content):
     return {"message": {"content": json.dumps(content)}}
 
 
+def _raw_ollama_response(content):
+    return {"message": {"content": content}}
+
+
 def _request(judge_name="semantic_judge"):
     schema = {
         "type": "object",
@@ -44,6 +49,46 @@ def _request(judge_name="semantic_judge"):
         timeout_s=5,
         schema=schema,
     )
+
+
+def _audit_item():
+    return _AuditItem(
+        request_id="audit-1",
+        judge_name="semantic_judge",
+        model="openrouter-model",
+        payload={"messages": [{"role": "user", "content": "grade this"}]},
+        parsed={"decision": "YES", "confidence": 0.95, "reason_short": "ok"},
+        latency_ms=123.0,
+    )
+
+
+def test_openrouter_supervisor_accepts_json_wrapped_in_markdown(monkeypatch):
+    cfg = {
+        "openrouter_supervisor_ollama_model": "llama3.1:8b",
+        "openrouter_supervisor_timeout_seconds": 10,
+        "openrouter_supervisor_num_predict": 256,
+        "ollama_options": {"judge_num_ctx": 2048},
+    }
+    content = """Sure, here is the audit:
+```json
+{"reliable": true, "aligned": true, "alignment_score": 0.92, "suspicion_score": 0.08, "too_strict": false, "too_lenient": false, "json_quality": "valid", "reason_short": "consistent"}
+```"""
+    ollama = _FakeProvider([_raw_ollama_response(content)])
+    manager = ProviderManager()
+
+    audit = manager._run_openrouter_audit(ollama, _audit_item(), cfg)
+
+    assert audit["reliable"] is True
+    assert audit["alignment_score"] == pytest.approx(0.92)
+    assert audit["suspicion_score"] == pytest.approx(0.08)
+
+
+def test_openrouter_supervisor_reports_empty_audit_response():
+    ollama = _FakeProvider([_raw_ollama_response("")])
+    manager = ProviderManager()
+
+    with pytest.raises(ProviderValidationError, match="empty"):
+        manager._run_openrouter_audit(ollama, _audit_item(), {"openrouter_supervisor_timeout_seconds": 10})
 
 
 def _batch_request(answer_count, judge_name="semantic_judge"):
@@ -151,6 +196,7 @@ def test_openrouter_avoids_models_used_by_previous_jury_roles(monkeypatch):
         "provider_queue_size": 20,
         "openrouter_dynamic_model_pool_enabled": False,
         "openrouter_avoid_reused_models": True,
+        "openrouter_allow_model_reuse_when_exhausted": False,
         "openrouter_models": {"semantic_judge": []},
         "openrouter_fallback_models": ["model-a", "model-b", "model-c"],
     }
@@ -166,7 +212,111 @@ def test_openrouter_avoids_models_used_by_previous_jury_roles(monkeypatch):
 
     models = manager._models_for_provider("openrouter", request)
 
-    assert models[:3] == ["model-b", "model-c", "model-a"]
+    assert models == ["model-b", "model-c"]
+
+
+def test_openrouter_returns_no_models_when_every_candidate_was_already_used(monkeypatch):
+    cfg = {
+        "provider_queue_size": 20,
+        "openrouter_dynamic_model_pool_enabled": False,
+        "openrouter_avoid_reused_models": True,
+        "openrouter_allow_model_reuse_when_exhausted": False,
+        "openrouter_models": {"semantic_judge": []},
+        "openrouter_fallback_models": ["model-a", "model-b"],
+    }
+    monkeypatch.setattr(provider_manager, "load_config", lambda: cfg)
+    manager = ProviderManager()
+    request = ProviderRequest(
+        request_id="req-avoid-all",
+        judge_name="semantic_judge",
+        payload={"model": "ollama-semantic", "messages": []},
+        timeout_s=5,
+        metadata={"avoid_models": ["model-a", "model-b"]},
+    )
+
+    assert manager._models_for_provider("openrouter", request) == []
+
+
+def test_openrouter_does_not_retry_avoided_model_after_fresh_model_fails(monkeypatch):
+    cfg = {
+        "provider_priority": ["openrouter", "ollama"],
+        "provider_retry_count": 1,
+        "openrouter_worker_count": 1,
+        "ollama_worker_count": 1,
+        "provider_circuit_failure_threshold": 10,
+        "openrouter_dynamic_model_pool_enabled": False,
+        "openrouter_avoid_reused_models": True,
+        "openrouter_allow_model_reuse_when_exhausted": False,
+        "openrouter_models": {"semantic_judge": []},
+        "openrouter_fallback_models": ["fresh-model", "used-model"],
+        "jury_models": {"semantic_judge": "ollama-semantic"},
+    }
+    openrouter = _FakeProvider([
+        ProviderError("fresh model rate limited", "rate_limited"),
+        _ollama_response({"decision": "NO", "confidence": 1.0, "reason_short": "should not use reused"}),
+    ])
+    ollama = _FakeProvider([_ollama_response({"decision": "YES", "confidence": 0.9, "reason_short": "fallback"})])
+    manager = _make_manager(monkeypatch, cfg, openrouter, ollama)
+    request = _request()
+    request = ProviderRequest(
+        request_id=request.request_id,
+        judge_name=request.judge_name,
+        payload=request.payload,
+        timeout_s=request.timeout_s,
+        schema=request.schema,
+        metadata={"avoid_models": ["used-model"]},
+    )
+
+    response = manager.ask(request)
+
+    assert response.provider == "ollama"
+    assert response.model == "ollama-semantic"
+    assert [call[0]["model"] for call in openrouter.calls] == ["fresh-model"]
+
+
+def test_model_selection_trace_logs_candidate_and_attempt_events(monkeypatch, tmp_path):
+    trace_path = tmp_path / "model_selection.jsonl"
+    cfg = {
+        "provider_priority": ["openrouter"],
+        "provider_retry_count": 1,
+        "openrouter_worker_count": 1,
+        "ollama_worker_count": 1,
+        "openrouter_dynamic_model_pool_enabled": False,
+        "openrouter_avoid_reused_models": True,
+        "openrouter_allow_model_reuse_when_exhausted": False,
+        "model_selection_trace_enabled": True,
+        "model_selection_trace_path": str(trace_path),
+        "openrouter_models": {"semantic_judge": []},
+        "openrouter_fallback_models": ["fresh-model", "used-model"],
+    }
+    openrouter = _FakeProvider([_ollama_response({"decision": "YES", "confidence": 1.0, "reason_short": "ok"})])
+    manager = _make_manager(monkeypatch, cfg, openrouter, _FakeProvider([]))
+    request = ProviderRequest(
+        request_id="req-trace",
+        judge_name="semantic_judge",
+        payload={
+            "model": "ollama-semantic",
+            "messages": [{"role": "user", "content": "grade this"}],
+            "format": {"type": "object", "required": ["decision", "confidence", "reason_short"]},
+        },
+        timeout_s=5,
+        schema={"type": "object", "required": ["decision", "confidence", "reason_short"]},
+        metadata={"avoid_models": ["used-model"]},
+    )
+
+    response = manager.ask(request)
+    records = [json.loads(line) for line in Path(trace_path).read_text(encoding="utf-8").splitlines()]
+    events = [record["event"] for record in records]
+
+    assert response.model == "fresh-model"
+    assert "openrouter_candidates" in events
+    assert "openrouter_selected_pool" in events
+    assert "model_attempt" in events
+    assert "model_success" in events
+    candidate_record = next(record for record in records if record["event"] == "openrouter_candidates")
+    assert candidate_record["avoid_models"] == ["used-model"]
+    selected_record = next(record for record in records if record["event"] == "openrouter_selected_pool")
+    assert selected_record["selected"] == ["fresh-model"]
 
 
 def test_provider_manager_fails_over_to_ollama_after_malformed_openrouter(monkeypatch):
