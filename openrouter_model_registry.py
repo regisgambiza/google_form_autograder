@@ -88,9 +88,13 @@ class OpenRouterModelRegistry:
     def order_models(self, role: str, preferred: Iterable[str], cfg: Dict[str, Any]) -> List[str]:
         self.configure_from_config(cfg)
         enabled = bool(cfg.get("openrouter_dynamic_model_pool_enabled", True))
-        base = self._dedupe(str(model).strip() for model in preferred if str(model).strip())
+        base = self._dedupe(
+            model
+            for model in (str(model).strip() for model in preferred if str(model).strip())
+            if not self._is_blocked(model, cfg)
+        )
         if enabled:
-            base = self._dedupe([*base, *self._role_rotated_catalog(role)])
+            base = self._dedupe([*base, *self._role_rotated_catalog(role, cfg)])
         now = time.monotonic()
         with self._lock:
             for model in base:
@@ -183,12 +187,13 @@ class OpenRouterModelRegistry:
         with self._lock:
             return list(self._catalog)
 
-    def _role_rotated_catalog(self, role: str) -> List[str]:
+    def _role_rotated_catalog(self, role: str, cfg: Dict[str, Any]) -> List[str]:
         with self._lock:
             catalog = [
                 model
                 for model in self._catalog
                 if not self._models.get(model, ModelStats(model)).roles
+                and not self._is_blocked(model, cfg)
             ]
         if not catalog:
             return []
@@ -242,6 +247,25 @@ class OpenRouterModelRegistry:
                 out.append(text)
                 seen.add(text)
         return out
+
+    @staticmethod
+    def _is_blocked(model: str, cfg: Dict[str, Any]) -> bool:
+        text = str(model or "").strip().casefold()
+        if not text:
+            return True
+        blocked_models = {
+            str(item).strip().casefold()
+            for item in cfg.get("openrouter_blocked_models", [])
+            if str(item).strip()
+        }
+        if text in blocked_models:
+            return True
+        blocked_keywords = [
+            str(item).strip().casefold()
+            for item in cfg.get("openrouter_blocked_model_keywords", [])
+            if str(item).strip()
+        ]
+        return any(keyword in text for keyword in blocked_keywords)
 
     @staticmethod
     def _cooldown_seconds(category: str, cfg: Dict[str, Any]) -> int:

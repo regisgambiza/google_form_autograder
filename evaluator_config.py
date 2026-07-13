@@ -82,6 +82,11 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "openrouter_model_credit_cooldown_seconds": 3600,
     "openrouter_model_not_found_cooldown_seconds": 86400,
     "openrouter_use_cooling_models_when_all_unavailable": False,
+    "openrouter_avoid_reused_models": True,
+    "openrouter_blocked_models": [
+        "cohere/north-mini-code:free",
+    ],
+    "openrouter_blocked_model_keywords": [],
     "openrouter_free_model_catalog": [
         "nvidia/nemotron-3-nano-30b-a3b:free",
         "poolside/laguna-m.1:free",

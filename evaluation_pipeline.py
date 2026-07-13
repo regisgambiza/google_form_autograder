@@ -118,6 +118,15 @@ def _domain_contradiction_can_force_rejection(domain) -> bool:
     )
 
 
+def _domain_proof_can_confirm_ai_acceptance(domain) -> bool:
+    """Allow narrow exact/formatting proofs to confirm unanimous AI YES votes."""
+    return (
+        domain.status == "PROVEN"
+        and domain.domain in {"exact", "formatting_equivalence"}
+        and float(domain.confidence) >= 0.99
+    )
+
+
 def _qhash(question: str, expected: Union[str, List[str]]) -> str:
     return hashlib.sha256(f"{question}:{_expected_text(expected)}".encode()).hexdigest()
 
@@ -363,6 +372,16 @@ def evaluate_answer(
         # deterministic contradictions may force a rejection; broad symbolic
         # math checks can be too brittle when the mark scheme is prose.
         policy_evidence["deterministic_evidence_non_authoritative"] = domain.to_dict()
+        if (
+            decision == "REVIEW"
+            and _domain_proof_can_confirm_ai_acceptance(domain)
+            and active
+            and all(str(j.get("decision", "")).upper() == "YES" for j in active)
+        ):
+            decision = "YES"
+            confidence = max(float(confidence), float(domain.confidence))
+            reason = f"domain_{domain.domain}_confirmed_by_ai"
+            policy_evidence["domain_proof_confirmed_unanimous_ai_yes"] = True
         if _domain_contradiction_can_force_rejection(domain):
             decision = "NO"
             confidence = max(float(confidence), float(domain.confidence))
@@ -378,7 +397,7 @@ def evaluate_answer(
     votes = [1.0 if j.get("decision") == decision else 0.0 for j in active]
     agree = (sum(votes) / len(votes)) if votes else 0.0
     key_eligible = decision == "YES" and domain.domain in {
-        "natural_language", "multipart_list", "formatting_equivalence"
+        "exact", "natural_language", "multipart_list", "formatting_equivalence"
     }
     evidence = {"question": question, "expected": expected, "answer": answer, "policy": policy_evidence, "domain_validation": domain.to_dict(), "teacher_answer_is_authoritative": True, "key_eligible": key_eligible}
     res = EvaluationResult(answer, decision, float(final_score), float(concept["semantic_score"]), float(concept["concept_score"]), factual, bool(misconception["misconception_detected"]), str(misconception["misconception_description"]), list(concept["missing_concepts"]), list(concept["accepted_concepts"]), agree, float(confidence), False, lat, stage, evidence)

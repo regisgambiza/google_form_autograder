@@ -396,6 +396,20 @@ def _make_judge_prompt(question: str, expected: str, answer: str, comparison_evi
         "and harmless whitespace. Accept a correct core answer when units, working, explanation, requested "
         "rounding presentation, or requested algebraic form are missing. Accept harmless extra compatible units. "
         "Reject units only when they are explicitly incompatible and materially change the answer. "
+        "If the teacher answer contains alternatives joined by 'or', '/', or semicolons, accept the student "
+        "answer when it correctly gives ANY ONE complete alternative unless the question explicitly asks for all parts. "
+        "Do not mark the other alternatives as missing when one valid alternative is supplied. "
+        "For example, if the teacher answer is 'No lines of symmetry or rotational symmetry order 4', then "
+        "'Rotational symmetry order of 4' is a complete correct alternative and MUST be YES with no missing "
+        "requirement for 'No lines of symmetry'. Do not reinterpret that teacher answer as 'no rotational symmetry'. "
+        "For symmetry count/order answers, a bare number can be a valid shorthand when it matches the requested "
+        "count or order in context; for example, expected '2 lines of symmetry or rotational symmetry order 2' "
+        "and student answer '2' should usually be YES unless the question requires a written explanation. "
+        "If a student gives one clearly correct alternative plus an extra imperfect phrase, accept the correct "
+        "alternative unless the extra phrase directly negates or invalidates that same alternative. "
+        "Be lenient with short negative answers. If the teacher answer begins with a clear negative condition "
+        "such as 'No lines of symmetry', then a student answer like 'No', 'none', or '0' may correctly express "
+        "that negative condition in context; do not reject it only because it is brief. "
         "Do not borrow requirements from nearby questions in the whole-paper context.\n\n"
         "You MUST make a binary decision. Choose YES if the answer is correct, otherwise choose NO. "
         "Never abstain, defer, or return an uncertain verdict. Uncertainty must be expressed only in "
@@ -443,6 +457,20 @@ def _make_batch_judge_prompt(
         "and harmless whitespace. Accept a correct core answer when units, working, explanation, requested "
         "rounding presentation, or requested algebraic form are missing. Accept harmless extra compatible units. "
         "Reject units only when they are explicitly incompatible and materially change the answer. "
+        "If the teacher answer contains alternatives joined by 'or', '/', or semicolons, accept the student "
+        "answer when it correctly gives ANY ONE complete alternative unless the question explicitly asks for all parts. "
+        "Do not mark the other alternatives as missing when one valid alternative is supplied. "
+        "For example, if the teacher answer is 'No lines of symmetry or rotational symmetry order 4', then "
+        "'Rotational symmetry order of 4' is a complete correct alternative and MUST be YES with no missing "
+        "requirement for 'No lines of symmetry'. Do not reinterpret that teacher answer as 'no rotational symmetry'. "
+        "For symmetry count/order answers, a bare number can be a valid shorthand when it matches the requested "
+        "count or order in context; for example, expected '2 lines of symmetry or rotational symmetry order 2' "
+        "and student answer '2' should usually be YES unless the question requires a written explanation. "
+        "If a student gives one clearly correct alternative plus an extra imperfect phrase, accept the correct "
+        "alternative unless the extra phrase directly negates or invalidates that same alternative. "
+        "Be lenient with short negative answers. If the teacher answer begins with a clear negative condition "
+        "such as 'No lines of symmetry', then a student answer like 'No', 'none', or '0' may correctly express "
+        "that negative condition in context; do not reject it only because it is brief. "
         "Do not borrow requirements from nearby questions in the whole-paper context.\n\n"
         "You MUST make a binary YES/NO decision for every ANSWER_INDEX. Never skip an answer. Never abstain. "
         "Return exactly one result object for each ANSWER_INDEX, using the same answer_index number. "
@@ -706,6 +734,7 @@ def call_judge_role_sync(
     expected: str,
     rubric: Dict[str, object],
     retries: int = 3,
+    avoid_models: Optional[List[str]] = None,
 ) -> Dict[str, object]:
     """Run one judge role for one answer.
 
@@ -753,7 +782,13 @@ def call_judge_role_sync(
             acquired = True
 
         try:
-            response = _chat_response(role, payload, TIMEOUT_SECONDS, "judge")
+            response = _chat_response(
+                role,
+                payload,
+                TIMEOUT_SECONDS,
+                "judge",
+                metadata={"avoid_models": list(avoid_models or [])},
+            )
         except ProviderError as ex:
             category = getattr(ex, "category", "provider_error")
             log("WARNING", f"Judge {role} provider attempt failed category={category}: {ex}")
@@ -815,6 +850,12 @@ def _chunked(items: List[str], size: int) -> List[List[str]]:
     return [items[i:i + size] for i in range(0, len(items), size)]
 
 
+def _openrouter_model_used(result: Dict[str, object]) -> str:
+    if str(result.get("provider", "")).casefold() != "openrouter":
+        return ""
+    return str(result.get("model", "")).strip()
+
+
 def _preferred_batch_provider(cfg: Optional[Dict[str, object]] = None) -> str:
     cfg = cfg if cfg is not None else load_config()
     if not bool(cfg.get("provider_manager_enabled", True)):
@@ -859,6 +900,7 @@ def call_judge_role_batch_sync(
     expected: str,
     rubrics_by_answer: Dict[str, Dict[str, object]],
     retries: int = 3,
+    avoid_models: Optional[List[str]] = None,
 ) -> Dict[str, Dict[str, object]]:
     """Run one judge role for a small batch of answers in one Ollama call.
 
@@ -914,7 +956,7 @@ def call_judge_role_batch_sync(
                 payload,
                 TIMEOUT_SECONDS,
                 "judge-batch",
-                metadata={"batch_answer_count": len(answers)},
+                metadata={"batch_answer_count": len(answers), "avoid_models": list(avoid_models or [])},
             )
             raw = response.get("message", {}).get("content", "")
             parsed = parse_batch_judge_response(raw, [idx for idx, _ in indexed_answers])
@@ -1017,20 +1059,46 @@ def run_judges_model_first(
     initial_batch_provider = _preferred_batch_provider(cfg)
     initial_batch_size = _judge_answer_batch_size(cfg, initial_batch_provider)
 
-    def run_role_for_answers(role: str, role_answers: List[str]) -> None:
+    def run_role_for_answers(role: str, role_answers: List[str], avoid_models: Optional[List[str]] = None) -> List[str]:
         if not role_answers:
-            return
+            return []
+        role_used_models: set[str] = set()
         runtime_cfg = load_config()
         batch_provider = _preferred_batch_provider(runtime_cfg)
         batch_size = _judge_answer_batch_size(runtime_cfg, batch_provider)
         if batch_size <= 1:
             for answer in role_answers:
-                out[answer].append(call_judge_role_sync(role, answer, question, expected, rubrics_by_answer.get(answer, {}), retries))
-            return
+                result = call_judge_role_sync(
+                    role,
+                    answer,
+                    question,
+                    expected,
+                    rubrics_by_answer.get(answer, {}),
+                    retries,
+                    avoid_models=avoid_models,
+                )
+                out[answer].append(result)
+                used_model = _openrouter_model_used(result)
+                if used_model:
+                    role_used_models.add(used_model)
+            return sorted(role_used_models)
         for chunk in _chunked(role_answers, batch_size):
-            batch_results = call_judge_role_batch_sync(role, chunk, question, expected, rubrics_by_answer, retries)
+            batch_results = call_judge_role_batch_sync(
+                role,
+                chunk,
+                question,
+                expected,
+                rubrics_by_answer,
+                retries,
+                avoid_models=avoid_models,
+            )
             for answer in chunk:
-                out[answer].append(batch_results[answer])
+                result = batch_results[answer]
+                out[answer].append(result)
+                used_model = _openrouter_model_used(result)
+                if used_model:
+                    role_used_models.add(used_model)
+        return sorted(role_used_models)
 
     log(
         "INFO",
@@ -1048,9 +1116,11 @@ def run_judges_model_first(
             "ambiguity_markers", ["ambiguous", "uncertain", "unclear", "insufficient", "depends"]
         ))
 
+        used_openrouter_models: List[str] = []
         for role in primary_roles:
             log("INFO", f"[JUDGES] Model-first role START role={role} answers={len(answers)}")
-            run_role_for_answers(role, answers)
+            used_openrouter_models.extend(run_role_for_answers(role, answers, avoid_models=used_openrouter_models))
+            used_openrouter_models = list(dict.fromkeys(used_openrouter_models))
             log("INFO", f"[JUDGES] Model-first role DONE role={role}")
 
         needs_adjudication: List[str] = []
@@ -1074,15 +1144,19 @@ def run_judges_model_first(
 
         if needs_adjudication and adjudicator_role in roles:
             log("INFO", f"[JUDGES] Model-first adjudicator START role={adjudicator_role} answers={len(needs_adjudication)}")
-            run_role_for_answers(adjudicator_role, needs_adjudication)
+            used_openrouter_models.extend(
+                run_role_for_answers(adjudicator_role, needs_adjudication, avoid_models=used_openrouter_models)
+            )
             log("INFO", f"[JUDGES] Model-first adjudicator DONE role={adjudicator_role}")
         else:
             log("INFO", "[JUDGES] Model-first adjudicator skipped")
         return out
 
+    used_openrouter_models: List[str] = []
     for role in roles:
         log("INFO", f"[JUDGES] Model-first role START role={role} answers={len(answers)}")
-        run_role_for_answers(role, answers)
+        used_openrouter_models.extend(run_role_for_answers(role, answers, avoid_models=used_openrouter_models))
+        used_openrouter_models = list(dict.fromkeys(used_openrouter_models))
         log("INFO", f"[JUDGES] Model-first role DONE role={role}")
     return out
 
@@ -1164,7 +1238,7 @@ def _run_judges_sync(
     ee_min = max(1, int(ee.get("min_judges", 3)))
     ee_agree = float(ee.get("agreement_confidence", 0.90))
 
-    def _call_one_once(role: str, repair: bool = False) -> Dict[str, object]:
+    def _call_one_once(role: str, repair: bool = False, avoid_models: Optional[List[str]] = None) -> Dict[str, object]:
         _write_heartbeat_if_needed()
         role_model = jury_models.get(role)
         start = time.perf_counter()
@@ -1196,7 +1270,13 @@ def _run_judges_sync(
             acquired = True
 
         try:
-            response = _chat_response(role, payload, TIMEOUT_SECONDS, "judge")
+            response = _chat_response(
+                role,
+                payload,
+                TIMEOUT_SECONDS,
+                "judge",
+                metadata={"avoid_models": list(avoid_models or [])},
+            )
         except ProviderError as ex:
             category = getattr(ex, "category", "provider_error")
             log("WARNING", f"Judge {role} provider attempt failed category={category}: {ex}")
@@ -1237,11 +1317,11 @@ def _run_judges_sync(
         _write_heartbeat_if_needed()
         out = _abstain("invalid_response"); out.update({"role": role, "model": role_model}); return out
 
-    def _call_one(role: str) -> Dict[str, object]:
+    def _call_one(role: str, avoid_models: Optional[List[str]] = None) -> Dict[str, object]:
         """Retry abstentions so transient/invalid model output is not final."""
         last = None
         for attempt in range(max(1, retries)):
-            last = _call_one_once(role, repair=attempt > 0)
+            last = _call_one_once(role, repair=attempt > 0, avoid_models=avoid_models)
             if str(last.get("decision", "ERROR")).upper() in {"YES", "NO"}:
                 return last
             log("WARNING", f"Judge {role} returned no binary verdict on attempt {attempt + 1}/{max(1, retries)}; retrying")
@@ -1259,8 +1339,13 @@ def _run_judges_sync(
         ambiguity_words = tuple(str(x).casefold() for x in adaptive_cfg.get(
             "ambiguity_markers", ["ambiguous", "uncertain", "unclear", "insufficient", "depends"]
         ))
+        used_openrouter_models: List[str] = []
         for role in primary_roles:
-            out.append(_call_one(role))
+            result = _call_one(role, avoid_models=used_openrouter_models)
+            out.append(result)
+            used_model = _openrouter_model_used(result)
+            if used_model and used_model not in used_openrouter_models:
+                used_openrouter_models.append(used_model)
 
         valid_primary = all(str(j.get("decision", "ERROR")) in {"YES", "NO"} for j in out)
         decisions = [str(j.get("decision", "ERROR")) for j in out]
@@ -1280,14 +1365,19 @@ def _run_judges_sync(
         if needs_adjudicator and adjudicator_role in roles:
             reason = "invalid" if not valid_primary else "disagreement" if len(set(decisions)) != 1 else "low-confidence/ambiguous"
             log("INFO", f"[JUDGES] Escalating to {adjudicator_role}: {reason}")
-            out.append(_call_one(adjudicator_role))
+            out.append(_call_one(adjudicator_role, avoid_models=used_openrouter_models))
         else:
             log("INFO", f"[JUDGES] {expected_primary_count} primary roles agree confidently; adjudicator skipped")
         return out
 
     if sync_parallelism <= 1:
+        used_openrouter_models: List[str] = []
         for role in roles:
-            out.append(_call_one(role))
+            result = _call_one(role, avoid_models=used_openrouter_models)
+            out.append(result)
+            used_model = _openrouter_model_used(result)
+            if used_model and used_model not in used_openrouter_models:
+                used_openrouter_models.append(used_model)
             if ee_enabled and len(out) >= ee_min:
                 decisions = [str(x.get("decision", "ERROR")) for x in out]
                 confs = [float(x.get("confidence", 0.0)) for x in out]

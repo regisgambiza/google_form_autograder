@@ -85,6 +85,23 @@ def test_judges_are_forced_to_binary_verdicts():
     assert _get_judge_format()["properties"]["decision"]["enum"] == ["YES", "NO"]
     prompt = _make_judge_prompt("question", "expected", "answer", {})
     assert "MUST make a binary decision" in prompt
+    assert "ANY ONE complete alternative" in _make_judge_prompt(
+        "question", "2 lines of symmetry or rotational symmetry order 2", "2 lines", {}
+    )
+    assert "short negative answers" in _make_judge_prompt(
+        "question", "No lines of symmetry or rotational symmetry order 4", "No", {}
+    )
+    symmetry_prompt = _make_judge_prompt(
+        "question", "No lines of symmetry or rotational symmetry order 4", "Rotational symmetry order of 4", {}
+    )
+    assert "Rotational symmetry order of 4" in symmetry_prompt
+    assert "MUST be YES" in symmetry_prompt
+    assert "Do not reinterpret that teacher answer as 'no rotational symmetry'" in symmetry_prompt
+    bare_number_prompt = _make_judge_prompt(
+        "question", "2 lines of symmetry or rotational symmetry order 2", "2", {}
+    )
+    assert "bare number can be a valid shorthand" in bare_number_prompt
+    assert "correct alternative plus an extra imperfect phrase" in bare_number_prompt
     assert _normalize_decision({"decision": "ABSTAIN"})["decision"] == "ERROR"
 
 
@@ -103,6 +120,17 @@ def test_adaptive_jury_accepts_three_confident_agreeing_roles():
     assert (decision, reason) == ("YES", "primary_unanimous_agreement")
 
 
+def test_adaptive_jury_accepts_clean_yes_with_two_actual_provider_models():
+    judges = _votes()[:3]
+    judges[0]["model"] = "openrouter/model-a"
+    judges[1]["model"] = "openrouter/model-b"
+    judges[2]["model"] = "openrouter/model-b"
+
+    decision, _, reason, _ = adaptive_math_jury_decision(judges, MODELS)
+
+    assert (decision, reason) == ("YES", "primary_unanimous_agreement")
+
+
 def test_adaptive_math_jury_uses_adjudicator_on_disagreement():
     judges = _votes()
     judges[1]["decision"] = "NO"
@@ -118,11 +146,17 @@ def test_positive_adjudication_requires_teacher_review():
     assert (decision, reason) == ("REVIEW", "adjudicator_positive_requires_teacher_review")
 
 
-def test_primary_yes_with_missing_requirement_cannot_auto_accept():
+def test_positive_adjudication_accepts_confident_yes_majority():
     judges = _votes()
-    judges[2]["requirements_missing"] = ["required explanation"]
+    judges[1]["decision"] = "NO"
+    judges[1]["confidence"] = 0.90
+    judges[1]["requirements_missing"] = ["over-strict missing alternative"]
+    judges[3]["decision"] = "YES"
+    judges[3]["confidence"] = 0.96
+
     decision, _, reason, _ = adaptive_math_jury_decision(judges, MODELS)
-    assert (decision, reason) == ("REVIEW", "adjudicator_positive_requires_teacher_review")
+
+    assert (decision, reason) == ("YES", "adjudicator_supported_majority_acceptance")
 
 
 def test_adaptive_math_jury_reviews_if_adjudicator_is_not_confident():

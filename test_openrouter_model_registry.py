@@ -35,3 +35,22 @@ def test_catalogue_fallback_is_rotated_by_judge_role():
         "concept_judge": "model-c:free",
         "strict_judge": "model-d:free",
     }
+
+
+def test_blocked_free_models_are_not_selected():
+    cfg = {
+        "openrouter_dynamic_model_pool_enabled": True,
+        "openrouter_use_cooling_models_when_all_unavailable": False,
+        "openrouter_blocked_models": ["cohere/north-mini-code:free"],
+        "openrouter_free_model_catalog": [
+            "cohere/north-mini-code:free",
+            "general/model:free",
+        ],
+    }
+    registry = OpenRouterModelRegistry()
+    registry.configure_from_config(cfg)
+
+    selected = registry.order_models("semantic_judge", [], cfg)
+
+    assert "cohere/north-mini-code:free" not in selected
+    assert selected[0] == "general/model:free"

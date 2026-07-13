@@ -86,6 +86,70 @@ def test_exact_answer_still_reaches_full_ai_jury_when_forced(monkeypatch):
     assert contradicted.evidence["policy"]["deterministic_evidence_non_authoritative"]["status"] == "PROVEN"
 
 
+def test_exact_answer_accepts_when_unanimous_ai_reuses_same_provider_model(monkeypatch):
+    cfg = {
+        "force_ai_jury_for_all_answers": True,
+        "numeric_tolerance": 0.000001,
+        "max_latency_per_answer_seconds": 60,
+        "embedding_thresholds": {"auto_reject": 0.9},
+        "patient_ai_mode": True,
+        "enable_jury_circuit_breaker": False,
+        "jury_semaphore_acquire_timeout_seconds": 60,
+        "judge_total_hard_timeout_seconds": 60,
+        "retry_attempts": 1,
+        "max_concurrent_jury_answers": 1,
+        "adaptive_math_jury": {
+            "enabled": True,
+            "primary_roles": ["semantic_judge", "factual_judge", "concept_judge"],
+            "adjudicator_role": "strict_judge",
+            "minimum_primary_confidence": 0.9,
+        },
+        "accuracy_policy": {"minimum_judge_confidence": 0.9, "require_distinct_models": True},
+        "jury_models": {
+            "strict_judge": "openrouter/free",
+            "factual_judge": "openrouter/free",
+            "semantic_judge": "openrouter/free",
+            "concept_judge": "openrouter/free",
+        },
+        "persist_result_cache": False,
+    }
+    calls = []
+    monkeypatch.setattr(pipeline, "load_config", lambda: cfg)
+    monkeypatch.setattr(pipeline, "combine_scores", lambda *_a, **_k: 0.99)
+    monkeypatch.setattr(pipeline, "record_decision", lambda *_a, **_k: None)
+
+    def same_model_yes(*_args, **_kwargs):
+        calls.append(True)
+        return [
+            {
+                "role": role,
+                "decision": "YES",
+                "confidence": confidence,
+                "reason_short": "exact match to 36",
+                "model": "tencent/hy3:free",
+                "provider": "openrouter",
+            }
+            for role, confidence in (
+                ("semantic_judge", 1.0),
+                ("factual_judge", 1.0),
+                ("concept_judge", 0.99),
+            )
+        ]
+
+    monkeypatch.setattr(pipeline, "run_judges", same_model_yes)
+    pipeline.RESULT_CACHE.clear()
+    pipeline.JURY_SEMAPHORE = None
+
+    result = pipeline.evaluate_answer("36", ["36"], "3a")
+
+    assert calls == [True]
+    assert result.decision == "YES"
+    assert result.stage_reached == "jury"
+    assert result.fast_path_used is False
+    assert result.evidence["policy"]["policy_reason"] == "domain_exact_confirmed_by_ai"
+    assert result.evidence["key_eligible"] is True
+
+
 def test_forced_ai_rejects_proven_numeric_contradiction_even_with_low_confidence_judge(monkeypatch):
     cfg = {
         "force_ai_jury_for_all_answers": True,

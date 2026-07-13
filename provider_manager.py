@@ -316,9 +316,40 @@ class ProviderManager:
             model = request.payload.get("model") or (cfg.get("jury_models", {}) or {}).get(request.judge_name)
             return [str(model)] if model else []
         role_models = ((cfg.get("openrouter_models") or {}).get(request.judge_name) or [])
-        fallback_models = cfg.get("openrouter_fallback_models") or []
-        models = [*request.model_preferences, *role_models, *request.fallback_models, *fallback_models]
-        return self._openrouter_registry.order_models(request.judge_name, models, cfg)
+        fallback_models = self._rotate_models_for_role(cfg.get("openrouter_fallback_models") or [], request.judge_name)
+        request_fallback_models = self._rotate_models_for_role(request.fallback_models, request.judge_name)
+        models = [*request.model_preferences, *role_models, *request_fallback_models, *fallback_models]
+        ordered = self._openrouter_registry.order_models(request.judge_name, models, cfg)
+        avoid = {
+            str(model).strip().casefold()
+            for model in (request.metadata.get("avoid_models") or [])
+            if str(model).strip()
+        }
+        if not avoid or not bool(cfg.get("openrouter_avoid_reused_models", True)):
+            return ordered
+        fresh = [model for model in ordered if model.casefold() not in avoid]
+        reused = [model for model in ordered if model.casefold() in avoid]
+        if fresh:
+            log(
+                "INFO",
+                f"[PROVIDER MODELS] request={request.request_id} judge={request.judge_name} "
+                f"avoiding_reused={sorted(avoid)} selected_pool={fresh[:4]}",
+            )
+            return [*fresh, *reused]
+        log(
+            "WARNING",
+            f"[PROVIDER MODELS] request={request.request_id} judge={request.judge_name} "
+            f"all OpenRouter candidates already used; allowing reuse",
+        )
+        return ordered
+
+    @staticmethod
+    def _rotate_models_for_role(models: List[str], role: str) -> List[str]:
+        clean = [str(model).strip() for model in models if str(model).strip()]
+        if not clean:
+            return []
+        offset = OpenRouterModelRegistry.ROLE_ORDER.get(str(role), 0) % len(clean)
+        return [*clean[offset:], *clean[:offset]]
 
     def _provider_accepts_request(self, provider_name: str, request: ProviderRequest) -> bool:
         """Prevent oversized batched prompts from falling back into local Ollama."""

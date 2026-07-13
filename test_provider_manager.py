@@ -118,6 +118,57 @@ def test_provider_manager_prefers_openrouter(monkeypatch):
     assert ollama.calls == []
 
 
+def test_openrouter_fallback_models_rotate_by_judge_role(monkeypatch):
+    cfg = {
+        "provider_queue_size": 20,
+        "openrouter_dynamic_model_pool_enabled": False,
+        "openrouter_models": {
+            "semantic_judge": [],
+            "factual_judge": [],
+            "concept_judge": [],
+            "strict_judge": [],
+        },
+        "openrouter_fallback_models": ["model-a", "model-b", "model-c", "model-d"],
+    }
+    monkeypatch.setattr(provider_manager, "load_config", lambda: cfg)
+    manager = ProviderManager()
+
+    selected = {
+        role: manager._models_for_provider("openrouter", _request(role))[0]
+        for role in ("semantic_judge", "factual_judge", "concept_judge", "strict_judge")
+    }
+
+    assert selected == {
+        "semantic_judge": "model-a",
+        "factual_judge": "model-b",
+        "concept_judge": "model-c",
+        "strict_judge": "model-d",
+    }
+
+
+def test_openrouter_avoids_models_used_by_previous_jury_roles(monkeypatch):
+    cfg = {
+        "provider_queue_size": 20,
+        "openrouter_dynamic_model_pool_enabled": False,
+        "openrouter_avoid_reused_models": True,
+        "openrouter_models": {"semantic_judge": []},
+        "openrouter_fallback_models": ["model-a", "model-b", "model-c"],
+    }
+    monkeypatch.setattr(provider_manager, "load_config", lambda: cfg)
+    manager = ProviderManager()
+    request = ProviderRequest(
+        request_id="req-avoid",
+        judge_name="semantic_judge",
+        payload={"model": "ollama-semantic", "messages": []},
+        timeout_s=5,
+        metadata={"avoid_models": ["model-a"]},
+    )
+
+    models = manager._models_for_provider("openrouter", request)
+
+    assert models[:3] == ["model-b", "model-c", "model-a"]
+
+
 def test_provider_manager_fails_over_to_ollama_after_malformed_openrouter(monkeypatch):
     cfg = {
         "provider_priority": ["openrouter", "ollama"],
