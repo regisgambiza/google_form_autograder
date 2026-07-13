@@ -107,7 +107,7 @@ def test_skipped_form_badge_is_shown_on_queue_row():
     window.forms_data.clear()
     item = window._add_form_to_queue("https://docs.google.com/forms/d/form-1/edit", "Algebra", source="Test")
 
-    window.update_skipped_form("form-1", "Missing teacher answer key")
+    window.update_skipped_form("form-1", "", "Missing teacher answer key")
 
     widget = window.form_list.itemWidget(item)
     meta = item.data(Qt.UserRole + 1) or {}
@@ -115,6 +115,36 @@ def test_skipped_form_badge_is_shown_on_queue_row():
     assert widget._badge_label.text() == "SKIPPED"
     assert widget._eta_label.text() == "Skipped"
     assert "Missing teacher answer key" in widget._detail_label.text()
+
+
+def test_skipped_form_badge_can_match_queue_row_by_url():
+    window = FormManager()
+    window.form_list.clear()
+    window.forms_data.clear()
+    url = "https://docs.google.com/forms/d/form-1/edit"
+    item = window._add_form_to_queue(url, "Algebra", source="Test")
+
+    window.update_skipped_form("", url, "Missing teacher answer key")
+
+    widget = window.form_list.itemWidget(item)
+    meta = item.data(Qt.UserRole + 1) or {}
+    assert meta["status"] == "skipped"
+    assert widget._badge_label.text() == "SKIPPED"
+
+
+def test_finished_event_does_not_overwrite_skipped_badge():
+    window = FormManager()
+    window.form_list.clear()
+    window.forms_data.clear()
+    item = window._add_form_to_queue("https://docs.google.com/forms/d/form-1/edit", "Algebra", source="Test")
+    window.update_skipped_form("form-1", "", "Missing teacher answer key")
+
+    window.update_finished_form("form-1")
+
+    widget = window.form_list.itemWidget(item)
+    meta = item.data(Qt.UserRole + 1) or {}
+    assert meta["status"] == "skipped"
+    assert widget._badge_label.text() == "SKIPPED"
 
 
 def test_live_metric_cards_show_accept_review_and_elapsed():

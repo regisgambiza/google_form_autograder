@@ -17,7 +17,7 @@ class GraderThread(QThread):
     debug_message = pyqtSignal(str)
     current_form = pyqtSignal(str)
     finished_form = pyqtSignal(str)
-    skipped_form = pyqtSignal(str, str)
+    skipped_form = pyqtSignal(str, str, str)
 
     def __init__(self, grade_recent_only=False, form_urls=None):
         super().__init__()
@@ -372,7 +372,11 @@ class GraderThread(QThread):
                         self._write_gui_terminal_event(event, rendered)
                         self.debug_message.emit(rendered)
                         if event.get("type") == "form_skipped":
-                            self.skipped_form.emit(str(event.get("form_id") or ""), str(event.get("reason") or "Skipped"))
+                            self.skipped_form.emit(
+                                str(event.get("form_id") or ""),
+                                str(event.get("url") or ""),
+                                str(event.get("reason") or "Skipped"),
+                            )
                     except Exception:
                         pass
                 else:

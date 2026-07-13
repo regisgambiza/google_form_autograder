@@ -454,6 +454,9 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
 
                 missing_keys = missing_answer_key_questions(structure, expected_by_item_id, answers_by_qid)
                 if missing_keys:
+                    forms_results[i]["skipped"] = True
+                    forms_results[i]["skip_reason"] = "Missing teacher answer key"
+                    forms_results[i]["missing_keys"] = missing_keys
                     detail = "; ".join(
                         f"Q{entry['question_number']} {entry['title']!r} ({entry['responses']} response(s))"
                         for entry in missing_keys[:8]
@@ -469,6 +472,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                         "form_skipped",
                         form_title=title,
                         form_id=form_id,
+                        url=item.get("url", ""),
                         reason="Missing teacher answer key",
                         message=(
                             "Skipped this form because one or more answered questions have no teacher canonical answer. "
@@ -1304,6 +1308,9 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
         meta = data["meta"]
         form_id = meta.get("form_id", "")
         title = meta.get("title", f"Form_{form_id}")
+        if data.get("skipped"):
+            log("INFO", f"[FORM] SKIPPED '{title}' ({form_id}) reason={data.get('skip_reason', 'Skipped')}")
+            continue
         structure = meta.get("structure", [])
         log("INFO", f"[FORM] START {i}/{forms_total} | form_id={form_id}")
         all_questions = []

@@ -3206,6 +3206,9 @@ class FormManager(QMainWindow):
         title = "Unknown Form"
         if item:
             meta = item.data(Qt.UserRole + 1) or {}
+            if meta.get("status") == "skipped":
+                self.append_debug(f"<font color='orange'>[AUTO {now_str}] Skipped: {meta.get('title', title)}</font>")
+                return
             title = meta.get("title", title)
             self._set_form_status(item, "done", "Finished and saved grading updates")
         self.append_debug(f"<font color='green'>[AUTO {now_str}] Completed: {title}</font>")
@@ -3213,9 +3216,19 @@ class FormManager(QMainWindow):
         # After a form finishes, if the grader has become idle, start the next queued forms.
         QTimer.singleShot(800, self._maybe_start_next_after_finish)
 
-    def update_skipped_form(self, form_id, reason):
-        item = self._find_form_item_by_id(form_id)
+    def update_skipped_form(self, form_id, url="", reason="Skipped"):
+        item = self._find_form_item_by_id(form_id) if form_id else None
+        if not item and url:
+            item = self._find_form_item_by_url(url)
+        if not item and self.current_form_url:
+            current_id = self.extract_form_id(self.current_form_url)
+            if current_id and form_id and current_id == form_id:
+                item = self._find_form_item_by_url(self.current_form_url)
         if not item:
+            self.append_debug(
+                f"<font color='orange'>[GRADER] Skipped form could not be matched in queue: "
+                f"{form_id or url or 'unknown'}</font>"
+            )
             return
         detail = str(reason or "Skipped")
         self._set_form_status(item, "skipped", detail)
