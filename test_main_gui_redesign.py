@@ -2,7 +2,7 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt5.QtWidgets import QApplication, QPushButton, QSplitter, QFrame
+from PyQt5.QtWidgets import QApplication, QPushButton, QSplitter, QFrame, QLabel, QScrollArea
 from PyQt5.QtCore import Qt
 
 from app_theme import apply_application_theme
@@ -25,6 +25,10 @@ def test_main_window_uses_approved_workspace_layout():
     splitter = window.findChild(QSplitter, "WorkspaceSplitter")
     assert splitter is not None
     assert splitter.count() == 2
+    detail_scroll = window.findChild(QScrollArea, "DetailScroll")
+    assert detail_scroll is not None
+    assert detail_scroll.widgetResizable()
+    assert detail_scroll.verticalScrollBarPolicy() == Qt.ScrollBarAsNeeded
     assert window.form_list is not None
     assert window.detail_title is not None
 
@@ -46,6 +50,16 @@ def test_terminal_drawer_collapses_opens_and_expands():
 
     window.set_terminal_state("collapsed")
     assert window.terminal_frame.height() == 38
+
+
+def test_terminal_log_buffers_are_bounded():
+    window = FormManager()
+    for i in range(window.max_gui_log_lines + 20):
+        window.append_debug(f"[TEST] line {i}")
+
+    assert len(window.debug_lines) == window.max_gui_log_lines
+    assert window.debug_output.document().maximumBlockCount() == window.max_gui_visible_blocks
+    assert window.debug_output.document().blockCount() <= window.max_gui_visible_blocks
 
 
 def test_queue_search_and_status_filter_hide_nonmatches():
@@ -96,9 +110,9 @@ def test_live_metric_cards_show_accept_review_and_elapsed():
     assert ">6<" in window.metric_review.text()
     assert window.metric_elapsed.text() == "01:02:03"
     assert window.metric_rate.text() == "3.3/min"
-    assert window.metric_decision_paths.text() == "80 / 127"
     assert window.metric_avg_latency.text() == "4.3s"
     assert window.metric_eta.text() == "01:16:26"
+    assert "Det / AI" not in {label.text() for label in window.findChildren(QLabel)}
 
 
 def test_top_progress_tracks_overall_forms_not_answer_progress():
@@ -128,10 +142,10 @@ def test_live_dashboard_updates_ai_backlog_and_current_model():
     assert window.metric_current_model.text() == "gemma3:12b"
 
 
-def test_detail_panel_shows_live_worker_cards():
+def test_detail_panel_shows_live_worker_rows():
     window = FormManager()
-    cards = window.findChildren(QFrame, "WorkerCard")
-    assert cards
+    rows = window.findChildren(QFrame, "WorkerRow")
+    assert rows
     assert len(window.app_worker_cards) >= 1
     assert len(window.provider_worker_cards) >= 1
 
@@ -147,10 +161,44 @@ def test_detail_panel_shows_live_worker_cards():
         "id=openrouter-1 provider=openrouter status=running model=nvidia/test:free "
         "request=judge-batch-1 latency_ms=0 queue_wait_ms=5"
     )
+    assert window.provider_worker_states["openrouter-1"]["state"] == "running"
     provider_card = window.provider_worker_cards["openrouter-1"]
     assert provider_card["status"].text() == "Running"
     assert provider_card["primary"].text() == "nvidia/test:free"
     assert "judge-batch-1" in provider_card["secondary"].text()
+    assert window.provider_worker_summary.text()
+
+
+def test_ai_worker_rows_use_transformers_names_and_expand_dynamically(monkeypatch):
+    window = FormManager()
+    assert window.app_worker_cards["ai-1"]["title"].text() == "Optimus Prime"
+    assert window.app_worker_cards["ai-2"]["title"].text() == "Bumblebee"
+
+    monkeypatch.setattr(
+        window,
+        "_configured_worker_counts",
+        lambda: {"ai": 6, "openrouter": 4, "ollama": 1},
+    )
+    window._sync_worker_cards_to_config()
+
+    assert len(window.app_worker_cards) >= 6
+    assert window.app_worker_cards["ai-5"]["title"].text() == "Arcee"
+    assert window.app_worker_cards["ai-6"]["title"].text() == "Jazz"
+
+
+def test_provider_worker_rows_expand_dynamically(monkeypatch):
+    window = FormManager()
+    monkeypatch.setattr(
+        window,
+        "_configured_worker_counts",
+        lambda: {"ai": 4, "openrouter": 6, "ollama": 2},
+    )
+    window._sync_worker_cards_to_config()
+
+    assert "openrouter-6" in window.provider_worker_cards
+    assert "ollama-2" in window.provider_worker_cards
+    assert window.provider_worker_cards["openrouter-6"]["title"].text() == "OpenRouter 6"
+    assert window.provider_worker_cards["ollama-2"]["title"].text() == "Ollama 2"
 
 
 def test_review_metric_deep_links_to_current_form(monkeypatch):

@@ -229,6 +229,40 @@ def test_provider_manager_skips_missing_openrouter_model_without_retry_or_circui
     assert snapshot["providers"]["openrouter"]["circuit"] == "CLOSED"
 
 
+def test_openrouter_model_rate_limit_cools_down_model_for_next_request(monkeypatch):
+    cfg = {
+        "provider_priority": ["openrouter"],
+        "provider_retry_count": 1,
+        "openrouter_worker_count": 1,
+        "ollama_worker_count": 1,
+        "provider_circuit_failure_threshold": 99,
+        "openrouter_model_rate_limit_cooldown_seconds": 300,
+        "openrouter_dynamic_model_pool_enabled": True,
+        "openrouter_models": {"semantic_judge": ["busy-model", "backup-model"]},
+        "openrouter_fallback_models": [],
+        "openrouter_free_model_catalog": [],
+    }
+    openrouter = _FakeProvider([
+        ProviderError("OpenRouter rate limited", "rate_limited"),
+        _ollama_response({"decision": "YES", "confidence": 0.9, "reason_short": "backup"}),
+        _ollama_response({"decision": "YES", "confidence": 0.9, "reason_short": "backup again"}),
+    ])
+    manager = _make_manager(monkeypatch, cfg, openrouter, _FakeProvider([]))
+
+    first = manager.ask(_request())
+    second = manager.ask(_request())
+
+    assert first.model == "backup-model"
+    assert second.model == "backup-model"
+    assert [call[0]["model"] for call in openrouter.calls] == [
+        "busy-model",
+        "backup-model",
+        "backup-model",
+    ]
+    snapshot = manager.snapshot()
+    assert snapshot["openrouter_models"]["models"]["busy-model"]["cooldown_remaining_s"] > 0
+
+
 def test_ollama_model_comes_from_existing_jury_settings(monkeypatch):
     cfg = {
         "provider_priority": ["ollama"],

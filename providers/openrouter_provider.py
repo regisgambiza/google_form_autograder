@@ -22,8 +22,41 @@ class OpenRouterProvider(BaseProvider):
         cfg = load_config()
         return str(cfg.get("openrouter_api_base_url", "https://openrouter.ai/api/v1")).rstrip("/") + "/chat/completions"
 
+    def _models_url(self) -> str:
+        cfg = load_config()
+        return str(cfg.get("openrouter_api_base_url", "https://openrouter.ai/api/v1")).rstrip("/") + "/models"
+
     def is_configured(self) -> bool:
         return bool(self._api_key())
+
+    def list_free_models(self, timeout_s: int = 20) -> list[str]:
+        """Return currently advertised free model ids from OpenRouter."""
+        headers = {"Content-Type": "application/json"}
+        api_key = self._api_key()
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        try:
+            resp = requests.get(self._models_url(), headers=headers, timeout=(5, timeout_s))
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as ex:
+            raise ProviderError(str(ex), "transport") from ex
+        models = data.get("data") if isinstance(data, dict) else []
+        out = []
+        for item in models or []:
+            if not isinstance(item, dict):
+                continue
+            model_id = str(item.get("id") or "").strip()
+            pricing = item.get("pricing") or {}
+            prompt_price = str(pricing.get("prompt", "")).strip()
+            completion_price = str(pricing.get("completion", "")).strip()
+            is_free = model_id.endswith(":free") or (
+                prompt_price in {"0", "0.0", "0.000000"}
+                and completion_price in {"0", "0.0", "0.000000"}
+            )
+            if model_id and is_free:
+                out.append(model_id)
+        return out
 
     def chat(self, payload: Dict[str, Any], timeout_s: int) -> Dict[str, Any]:
         api_key = self._api_key()

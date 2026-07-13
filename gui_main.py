@@ -40,6 +40,21 @@ import re
 
 BANGKOK_TZ = timezone(timedelta(hours=7))
 
+AI_WORKER_DISPLAY_NAMES = [
+    "Optimus Prime",
+    "Bumblebee",
+    "Ratchet",
+    "Ironhide",
+    "Arcee",
+    "Jazz",
+    "Wheeljack",
+    "Mirage",
+    "Prowl",
+    "Sideswipe",
+    "Hot Rod",
+    "Ultra Magnus",
+]
+
 EXECUTION_MODE_PRESETS = {
     "Maximum accuracy: independent unanimous jury + review": {
         "deterministic_worker_count": 4,
@@ -282,6 +297,8 @@ class FormManager(QMainWindow):
         self.overall_forms_total = 0
         self.auto_mode = False
         self.auto_timer = None  # Track the QTimer for auto-cycle
+        self.max_gui_log_lines = 2500
+        self.max_gui_visible_blocks = 1200
         self.debug_lines = []
 
         # Auto Mode Settings
@@ -742,7 +759,6 @@ class FormManager(QMainWindow):
         for metric_name, metric_value in (
             ("Answers / min", self.metric_rate),
             ("AI backlog", self.metric_ai_backlog),
-            ("Det / AI", self.metric_decision_paths),
             ("Current model", self.metric_current_model),
             ("Avg latency", self.metric_avg_latency),
             ("ETA", self.metric_eta),
@@ -816,31 +832,34 @@ class FormManager(QMainWindow):
         app_worker_header.addStretch()
         app_worker_header.addWidget(self.app_worker_summary)
         detail_layout.addLayout(app_worker_header)
-        self.app_worker_grid = QGridLayout()
-        self.app_worker_grid.setHorizontalSpacing(8)
-        self.app_worker_grid.setVerticalSpacing(8)
-        detail_layout.addLayout(self.app_worker_grid)
+        self.app_worker_list = QVBoxLayout()
+        self.app_worker_list.setSpacing(0)
+        detail_layout.addLayout(self.app_worker_list)
 
-        provider_worker_header = QHBoxLayout()
-        provider_worker_label = QLabel("Provider workers")
-        provider_worker_label.setObjectName("Muted")
         self.provider_worker_summary = QLabel("OpenRouter: - | Ollama: -")
         self.provider_worker_summary.setObjectName("Muted")
-        provider_worker_header.addWidget(provider_worker_label)
-        provider_worker_header.addStretch()
-        provider_worker_header.addWidget(self.provider_worker_summary)
+        provider_worker_label = QLabel("Provider workers")
+        provider_worker_label.setObjectName("Muted")
         detail_layout.addSpacing(6)
-        detail_layout.addLayout(provider_worker_header)
-        self.provider_worker_grid = QGridLayout()
-        self.provider_worker_grid.setHorizontalSpacing(8)
-        self.provider_worker_grid.setVerticalSpacing(8)
-        detail_layout.addLayout(self.provider_worker_grid)
+        detail_layout.addWidget(provider_worker_label)
+        detail_layout.addWidget(self.provider_worker_summary)
+        self.provider_worker_list = QVBoxLayout()
+        self.provider_worker_list.setSpacing(0)
+        detail_layout.addLayout(self.provider_worker_list)
 
         self.app_worker_cards = {}
         self.provider_worker_cards = {}
+        self.provider_worker_states = {}
         self._initialize_worker_cards()
         detail_layout.addStretch()
-        workspace.addWidget(detail_widget)
+        detail_scroll = QScrollArea()
+        detail_scroll.setObjectName("DetailScroll")
+        detail_scroll.setWidgetResizable(True)
+        detail_scroll.setFrameShape(QFrame.NoFrame)
+        detail_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        detail_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        detail_scroll.setWidget(detail_widget)
+        workspace.addWidget(detail_scroll)
         workspace.setSizes([340, 900])
         workspace.setStretchFactor(0, 0)
         workspace.setStretchFactor(1, 1)
@@ -1065,13 +1084,38 @@ class FormManager(QMainWindow):
             "ollama": max(0, int(cfg.get("ollama_worker_count", 1) or 1)),
         }
 
+    def _ai_worker_display_name(self, worker_id):
+        try:
+            number = int(str(worker_id).rsplit("-", 1)[-1])
+        except Exception:
+            number = 0
+        if 1 <= number <= len(AI_WORKER_DISPLAY_NAMES):
+            return AI_WORKER_DISPLAY_NAMES[number - 1]
+        return f"Autobot {number}" if number > 0 else "Autobot"
+
+    def _sync_worker_cards_to_config(self):
+        counts = self._configured_worker_counts()
+        for index in range(len(self.app_worker_cards), counts["ai"]):
+            self._ensure_worker_card("app", f"ai-{index + 1}", "AI worker")
+        for index in range(len([wid for wid in self.provider_worker_cards if wid.startswith("openrouter-")]), counts["openrouter"]):
+            worker_id = f"openrouter-{index + 1}"
+            self.provider_worker_states.setdefault(worker_id, {"state": "idle"})
+            self._ensure_worker_card("provider", worker_id, "OpenRouter")
+        for index in range(len([wid for wid in self.provider_worker_cards if wid.startswith("ollama-")]), counts["ollama"]):
+            worker_id = f"ollama-{index + 1}"
+            self.provider_worker_states.setdefault(worker_id, {"state": "idle"})
+            self._ensure_worker_card("provider", worker_id, "Ollama")
+        self._refresh_worker_summaries()
+
     def _initialize_worker_cards(self):
         counts = self._configured_worker_counts()
         for index in range(counts["ai"]):
             self._ensure_worker_card("app", f"ai-{index + 1}", "AI worker")
         for index in range(counts["openrouter"]):
+            self.provider_worker_states[f"openrouter-{index + 1}"] = {"state": "idle"}
             self._ensure_worker_card("provider", f"openrouter-{index + 1}", "OpenRouter")
         for index in range(counts["ollama"]):
+            self.provider_worker_states[f"ollama-{index + 1}"] = {"state": "idle"}
             self._ensure_worker_card("provider", f"ollama-{index + 1}", "Ollama")
         self._refresh_worker_summaries()
 
@@ -1079,37 +1123,40 @@ class FormManager(QMainWindow):
         cards = self.app_worker_cards if group == "app" else self.provider_worker_cards
         if worker_id in cards:
             return cards[worker_id]
-        card = QFrame()
-        card.setObjectName("WorkerCard")
-        card.setProperty("status", "idle")
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(10, 8, 10, 8)
-        layout.setSpacing(3)
+        row = QFrame()
+        row.setObjectName("WorkerRow")
+        row.setProperty("status", "idle")
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(10)
 
-        top = QHBoxLayout()
-        title = QLabel(f"{title_prefix} {worker_id.split('-', 1)[-1]}")
+        title_text = self._ai_worker_display_name(worker_id) if group == "app" else f"{title_prefix} {worker_id.split('-', 1)[-1]}"
+        title = QLabel(title_text)
         title.setObjectName("WorkerTitle")
+        title.setMinimumWidth(120 if group == "app" else 115)
+        title.setToolTip(worker_id if group == "app" else "")
         status = QLabel("Idle")
         status.setObjectName("WorkerStatus")
         status.setProperty("status", "idle")
-        top.addWidget(title)
-        top.addStretch()
-        top.addWidget(status)
         primary = QLabel("Waiting")
         primary.setObjectName("WorkerPrimary")
+        primary.setMinimumWidth(120 if group == "app" else 180)
         secondary = QLabel("No request")
         secondary.setObjectName("Muted")
+        secondary.setMinimumWidth(180)
         stats = QLabel("latency - | wait -")
         stats.setObjectName("Muted")
+        stats.setMinimumWidth(120)
         for label in (primary, secondary, stats):
-            label.setWordWrap(True)
-        layout.addLayout(top)
-        layout.addWidget(primary)
-        layout.addWidget(secondary)
-        layout.addWidget(stats)
+            label.setWordWrap(False)
+        layout.addWidget(title)
+        layout.addWidget(status)
+        layout.addWidget(primary, 1)
+        layout.addWidget(secondary, 2)
+        layout.addWidget(stats, 1)
 
         cards[worker_id] = {
-            "frame": card,
+            "frame": row,
             "title": title,
             "status": status,
             "primary": primary,
@@ -1117,10 +1164,11 @@ class FormManager(QMainWindow):
             "stats": stats,
             "state": "idle",
         }
-        grid = self.app_worker_grid if group == "app" else self.provider_worker_grid
-        col_count = 4 if group == "app" else 5
-        idx = len(cards) - 1
-        grid.addWidget(card, idx // col_count, idx % col_count)
+        if group == "app":
+            self.app_worker_list.addWidget(row)
+        else:
+            self.provider_worker_list.addWidget(row)
+            self.provider_worker_states.setdefault(worker_id, {"state": "idle"})
         return cards[worker_id]
 
     def _set_worker_card(self, group, worker_id, title_prefix, status, primary, secondary, stats):
@@ -1133,6 +1181,14 @@ class FormManager(QMainWindow):
         card["primary"].setText(str(primary or "Waiting"))
         card["secondary"].setText(str(secondary or "No request"))
         card["stats"].setText(str(stats or "latency - | wait -"))
+        if group != "app":
+            self.provider_worker_states[worker_id] = {
+                "state": state,
+                "provider": title_prefix,
+                "primary": primary,
+                "secondary": secondary,
+                "stats": stats,
+            }
         for widget in (card["status"], card["frame"]):
             widget.style().unpolish(widget)
             widget.style().polish(widget)
@@ -1147,7 +1203,7 @@ class FormManager(QMainWindow):
             return total, running, done, failed
 
         app_total, app_running, app_done, app_failed = counts(getattr(self, "app_worker_cards", {}))
-        provider_total, provider_running, provider_done, provider_failed = counts(getattr(self, "provider_worker_cards", {}))
+        provider_total, provider_running, provider_done, provider_failed = counts(getattr(self, "provider_worker_states", {}))
         self.app_worker_summary.setText(f"{app_running}/{app_total} running")
         self.provider_worker_summary.setText(
             getattr(self, "_provider_summary_text", "") or f"{provider_running}/{provider_total} running"
@@ -1435,6 +1491,27 @@ class FormManager(QMainWindow):
             "How many student answers are sent to each OpenRouter judge call. "
             "Higher values can improve throughput but may increase malformed JSON risk."
         )
+        ai_worker_count_spin = QSpinBox(dialog)
+        ai_worker_count_spin.setRange(1, 12)
+        ai_worker_count_spin.setValue(max(1, int(cfg.get("ai_worker_count", 4) or 4)))
+        ai_worker_count_spin.setToolTip(
+            "Application AI worker threads. Higher values process more questions in parallel. "
+            "Changes apply to the next grading run."
+        )
+        openrouter_worker_count_spin = QSpinBox(dialog)
+        openrouter_worker_count_spin.setRange(1, 12)
+        openrouter_worker_count_spin.setValue(max(1, int(cfg.get("openrouter_worker_count", 4) or 4)))
+        openrouter_worker_count_spin.setToolTip(
+            "OpenRouter provider worker threads. Higher values allow more concurrent OpenRouter API calls. "
+            "Changes apply to the next grading run."
+        )
+        ollama_worker_count_spin = QSpinBox(dialog)
+        ollama_worker_count_spin.setRange(1, 4)
+        ollama_worker_count_spin.setValue(max(1, int(cfg.get("ollama_worker_count", 1) or 1)))
+        ollama_worker_count_spin.setToolTip(
+            "Ollama provider worker threads. Keep this at 1 unless your local hardware can run multiple model requests efficiently. "
+            "Changes apply to the next grading run."
+        )
         batch_size_spin = QSpinBox(dialog)
         batch_size_spin.setRange(1, 200)
         batch_auto_checkbox = QCheckBox("Auto", dialog)
@@ -1582,6 +1659,9 @@ class FormManager(QMainWindow):
         )
         form.addRow("AI Evaluation:", force_ai_checkbox)
         form.addRow("Answer Processing:", dedup_checkbox)
+        form.addRow("AI Worker Threads:", ai_worker_count_spin)
+        form.addRow("OpenRouter Provider Workers:", openrouter_worker_count_spin)
+        form.addRow("Ollama Provider Workers:", ollama_worker_count_spin)
         form.addRow("Ollama Answers per Judge Call:", ollama_judge_answer_batch_size_spin)
         form.addRow("OpenRouter Answers per Judge Call:", openrouter_judge_answer_batch_size_spin)
 
@@ -1710,6 +1790,9 @@ class FormManager(QMainWindow):
             preset = EXECUTION_MODE_PRESETS.get(selected_mode, EXECUTION_MODE_PRESETS[DEFAULT_EXECUTION_MODE])
             for key, value in preset.items():
                 config_data[key] = value
+            config_data["ai_worker_count"] = int(ai_worker_count_spin.value())
+            config_data["openrouter_worker_count"] = int(openrouter_worker_count_spin.value())
+            config_data["ollama_worker_count"] = int(ollama_worker_count_spin.value())
             # Keep provider-level capacity in ProviderManager; application workers may
             # process multiple questions while Ollama remains capped by ollama_worker_count.
             config_data["max_concurrent_judge_http"] = 1
@@ -1767,6 +1850,7 @@ class FormManager(QMainWindow):
             try:
                 with open("config.json", "w", encoding="utf-8") as f:
                     json.dump(config_data, f, indent=4)
+                self._sync_worker_cards_to_config()
             except Exception as e:
                 QMessageBox.critical(self, "Error Saving Settings", f"Failed to save settings: {str(e)}")
 
@@ -3081,6 +3165,7 @@ class FormManager(QMainWindow):
         w.setReadOnly(True)
         w.setFont(QFont("Consolas", 10))
         w.setStyleSheet("background-color:#1e1e1e; color:#dcdcdc;")
+        w.document().setMaximumBlockCount(self.max_gui_visible_blocks)
         return w
 
     def _route_worker_log(self, message):
@@ -3350,6 +3435,8 @@ class FormManager(QMainWindow):
 
     def append_debug(self, message):
         self.debug_lines.append(message)
+        if len(self.debug_lines) > self.max_gui_log_lines:
+            del self.debug_lines[: len(self.debug_lines) - self.max_gui_log_lines]
         self._update_worker_metrics_label(message)
         # Always route worker-tagged logs to dedicated tabs.
         self._route_worker_log(message)

@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 
 from evaluator_config import load_config
 from logger import log, update_runtime_state
+from openrouter_model_registry import OpenRouterModelRegistry
 from provider_types import (
     CircuitState,
     HealthState,
@@ -48,6 +49,7 @@ class ProviderManager:
             "openrouter": OpenRouterProvider(),
             "ollama": OllamaProvider(),
         }
+        self._openrouter_registry = OpenRouterModelRegistry()
         self._states = {name: _ProviderState() for name in self._providers}
         self._queues = {name: queue.Queue(maxsize=self._queue_size()) for name in self._providers}
         self._workers_started = False
@@ -117,11 +119,13 @@ class ProviderManager:
                     try:
                         response = self._submit_and_wait(item)
                         self._record_success(provider_name, response.latency_ms)
+                        self._record_model_success(provider_name, model, response.latency_ms, request.judge_name)
                         self._emit_metrics()
                         return response
                     except ProviderError as ex:
                         last_error = ex
                         self._record_failure(provider_name, ex)
+                        self._record_model_failure(provider_name, model, ex, request.judge_name)
                         log(
                             "WARNING",
                             f"[PROVIDER] selected={provider_name} request={request.request_id} "
@@ -158,7 +162,13 @@ class ProviderManager:
             workers = {k: dict(v) for k, v in self._worker_status.items()}
             metrics = dict(self._metrics)
             provider_metrics = {k: dict(v) for k, v in self._provider_metrics.items()}
-        return {"providers": states, "workers": workers, "metrics": metrics, "provider_metrics": provider_metrics}
+        return {
+            "providers": states,
+            "workers": workers,
+            "metrics": metrics,
+            "provider_metrics": provider_metrics,
+            "openrouter_models": self._openrouter_registry.snapshot(),
+        }
 
     def _queue_size(self) -> int:
         try:
@@ -171,6 +181,12 @@ class ProviderManager:
             if self._workers_started:
                 return
             cfg = load_config()
+            self._openrouter_registry.configure_from_config(cfg)
+            openrouter_fetcher = getattr(self._providers["openrouter"], "list_free_models", lambda: [])
+            self._openrouter_registry.start_background_refresh(
+                load_config,
+                openrouter_fetcher,
+            )
             counts = {
                 "openrouter": max(1, int(cfg.get("openrouter_worker_count", 4))),
                 "ollama": max(1, int(cfg.get("ollama_worker_count", 1))),
@@ -302,12 +318,7 @@ class ProviderManager:
         role_models = ((cfg.get("openrouter_models") or {}).get(request.judge_name) or [])
         fallback_models = cfg.get("openrouter_fallback_models") or []
         models = [*request.model_preferences, *role_models, *request.fallback_models, *fallback_models]
-        out = []
-        for model in models:
-            model = str(model).strip()
-            if model and model not in out:
-                out.append(model)
-        return out
+        return self._openrouter_registry.order_models(request.judge_name, models, cfg)
 
     def _provider_accepts_request(self, provider_name: str, request: ProviderRequest) -> bool:
         """Prevent oversized batched prompts from falling back into local Ollama."""
@@ -363,6 +374,10 @@ class ProviderManager:
             provider_metrics["last_latency_ms"] = latency_ms
             provider_metrics["last_error"] = ""
 
+    def _record_model_success(self, provider_name: str, model: str, latency_ms: float, role: str) -> None:
+        if provider_name == "openrouter":
+            self._openrouter_registry.record_success(model, latency_ms, role=role)
+
     def _record_failure(self, provider_name: str, ex: ProviderError) -> None:
         with self._lock:
             state = self._states[provider_name]
@@ -390,6 +405,10 @@ class ProviderManager:
                 state.circuit = CircuitState.OPEN
                 state.health = HealthState.OFFLINE if ex.category != "disabled" else HealthState.DISABLED
                 state.opened_at = time.monotonic()
+
+    def _record_model_failure(self, provider_name: str, model: str, ex: ProviderError, role: str) -> None:
+        if provider_name == "openrouter":
+            self._openrouter_registry.record_failure(model, ex.category, str(ex), load_config(), role=role)
 
     def _record_retry(self, provider_name: str) -> None:
         with self._lock:

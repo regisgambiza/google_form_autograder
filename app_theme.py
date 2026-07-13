@@ -75,6 +75,8 @@ QPushButton#IconButton {
 }
 QPushButton#IconButton::menu-indicator { image: none; width: 0; }
 QFrame#QueuePane { background: #f1f5f8; border-right: 1px solid #cbd6df; }
+QScrollArea#DetailScroll { background: #ffffff; border: 0; }
+QScrollArea#DetailScroll > QWidget > QWidget { background: #ffffff; }
 QFrame#DetailPane { background: #ffffff; }
 QLabel#DetailTitle { color: #1d2a36; font-size: 21px; font-weight: 700; }
 QLabel#DetailBadge {
@@ -91,14 +93,14 @@ QLabel#DetailBadge[status="failed"] { background: #ffebe8; color: #8f1c13; }
 QFrame#Metric { background: white; border-bottom: 1px solid #cbd6df; }
 QLabel#MetricValue { color: #1d2a36; font-size: 20px; font-weight: 700; }
 QFrame#PipelineRow { background: white; border-bottom: 1px solid #d9e1e7; }
-QFrame#WorkerCard {
+QFrame#WorkerRow {
     background: #ffffff;
-    border: 1px solid #d7e0ea;
-    border-radius: 6px;
+    border: 0;
+    border-bottom: 1px solid #d9e1e7;
 }
-QFrame#WorkerCard[status="running"] { border-color: #d49b3a; background: #fffaf0; }
-QFrame#WorkerCard[status="failed"] { border-color: #d35b4f; background: #fff7f5; }
-QFrame#WorkerCard[status="done"] { border-color: #8fc5aa; background: #f5fbf8; }
+QFrame#WorkerRow[status="running"] { border-left: 3px solid #cc7a00; background: #fff9e8; }
+QFrame#WorkerRow[status="failed"] { border-left: 3px solid #b42318; background: #fff4f2; }
+QFrame#WorkerRow[status="done"] { border-left: 3px solid #1f8a5b; background: #f5fbf8; }
 QLabel#WorkerTitle { color: #1d2a36; font-size: 12px; font-weight: 700; }
 QLabel#WorkerPrimary { color: #1d2a36; font-size: 12px; font-weight: 600; }
 QLabel#WorkerStatus {
