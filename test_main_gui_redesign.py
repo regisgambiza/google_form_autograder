@@ -101,50 +101,58 @@ def test_form_queue_uses_compact_table_rows():
     assert first.sizeHint().height() < 70
 
 
-def test_skipped_form_badge_is_shown_on_queue_row():
+def test_partial_form_badge_is_shown_on_queue_row():
     window = FormManager()
     window.form_list.clear()
     window.forms_data.clear()
     item = window._add_form_to_queue("https://docs.google.com/forms/d/form-1/edit", "Algebra", source="Test")
 
-    window.update_skipped_form("form-1", "", "Missing teacher answer key")
+    window.update_skipped_form(
+        "form-1",
+        "",
+        "Missing teacher answer key",
+        '[{"question_number": 5, "title": "8 c)", "responses": 2}]',
+    )
 
     widget = window.form_list.itemWidget(item)
     meta = item.data(Qt.UserRole + 1) or {}
-    assert meta["status"] == "skipped"
-    assert widget._badge_label.text() == "SKIPPED"
-    assert widget._eta_label.text() == "Skipped"
+    assert meta["status"] == "partial"
+    assert widget._badge_label.text() == "PARTIAL"
+    assert widget._eta_label.text() == "Partial"
     assert "Missing teacher answer key" in widget._detail_label.text()
+    window.form_list.setCurrentItem(item)
+    window._on_form_selection_changed(item)
+    assert "Q5: 8 c)" in window.detail_warning.text()
 
 
-def test_skipped_form_badge_can_match_queue_row_by_url():
+def test_partial_form_badge_can_match_queue_row_by_url():
     window = FormManager()
     window.form_list.clear()
     window.forms_data.clear()
     url = "https://docs.google.com/forms/d/form-1/edit"
     item = window._add_form_to_queue(url, "Algebra", source="Test")
 
-    window.update_skipped_form("", url, "Missing teacher answer key")
+    window.update_skipped_form("", url, "Missing teacher answer key", "[]")
 
     widget = window.form_list.itemWidget(item)
     meta = item.data(Qt.UserRole + 1) or {}
-    assert meta["status"] == "skipped"
-    assert widget._badge_label.text() == "SKIPPED"
+    assert meta["status"] == "partial"
+    assert widget._badge_label.text() == "PARTIAL"
 
 
-def test_finished_event_does_not_overwrite_skipped_badge():
+def test_finished_event_does_not_overwrite_partial_badge():
     window = FormManager()
     window.form_list.clear()
     window.forms_data.clear()
     item = window._add_form_to_queue("https://docs.google.com/forms/d/form-1/edit", "Algebra", source="Test")
-    window.update_skipped_form("form-1", "", "Missing teacher answer key")
+    window.update_skipped_form("form-1", "", "Missing teacher answer key", "[]")
 
     window.update_finished_form("form-1")
 
     widget = window.form_list.itemWidget(item)
     meta = item.data(Qt.UserRole + 1) or {}
-    assert meta["status"] == "skipped"
-    assert widget._badge_label.text() == "SKIPPED"
+    assert meta["status"] == "partial"
+    assert widget._badge_label.text() == "PARTIAL"
 
 
 def test_live_metric_cards_show_accept_review_and_elapsed():

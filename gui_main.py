@@ -510,6 +510,9 @@ class FormManager(QMainWindow):
             QLabel#StatusBadge[status="skipped"] {
                 color: #9a3412;
             }
+            QLabel#StatusBadge[status="partial"] {
+                color: #b45309;
+            }
             QLabel#QueueEta {
                 color: #405466;
                 font-size: 11px;
@@ -681,7 +684,7 @@ class FormManager(QMainWindow):
         self.form_search_input.setPlaceholderText("Search forms")
         self.form_search_input.textChanged.connect(self._filter_form_queue)
         self.form_filter_combo = QComboBox()
-        self.form_filter_combo.addItems(["All", "Running", "Queued", "Done", "Skipped", "Failed"])
+        self.form_filter_combo.addItems(["All", "Running", "Queued", "Done", "Partial", "Skipped", "Failed"])
         self.form_filter_combo.currentTextChanged.connect(self._filter_form_queue)
         self.clear_forms_button = QPushButton("Clear All")
         self.clear_forms_button.setObjectName("Danger")
@@ -739,6 +742,12 @@ class FormManager(QMainWindow):
         self.detail_badge.setProperty("status", "queued")
         detail_header.addWidget(self.detail_badge)
         detail_layout.addLayout(detail_header)
+
+        self.detail_warning = QLabel("")
+        self.detail_warning.setObjectName("Muted")
+        self.detail_warning.setWordWrap(True)
+        self.detail_warning.hide()
+        detail_layout.addWidget(self.detail_warning)
 
         progress_header = QHBoxLayout()
         self.detail_progress_text = QLabel("Overall forms progress")
@@ -986,6 +995,7 @@ class FormManager(QMainWindow):
             self.detail_title.setText("Select a form")
             self.detail_meta.setText("No form selected")
             self.detail_badge.setText("IDLE")
+            self.detail_warning.hide()
             return
         meta = current.data(Qt.UserRole + 1) or {}
         status = str(meta.get("status", "queued"))
@@ -998,6 +1008,23 @@ class FormManager(QMainWindow):
         self.detail_badge.style().unpolish(self.detail_badge)
         self.detail_badge.style().polish(self.detail_badge)
         detail = meta.get("detail") or "Waiting to start"
+        skipped_questions = meta.get("skipped_questions") or []
+        if skipped_questions:
+            lines = [
+                "Some questions were skipped because teacher answer keys are missing:",
+                *[
+                    f"Q{int(entry.get('question_number', 0) or 0)}: {entry.get('title', 'Untitled')} "
+                    f"({int(entry.get('responses', 0) or 0)} response(s))"
+                    for entry in skipped_questions[:8]
+                    if isinstance(entry, dict)
+                ],
+            ]
+            if len(skipped_questions) > 8:
+                lines.append(f"+{len(skipped_questions) - 8} more")
+            self.detail_warning.setText("\n".join(lines))
+            self.detail_warning.show()
+        else:
+            self.detail_warning.hide()
         self.detail_progress_text.setText("Overall forms progress")
         self._update_overall_progress_bar()
         self.pipeline_updated.setText(meta.get("finished_at") or meta.get("started_at") or "Ready")
@@ -1967,6 +1994,7 @@ class FormManager(QMainWindow):
             "done": "DONE",
             "failed": "FAILED",
             "skipped": "SKIPPED",
+            "partial": "PARTIAL",
         }.get(status, str(status).upper())
 
     def _format_form_meta_line(self, meta):
@@ -2006,6 +2034,8 @@ class FormManager(QMainWindow):
             return "-"
         if status == "skipped":
             return "Skipped"
+        if status == "partial":
+            return "Partial"
         completed = int(meta.get("completed", 0) or 0)
         total = int(meta.get("total", 0) or 0)
         if status == "queued" and completed <= 0:
@@ -2197,14 +2227,14 @@ class FormManager(QMainWindow):
         now = datetime.now().strftime("%H:%M:%S")
         if status == "running" and not meta.get("started_at"):
             meta["started_at"] = now
-        if status in {"done", "failed", "skipped"}:
+        if status in {"done", "failed", "skipped", "partial"}:
             meta["finished_at"] = now
         item.setData(Qt.UserRole + 1, meta)
         self._refresh_form_row(item)
         self._refresh_queue_positions()
 
     def _refresh_queue_positions(self):
-        counts = {"queued": 0, "running": 0, "done": 0, "skipped": 0, "failed": 0}
+        counts = {"queued": 0, "running": 0, "done": 0, "partial": 0, "skipped": 0, "failed": 0}
         total = self.form_list.count()
         for i in range(total):
             item = self.form_list.item(i)
@@ -2219,7 +2249,8 @@ class FormManager(QMainWindow):
             self.form_queue_summary.setText(f"{active} in queue")
             self.form_queue_summary.setToolTip(
                 f"{counts.get('queued', 0)} queued | {counts.get('running', 0)} running | "
-                f"{counts.get('done', 0)} done | {counts.get('skipped', 0)} skipped | "
+                f"{counts.get('done', 0)} done | {counts.get('partial', 0)} partial | "
+                f"{counts.get('skipped', 0)} skipped | "
                 f"{counts.get('failed', 0)} failed"
             )
         if hasattr(self, "command_summary"):
@@ -3227,8 +3258,9 @@ class FormManager(QMainWindow):
         title = "Unknown Form"
         if item:
             meta = item.data(Qt.UserRole + 1) or {}
-            if meta.get("status") == "skipped":
-                self.append_debug(f"<font color='orange'>[AUTO {now_str}] Skipped: {meta.get('title', title)}</font>")
+            if meta.get("status") in {"skipped", "partial"}:
+                label = "Partial" if meta.get("status") == "partial" else "Skipped"
+                self.append_debug(f"<font color='orange'>[AUTO {now_str}] {label}: {meta.get('title', title)}</font>")
                 return
             title = meta.get("title", title)
             self._set_form_status(item, "done", "Finished and saved grading updates")
@@ -3237,7 +3269,7 @@ class FormManager(QMainWindow):
         # After a form finishes, if the grader has become idle, start the next queued forms.
         QTimer.singleShot(800, self._maybe_start_next_after_finish)
 
-    def update_skipped_form(self, form_id, url="", reason="Skipped"):
+    def update_skipped_form(self, form_id, url="", reason="Missing teacher answer key", missing_questions_json="[]"):
         item = self._find_form_item_by_id(form_id) if form_id else None
         if not item and url:
             item = self._find_form_item_by_url(url)
@@ -3252,7 +3284,16 @@ class FormManager(QMainWindow):
             )
             return
         detail = str(reason or "Skipped")
-        self._set_form_status(item, "skipped", detail)
+        try:
+            skipped_questions = json.loads(str(missing_questions_json or "[]"))
+        except Exception:
+            skipped_questions = []
+        if not isinstance(skipped_questions, list):
+            skipped_questions = []
+        meta = item.data(Qt.UserRole + 1) or {}
+        meta["skipped_questions"] = skipped_questions
+        item.setData(Qt.UserRole + 1, meta)
+        self._set_form_status(item, "partial", detail)
 
     def _maybe_start_next_after_finish(self):
         # Only start next run if not currently grading and no grader thread running

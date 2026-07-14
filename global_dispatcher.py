@@ -453,9 +453,10 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                 item["structure"] = structure
 
                 missing_keys = missing_answer_key_questions(structure, expected_by_item_id, answers_by_qid)
+                missing_qids = {str(entry.get("question_id") or "") for entry in missing_keys}
                 if missing_keys:
-                    forms_results[i]["skipped"] = True
-                    forms_results[i]["skip_reason"] = "Missing teacher answer key"
+                    forms_results[i]["partial"] = True
+                    forms_results[i]["partial_reason"] = "Missing teacher answer key"
                     forms_results[i]["missing_keys"] = missing_keys
                     detail = "; ".join(
                         f"Q{entry['question_number']} {entry['title']!r} ({entry['responses']} response(s))"
@@ -465,7 +466,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                         detail += f"; +{len(missing_keys) - 8} more"
                     log(
                         "WARNING",
-                        f"[FORM SKIPPED] form_id={form_id} title={title!r} "
+                        f"[FORM PARTIAL] form_id={form_id} title={title!r} "
                         f"missing_teacher_answer_keys={len(missing_keys)} details={detail}",
                     )
                     gui_event(
@@ -475,18 +476,25 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                         url=item.get("url", ""),
                         reason="Missing teacher answer key",
                         message=(
-                            "Skipped this form because one or more answered questions have no teacher canonical answer. "
-                            "Add the missing answer key(s), then run grading again."
+                            "Some questions were skipped because they have learner responses but no teacher canonical answer. "
+                            "Questions with teacher answers will still be graded."
                         ),
                         missing_questions=missing_keys,
                     )
-                    continue
 
                 for q in structure:
                     qid = q.get("questionId")
                     expected = get_effective_expected(q, expected_by_item_id.get(q.get("itemId"), []))
                     q["trusted_expected"] = expected[:1]
                     fetched_answers = answers_by_qid.get(qid, [])
+                    if str(qid or "") in missing_qids:
+                        forms_results[i]["counts"][qid] = 0
+                        log(
+                            "WARNING",
+                            f"[QUESTION SKIPPED] form_id={form_id} question_id={qid} "
+                            f"reason=missing_teacher_answer_key responses={len(fetched_answers)}",
+                        )
+                        continue
                     if deduplicate_answers:
                         answers = remove_exact_duplicate_answers(fetched_answers)
                         removed_duplicates = len(fetched_answers) - len(answers)
@@ -1308,9 +1316,8 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
         meta = data["meta"]
         form_id = meta.get("form_id", "")
         title = meta.get("title", f"Form_{form_id}")
-        if data.get("skipped"):
-            log("INFO", f"[FORM] SKIPPED '{title}' ({form_id}) reason={data.get('skip_reason', 'Skipped')}")
-            continue
+        if data.get("partial"):
+            log("INFO", f"[FORM] PARTIAL '{title}' ({form_id}) reason={data.get('partial_reason', 'Partial')}")
         structure = meta.get("structure", [])
         log("INFO", f"[FORM] START {i}/{forms_total} | form_id={form_id}")
         all_questions = []

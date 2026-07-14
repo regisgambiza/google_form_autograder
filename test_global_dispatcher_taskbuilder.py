@@ -81,6 +81,82 @@ class _FakeService:
         return self._forms_api
 
 
+def test_missing_answer_key_question_is_skipped_but_keyed_questions_are_graded(monkeypatch, capsys):
+    structure = [
+        {"questionId": "q1", "itemId": "item1", "index": 0, "type": "SHORT_ANSWER", "title": "Keyed"},
+        {"questionId": "q2", "itemId": "item2", "index": 1, "type": "SHORT_ANSWER", "title": "Missing key"},
+    ]
+    form_payload = {
+        "info": {"title": "Partial Form"},
+        "items": [
+            {
+                "itemId": "item1",
+                "questionItem": {
+                    "question": {
+                        "grading": {"correctAnswers": {"answers": [{"value": "7"}]}}
+                    }
+                },
+            },
+            {
+                "itemId": "item2",
+                "questionItem": {
+                    "question": {
+                        "grading": {"correctAnswers": {"answers": []}}
+                    }
+                },
+            },
+        ],
+    }
+    responses_payload = {
+        "responses": [{
+            "answers": {
+                "q1": {"textAnswers": {"answers": [{"value": "7"}]}},
+                "q2": {"textAnswers": {"answers": [{"value": "student missing-key answer"}]}},
+            }
+        }]
+    }
+    fake_service = _FakeService(form_payload, responses_payload)
+    update_calls = []
+    logs = []
+
+    monkeypatch.setattr(gd, "get_service", lambda: fake_service)
+    monkeypatch.setattr(gd, "get_form_structure", lambda service, form_id: structure)
+    monkeypatch.setattr(gd, "generate_form_feedback", lambda *args, **kwargs: None)
+    monkeypatch.setattr(gd, "save_grading_time", lambda *args, **kwargs: None)
+    monkeypatch.setattr(gd, "update_correct_answers", lambda *args, **kwargs: update_calls.append(args))
+    monkeypatch.setattr(gd, "log", lambda level, msg: logs.append((level, msg)))
+    monkeypatch.setattr(gd, "run_deterministic_checks", lambda *_args, **_kwargs: types.SimpleNamespace(accepted=True, confidence=1.0))
+    monkeypatch.setattr(
+        gd,
+        "load_config",
+        lambda: {
+            "global_prefetch_workers": 1,
+            "deterministic_worker_count": 1,
+            "ai_worker_count": 1,
+            "max_latency_per_answer_seconds": 5,
+            "forms_expensive_reads_per_minute": 6000,
+            "dispatcher_stall_timeout_seconds": 30,
+            "worker_queue_size": 100,
+            "numeric_tolerance": 0.01,
+            "enable_form_context": False,
+        },
+    )
+
+    gd.run_global_dispatcher(
+        form_urls=["https://docs.google.com/forms/d/fake_form_1/viewform"],
+        grade_recent_only=False,
+        generate_report=False,
+    )
+
+    emitted_lines = capsys.readouterr().out.splitlines()
+    assert "FormProgress: 0/1" in emitted_lines
+    assert "FormProgress: 1/1" in emitted_lines
+    assert any('"type": "form_skipped"' in line and "Missing key" in line for line in emitted_lines)
+    assert any('"type": "answer_result"' in line and '"total": 1' in line for line in emitted_lines)
+    assert any("[QUESTION SKIPPED]" in msg for _level, msg in logs)
+    assert any("[FORM] PARTIAL" in msg for _level, msg in logs)
+
+
 def test_task_builder_supplies_work_without_starving(monkeypatch, capsys):
     # 4 questions x 120 responses => enough volume to exercise buffering/refill.
     structure = []
