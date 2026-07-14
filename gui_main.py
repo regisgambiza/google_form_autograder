@@ -1465,6 +1465,11 @@ class FormManager(QMainWindow):
         cfg_jury = cfg.get("jury_models", {}) if cfg else {}
         for configured_model in cfg_jury.values():
             add_model_choice(available_models, seen_model_keys, configured_model)
+        supervisor_model = cfg.get(
+            "openrouter_supervisor_ollama_model",
+            DEFAULT_CONFIG.get("openrouter_supervisor_ollama_model", "gpt-oss:latest"),
+        )
+        add_model_choice(available_models, seen_model_keys, supervisor_model)
         for model_name in ollama_models:
             add_model_choice(available_models, seen_model_keys, model_name)
 
@@ -1548,6 +1553,19 @@ class FormManager(QMainWindow):
             "Ollama provider worker threads. Keep this at 1 unless your local hardware can run multiple model requests efficiently. "
             "Changes apply to the next grading run."
         )
+        supervisor_model_combo = QComboBox(dialog)
+        supervisor_model_combo.setToolTip(
+            "Local Ollama model used to audit OpenRouter judge quality. "
+            "This does not grade student answers directly unless OpenRouter falls back to Ollama."
+        )
+        if available_models:
+            supervisor_model_combo.addItems(available_models)
+        if supervisor_model and normalize_model_key(supervisor_model) not in {
+            normalize_model_key(supervisor_model_combo.itemText(i))
+            for i in range(supervisor_model_combo.count())
+        }:
+            supervisor_model_combo.insertItem(0, supervisor_model)
+        supervisor_model_combo.setCurrentText(str(supervisor_model or "gpt-oss:latest"))
         batch_size_spin = QSpinBox(dialog)
         batch_size_spin.setRange(1, 200)
         batch_auto_checkbox = QCheckBox("Auto", dialog)
@@ -1698,6 +1716,7 @@ class FormManager(QMainWindow):
         form.addRow("AI Worker Threads:", ai_worker_count_spin)
         form.addRow("OpenRouter Provider Workers:", openrouter_worker_count_spin)
         form.addRow("Ollama Provider Workers:", ollama_worker_count_spin)
+        form.addRow("OpenRouter Monitor Model:", supervisor_model_combo)
         form.addRow("Ollama Answers per Judge Call:", ollama_judge_answer_batch_size_spin)
         form.addRow("OpenRouter Answers per Judge Call:", openrouter_judge_answer_batch_size_spin)
 
@@ -1829,6 +1848,8 @@ class FormManager(QMainWindow):
             config_data["ai_worker_count"] = int(ai_worker_count_spin.value())
             config_data["openrouter_worker_count"] = int(openrouter_worker_count_spin.value())
             config_data["ollama_worker_count"] = int(ollama_worker_count_spin.value())
+            if supervisor_model_combo.currentText():
+                config_data["openrouter_supervisor_ollama_model"] = supervisor_model_combo.currentText()
             # Keep provider-level capacity in ProviderManager; application workers may
             # process multiple questions while Ollama remains capped by ollama_worker_count.
             config_data["max_concurrent_judge_http"] = 1

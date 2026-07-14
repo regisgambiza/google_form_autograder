@@ -91,6 +91,70 @@ def test_openrouter_supervisor_reports_empty_audit_response():
         manager._run_openrouter_audit(ollama, _audit_item(), {"openrouter_supervisor_timeout_seconds": 10})
 
 
+def test_openrouter_supervisor_prompt_is_audit_only_and_omits_grader_prompt():
+    item = _AuditItem(
+        request_id="audit-2",
+        judge_name="strict_judge",
+        model="openrouter-model",
+        payload={
+            "messages": [
+                {"role": "system", "content": "You are a math grader."},
+                {"role": "user", "content": "Solve 4x - 7x and grade the student answer."},
+            ]
+        },
+        parsed={
+            "decision": "NO",
+            "confidence": 0.9,
+            "reason_short": "student answer contradicts expected",
+            "requirements_missing": ["correct expression"],
+            "contradictions": ["wrong simplification"],
+        },
+        latency_ms=55.0,
+    )
+
+    prompt = ProviderManager._make_openrouter_audit_prompt(item)
+
+    assert "AUDIT ONLY" in prompt
+    assert "Do not solve" in prompt
+    assert "OPENROUTER_OUTPUT_TO_AUDIT" in prompt
+    assert "Solve 4x - 7x" not in prompt
+    assert "You are a math grader" not in prompt
+    assert "student answer contradicts expected" in prompt
+
+
+def test_openrouter_supervisor_sends_audit_only_prompt_to_ollama():
+    cfg = {
+        "openrouter_supervisor_ollama_model": "gpt-oss:latest",
+        "openrouter_supervisor_timeout_seconds": 10,
+        "openrouter_supervisor_num_predict": 256,
+        "ollama_options": {"judge_num_ctx": 2048},
+    }
+    ollama = _FakeProvider([
+        _ollama_response({
+            "reliable": True,
+            "aligned": True,
+            "alignment_score": 1.0,
+            "suspicion_score": 0.0,
+            "too_strict": False,
+            "too_lenient": False,
+            "json_quality": "valid",
+            "reason_short": "consistent audit output",
+        })
+    ])
+    manager = ProviderManager()
+
+    manager._run_openrouter_audit(ollama, _audit_item(), cfg)
+
+    sent_payload = ollama.calls[0][0]
+    messages = sent_payload["messages"]
+    assert sent_payload["model"] == "gpt-oss:latest"
+    assert sent_payload["format"] == "json"
+    assert sent_payload["options"]["num_predict"] == 256
+    assert "NOT solving" in messages[0]["content"]
+    assert "AUDIT ONLY" in messages[1]["content"]
+    assert "grade this" not in messages[1]["content"]
+
+
 def _batch_request(answer_count, judge_name="semantic_judge"):
     schema = {
         "type": "object",

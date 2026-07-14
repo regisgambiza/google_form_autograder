@@ -1006,7 +1006,7 @@ def call_judge_role_batch_sync(
             not split_fallback_used
             and _provider_manager_enabled()
             and len(answers) > ollama_limit
-            and last_provider_error_category in {"rate_limited", "out_of_credits", "unavailable", "disabled"}
+            and last_provider_error_category
         ):
             split_fallback_used = True
             log(

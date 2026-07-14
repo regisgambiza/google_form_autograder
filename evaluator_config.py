@@ -103,11 +103,11 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "model_selection_trace_enabled": True,
     "model_selection_trace_path": "logs/model_selection.jsonl",
     "openrouter_ollama_supervisor_enabled": True,
-    "openrouter_supervisor_ollama_model": "llama3.1:8b",
+    "openrouter_supervisor_ollama_model": "gpt-oss:latest",
     "openrouter_supervisor_sample_every": 10,
     "openrouter_supervisor_queue_size": 250,
     "openrouter_supervisor_timeout_seconds": 45,
-    "openrouter_supervisor_num_predict": 256,
+    "openrouter_supervisor_num_predict": 1024,
     "openrouter_blocked_models": [
         "cohere/north-mini-code:free",
         "qwen/qwen3-coder:free",

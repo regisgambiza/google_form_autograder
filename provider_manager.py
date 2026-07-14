@@ -444,18 +444,19 @@ class ProviderManager:
                 {
                     "role": "system",
                     "content": (
-                        "You audit AI grader outputs. Return only valid JSON with keys: "
-                        "reliable boolean, aligned boolean, alignment_score number 0..1, "
-                        "suspicion_score number 0..1, too_strict boolean, too_lenient boolean, "
-                        "json_quality string, reason_short string."
+                        "You are an auditor of another AI grader. You are NOT solving the student's problem. "
+                        "You are NOT grading the student answer yourself. Inspect only whether the OpenRouter "
+                        "grader output is internally reliable, consistent, and usable. Return exactly one JSON "
+                        "object and no prose."
                     ),
                 },
                 {"role": "user", "content": prompt},
             ],
+            "format": "json",
             "stream": False,
             "options": {
                 "temperature": 0.0,
-                "num_predict": int(cfg.get("openrouter_supervisor_num_predict", 256)),
+                "num_predict": int(cfg.get("openrouter_supervisor_num_predict", 1024)),
                 "num_ctx": int((cfg.get("ollama_options") or {}).get("judge_num_ctx", 2048)),
             },
         }
@@ -475,24 +476,35 @@ class ProviderManager:
 
     @staticmethod
     def _make_openrouter_audit_prompt(item: _AuditItem) -> str:
-        return json.dumps(
-            {
-                "task": "Audit whether this OpenRouter judge output looks reliable and aligned with the grading prompt.",
-                "request_id": item.request_id,
-                "judge_name": item.judge_name,
-                "openrouter_model": item.model,
-                "latency_ms": item.latency_ms,
-                "grader_prompt": item.payload,
-                "openrouter_parsed_json": item.parsed,
-                "scoring_guidance": {
-                    "suspicion_score": "0 means healthy, 1 means likely bad grader output",
-                    "alignment_score": "1 means strongly aligned with the teacher answer and prompt",
-                    "too_strict": "true if it rejects/complains about harmless missing wording, units, formatting, or alternatives",
-                    "too_lenient": "true if it accepts an answer despite a clear contradiction",
-                },
+        parsed = item.parsed if isinstance(item.parsed, dict) else {}
+        audit_packet = {
+            "request_id": item.request_id,
+            "judge_name": item.judge_name,
+            "openrouter_model": item.model,
+            "openrouter_latency_ms": item.latency_ms,
+            "openrouter_output_to_audit": {
+                "decision": parsed.get("decision"),
+                "confidence": parsed.get("confidence"),
+                "reason_short": parsed.get("reason_short") or parsed.get("reason"),
+                "requirements_met": parsed.get("requirements_met") or [],
+                "requirements_missing": parsed.get("requirements_missing") or [],
+                "contradictions": parsed.get("contradictions") or [],
+                "calculation_check": parsed.get("calculation_check"),
             },
-            ensure_ascii=True,
-        )[:12000]
+        }
+        return (
+            "AUDIT ONLY. Do not solve the math/problem. Do not decide the student's grade. "
+            "Only judge whether OPENROUTER_OUTPUT_TO_AUDIT is a reliable grader output.\n\n"
+            "Return exactly this JSON shape with double-quoted keys and no markdown:\n"
+            "{\"reliable\": true, \"aligned\": true, \"alignment_score\": 1.0, "
+            "\"suspicion_score\": 0.0, \"too_strict\": false, \"too_lenient\": false, "
+            "\"json_quality\": \"valid\", \"reason_short\": \"brief audit reason\"}\n\n"
+            "Set suspicion_score high when the output is empty, malformed, self-contradictory, "
+            "overly strict, overly lenient, or unrelated to grading. Set aligned=false if the "
+            "OpenRouter output appears to ignore its own decision/reason/missing/contradiction fields.\n\n"
+            "OPENROUTER_OUTPUT_TO_AUDIT:\n"
+            f"{json.dumps(audit_packet, ensure_ascii=True)[:5000]}"
+        )
 
     def _start_worker(self, provider_name: str, index: int) -> None:
         worker_id = f"{provider_name}-{index}"

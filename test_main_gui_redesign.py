@@ -272,6 +272,8 @@ def test_settings_exposes_cache_and_history_clear_action(monkeypatch):
     assert "raw mode; take every response exactly as read from the form" in source
     assert "Ollama Answers per Judge Call:" in source
     assert "OpenRouter Answers per Judge Call:" in source
+    assert "OpenRouter Monitor Model:" in source
+    assert 'config_data["openrouter_supervisor_ollama_model"]' in source
     assert 'config_data["ollama_judge_answer_batch_size"]' in source
     assert 'config_data["openrouter_judge_answer_batch_size"]' in source
 

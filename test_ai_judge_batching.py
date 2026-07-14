@@ -214,6 +214,51 @@ def test_oversized_provider_batch_splits_to_ollama_sized_chunks(monkeypatch):
     assert all(result["decision"] == "YES" for result in out.values())
 
 
+def test_oversized_provider_batch_splits_to_single_ollama_calls_after_validation_failure(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(
+        ai_judges,
+        "load_config",
+        lambda: {
+            "jury_models": {"semantic_judge": "model-a"},
+            "provider_manager_enabled": True,
+            "provider_priority": ["openrouter", "ollama"],
+            "judge_timeout_seconds": 30,
+            "judge_http_timeout_seconds": 30,
+            "ollama_options": {"judge_num_ctx": 2048, "judge_num_predict": 512},
+            "judge_batch_num_predict": 1024,
+            "judge_answer_batch_size": 25,
+            "ollama_judge_answer_batch_size": 1,
+            "openrouter_judge_answer_batch_size": 25,
+        },
+    )
+    monkeypatch.setattr(ai_judges, "log_post_inference_gpu_probe_once", lambda *_args, **_kwargs: None)
+
+    def fake_chat_response(role, payload, timeout_s, request_kind, metadata=None):
+        answer_count = int((metadata or {}).get("batch_answer_count", 1))
+        calls.append(answer_count)
+        if answer_count > 1:
+            raise ai_judges.ProviderError("OpenRouter returned malformed JSON", "validation")
+        return _batch_payload([_judge_result(1)])
+
+    monkeypatch.setattr(ai_judges, "_chat_response", fake_chat_response)
+
+    answers = [f"a{i}" for i in range(4)]
+    out = ai_judges.call_judge_role_batch_sync(
+        "semantic_judge",
+        answers,
+        "question",
+        "expected",
+        {answer: {} for answer in answers},
+        retries=1,
+    )
+
+    assert calls == [4, 1, 1, 1, 1]
+    assert set(out) == set(answers)
+    assert all(result["decision"] == "YES" for result in out.values())
+
+
 def test_model_first_judging_refreshes_answer_batch_size_between_roles(monkeypatch):
     config_calls = []
     batch_calls = []

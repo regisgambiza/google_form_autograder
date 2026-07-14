@@ -121,7 +121,7 @@
     "openrouter_supervisor_sample_every": 10,
     "openrouter_supervisor_queue_size": 250,
     "openrouter_supervisor_timeout_seconds": 45,
-    "openrouter_supervisor_num_predict": 256,
+    "openrouter_supervisor_num_predict": 1024,
     "openrouter_blocked_models": [
         "cohere/north-mini-code:free",
         "qwen/qwen3-coder:free",
