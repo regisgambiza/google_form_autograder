@@ -223,6 +223,32 @@ def test_detail_panel_shows_live_worker_rows():
     assert window.provider_worker_summary.text()
 
 
+def test_model_health_dashboard_summarizes_provider_metrics():
+    window = FormManager()
+    window._update_provider_metrics(
+        "q_openrouter=2 q_ollama=0 openrouter_health=HEALTHY openrouter_circuit=CLOSED "
+        "openrouter_done=40 openrouter_failed=3 openrouter_last_ms=1234 "
+        "openrouter_last_model=tencent/hy3:free openrouter_last_error=OpenRouter_rate_limited "
+        "or_models_total=20 or_models_available=4 or_models_rate_limited=12 or_models_failed=8 "
+        "or_json_failures=6 or_last_success_rate=0.875 or_last_json_failures=2 "
+        "or_avg_suspicion=0.420 or_last_suspicion=0.900 "
+        "or_max_cooldown_s=360 or_last_cooldown_s=60 or_cost_usd=0.123456 "
+        "or_selection_reason=fresh_then_reused_reuse_enabled "
+        "ollama_health=HEALTHY ollama_circuit=CLOSED ollama_done=1 ollama_failed=0 "
+        "ollama_last_ms=900 ollama_last_model=gpt-oss:latest ollama_last_error=- "
+        "submitted=44 completed=41 failed=3 validation_failed=6 retries=5 failovers=1 rpm=10.0 avg_ms=1500"
+    )
+
+    assert "tencent/hy3:free" in window.model_health_rows["current"]["detail"].text()
+    assert "87.5%" in window.model_health_rows["success"]["detail"].text()
+    assert "12 rate-limited" in window.model_health_rows["limits"]["detail"].text()
+    assert "6 JSON failures" in window.model_health_rows["json"]["detail"].text()
+    assert "0.900" in window.model_health_rows["quality"]["detail"].text()
+    assert "1m 0s" in window.model_health_rows["cooldown"]["detail"].text()
+    assert "$0.1235" in window.model_health_rows["cost"]["detail"].text()
+    assert "fresh then reused reuse enabled" in window.model_health_rows["reason"]["detail"].text()
+
+
 def test_ai_worker_rows_use_transformers_names_and_expand_dynamically(monkeypatch):
     window = FormManager()
     assert window.app_worker_cards["ai-1"]["title"].text() == "Optimus Prime"

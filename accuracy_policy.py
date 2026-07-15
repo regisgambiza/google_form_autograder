@@ -9,6 +9,57 @@ REQUIRED_ACCEPT_ROLES = ("semantic_judge", "factual_judge", "concept_judge", "st
 STRONG_REJECTION_CONFIDENCE = 0.90
 
 
+STRICTNESS_PROFILES: Dict[str, Dict[str, object]] = {
+    "strict": {
+        "minimum_judge_confidence": 0.95,
+        "require_distinct_models": True,
+        "review_unanimous_yes_when_not_independent": True,
+        "soften_rejections": False,
+    },
+    "balanced": {
+        "minimum_judge_confidence": 0.90,
+        "require_distinct_models": False,
+        "accept_unanimous_yes": True,
+        "soften_rejections": False,
+    },
+    "lenient": {
+        "minimum_judge_confidence": 0.82,
+        "require_distinct_models": False,
+        "accept_unanimous_yes": True,
+        "accept_yes_majority": True,
+        "soften_rejections": True,
+    },
+    "review-heavy": {
+        "minimum_judge_confidence": 0.95,
+        "require_distinct_models": True,
+        "accept_unanimous_yes": False,
+        "soften_rejections": True,
+    },
+    "practice": {
+        "minimum_judge_confidence": 0.75,
+        "require_distinct_models": False,
+        "accept_unanimous_yes": True,
+        "accept_yes_majority": True,
+        "soften_rejections": True,
+    },
+}
+
+
+def strictness_profile(mode: str) -> Dict[str, object]:
+    key = str(mode or "balanced").strip().casefold().replace("_", "-")
+    aliases = {
+        "extreme": "strict",
+        "conservative": "strict",
+        "normal": "balanced",
+        "review": "review-heavy",
+        "review heavy": "review-heavy",
+    }
+    key = aliases.get(key, key)
+    profile = dict(STRICTNESS_PROFILES.get(key, STRICTNESS_PROFILES["balanced"]))
+    profile["mode"] = key if key in STRICTNESS_PROFILES else "balanced"
+    return profile
+
+
 def judge_role(result: Dict[str, object]) -> str:
     return str(result.get("role", result.get("judge_role", ""))).strip()
 

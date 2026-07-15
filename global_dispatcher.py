@@ -24,7 +24,7 @@ from form_utils import get_form_structure
 from logger import gui_event, log, runtime_snapshot, stage_banner, update_runtime_state
 from response_utils import save_grading_time
 from updater import update_correct_answers
-from answer_key_manager import enqueue_review
+from answer_key_manager import enqueue_review, lookup_teacher_memory
 
 
 @dataclass
@@ -582,6 +582,40 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
 
         def _runner():
             try:
+                memory = lookup_teacher_memory(t.form_id, str(t.question.get("itemId", "")), t.answer)
+                if memory:
+                    decision = "YES" if str(memory.get("decision", "")).upper() == "YES" else "NO"
+                    confidence = 1.0
+                    evidence = {
+                        "question": get_question_context(t.question),
+                        "expected": t.expected,
+                        "answer": t.answer,
+                        "teacher_memory": memory,
+                        "policy": {"policy_reason": "teacher_memory"},
+                        "key_eligible": decision == "YES",
+                    }
+                    result_holder.put((
+                        "ok",
+                        EvaluationResult(
+                            answer=t.answer,
+                            decision=decision,
+                            final_score=confidence if decision == "YES" else 0.0,
+                            semantic_score=confidence if decision == "YES" else 0.0,
+                            concept_score=confidence if decision == "YES" else 0.0,
+                            factual_score=confidence if decision == "YES" else 0.0,
+                            misconception_detected=False,
+                            misconception_description="",
+                            missing_concepts=[],
+                            accepted_concepts=[],
+                            model_agreement=1.0,
+                            confidence=confidence,
+                            fast_path_used=True,
+                            latency_ms=0.0,
+                            stage_reached="teacher_memory",
+                            evidence=evidence,
+                        ),
+                    ))
+                    return
                 result_holder.put((
                     "ok",
                     evaluate_answer(t.answer, t.expected, get_question_context(t.question)),

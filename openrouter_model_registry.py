@@ -71,7 +71,7 @@ class OpenRouterModelRegistry:
                 for model in self._as_list(models):
                     self._remember(model, role=str(role))
                     candidates.append(model)
-        for key in ("openrouter_fallback_models", "openrouter_free_model_catalog"):
+        for key in ("openrouter_fallback_models", "openrouter_free_model_catalog", "openrouter_paid_fallback_models"):
             for model in self._as_list(cfg.get(key) or []):
                 self._remember(model)
                 candidates.append(model)

@@ -892,6 +892,26 @@ class FormManager(QMainWindow):
         self.provider_worker_list.setSpacing(0)
         detail_layout.addLayout(self.provider_worker_list)
 
+        model_health_label = QLabel("Model health")
+        model_health_label.setObjectName("Muted")
+        detail_layout.addSpacing(6)
+        detail_layout.addWidget(model_health_label)
+        self.model_health_rows = {}
+        self.model_health_list = QVBoxLayout()
+        self.model_health_list.setSpacing(0)
+        detail_layout.addLayout(self.model_health_list)
+        for key, title in (
+            ("current", "Current model"),
+            ("success", "Success / latency"),
+            ("limits", "Rate limits / failures"),
+            ("json", "JSON reliability"),
+            ("quality", "Ollama quality"),
+            ("cooldown", "Cooldown"),
+            ("cost", "Cost"),
+            ("reason", "Why chosen"),
+        ):
+            self._ensure_model_health_row(key, title)
+
         self.app_worker_cards = {}
         self.provider_worker_cards = {}
         self.provider_worker_states = {}
@@ -1257,6 +1277,30 @@ class FormManager(QMainWindow):
             widget.style().polish(widget)
         self._refresh_worker_summaries()
 
+    def _ensure_model_health_row(self, key, title):
+        if key in getattr(self, "model_health_rows", {}):
+            return self.model_health_rows[key]
+        row = QFrame()
+        row.setObjectName("PipelineRow")
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(4, 8, 4, 8)
+        title_label = QLabel(title)
+        title_label.setStyleSheet("font-weight:700;")
+        title_label.setMinimumWidth(130)
+        detail_label = QLabel("-")
+        detail_label.setObjectName("Muted")
+        detail_label.setWordWrap(True)
+        layout.addWidget(title_label)
+        layout.addWidget(detail_label, 1)
+        self.model_health_list.addWidget(row)
+        self.model_health_rows[key] = {"frame": row, "title": title_label, "detail": detail_label}
+        return self.model_health_rows[key]
+
+    def _set_model_health_row(self, key, detail, tooltip=None):
+        row = self._ensure_model_health_row(key, key.replace("_", " ").title())
+        row["detail"].setText(str(detail or "-"))
+        row["detail"].setToolTip(str(tooltip or detail or ""))
+
     def _refresh_worker_summaries(self):
         def counts(cards):
             running = sum(1 for card in cards.values() if card.get("state") == "running")
@@ -1418,8 +1462,28 @@ class FormManager(QMainWindow):
             "ai_evaluator_semantic (Semantic Pipeline)",
         ])
 
-        leniency_combo = QComboBox(dialog)
-        leniency_combo.addItems(["extreme", "lenient", "balanced", "strict"])
+        strictness_combo = QComboBox(dialog)
+        strictness_combo.addItems(["strict", "balanced", "lenient", "review-heavy", "practice"])
+        strictness_combo.setToolTip(
+            "Controls how the final AI votes become Accepted, Needs review, or Rejected. "
+            "Strict requires stronger independent agreement; lenient/practice accept more high-confidence equivalent answers."
+        )
+        provider_strategy_combo = QComboBox(dialog)
+        provider_strategy_combo.addItems([
+            "free_first_ollama_fallback",
+            "free_first_paid_fallback",
+            "cheap_paid_only",
+            "openrouter_only",
+            "ollama_only",
+        ])
+        provider_strategy_combo.setToolTip(
+            "Controls provider routing. Paid strategies use the cheap paid fallback model list and respect the spend cap."
+        )
+        max_openrouter_spend_spin = QDoubleSpinBox(dialog)
+        max_openrouter_spend_spin.setRange(0.0, 100.0)
+        max_openrouter_spend_spin.setSingleStep(0.10)
+        max_openrouter_spend_spin.setDecimals(2)
+        max_openrouter_spend_spin.setToolTip("0 means no OpenRouter spend cap for the current app run.")
 
         model_combo = QComboBox(dialog)
         embedding_model_combo = QComboBox(dialog)
@@ -1672,7 +1736,9 @@ class FormManager(QMainWindow):
 
         ev = cfg.get("evaluator", "ai_evaluator")
         evaluator_combo.setCurrentIndex(0 if ev == "ai_evaluator" else (2 if ev == "ai_evaluator_semantic" else 1))
-        leniency_combo.setCurrentText(cfg.get("leniency", "lenient"))
+        strictness_combo.setCurrentText(cfg.get("grading_strictness", cfg.get("leniency", "balanced")))
+        provider_strategy_combo.setCurrentText(cfg.get("provider_strategy", "free_first_ollama_fallback"))
+        max_openrouter_spend_spin.setValue(float(cfg.get("max_openrouter_spend_usd_per_run", 0.0) or 0.0))
         if models:
             model_combo.setCurrentText(models[0])
         embedding_model_combo.setCurrentText(cfg.get("embedding_model", DEFAULT_CONFIG.get("embedding_model", "")))
@@ -1705,6 +1771,7 @@ class FormManager(QMainWindow):
         for role in ("semantic_judge", "factual_judge", "concept_judge", "strict_judge"):
             form.addRow(jury_role_labels[role], jury_combos[role])
         form.addRow("Jury Roles:", jury_status_label)
+        form.addRow("Grading Strictness:", strictness_combo)
         form.addRow("Minimum Judge Confidence:", minimum_judge_confidence_spin)
         form.addRow("Answer-Key Automation:", key_auto_add_checkbox)
         form.addRow("Slow Model Handling:", patient_ai_checkbox)
@@ -1743,6 +1810,8 @@ class FormManager(QMainWindow):
         form.addRow("AI Worker Threads:", ai_worker_count_spin)
         form.addRow("OpenRouter Provider Workers:", openrouter_worker_count_spin)
         form.addRow("Ollama Provider Workers:", ollama_worker_count_spin)
+        form.addRow("Provider Strategy:", provider_strategy_combo)
+        form.addRow("OpenRouter Spend Cap ($):", max_openrouter_spend_spin)
         form.addRow("OpenRouter Monitor Model:", supervisor_model_combo)
         form.addRow("Ollama Answers per Judge Call:", ollama_judge_answer_batch_size_spin)
         form.addRow("OpenRouter Answers per Judge Call:", openrouter_judge_answer_batch_size_spin)
@@ -1809,7 +1878,10 @@ class FormManager(QMainWindow):
             else:
                 config_data["evaluator"] = "ai_evaluator_2"
 
-            config_data["leniency"] = leniency_combo.currentText()
+            config_data["grading_strictness"] = strictness_combo.currentText()
+            config_data["leniency"] = strictness_combo.currentText()
+            config_data["provider_strategy"] = provider_strategy_combo.currentText()
+            config_data["max_openrouter_spend_usd_per_run"] = float(max_openrouter_spend_spin.value())
 
             if model_combo.currentText():
                 config_data["models"] = {"judge": [model_combo.currentText()]}
@@ -3549,6 +3621,7 @@ class FormManager(QMainWindow):
         avg_ms = self._extract_metric_value(payload, "avg_ms") or "0"
         or_model = (self._extract_metric_value(payload, "openrouter_last_model") or "-").replace("_", " ")
         ol_model = (self._extract_metric_value(payload, "ollama_last_model") or "-").replace("_", " ")
+        self._update_model_health_dashboard(payload, or_model, ol_model, avg_ms)
 
         self.log_tabs.setTabText(4, f"Providers (OR: {q_openrouter} | OL: {q_ollama})")
         self._provider_summary_text = (
@@ -3562,6 +3635,84 @@ class FormManager(QMainWindow):
             if active_model and active_model != "-":
                 self.metric_current_model.setText(active_model[:28] + ("..." if len(active_model) > 28 else ""))
                 self.metric_current_model.setToolTip(f"OpenRouter: {or_model}\nOllama: {ol_model}")
+
+    def _format_seconds_compact(self, raw_value):
+        try:
+            seconds = max(0, int(float(raw_value or 0)))
+        except Exception:
+            return "-"
+        if seconds >= 3600:
+            return f"{seconds // 3600}h {(seconds % 3600) // 60}m"
+        if seconds >= 60:
+            return f"{seconds // 60}m {seconds % 60}s"
+        return f"{seconds}s"
+
+    def _update_model_health_dashboard(self, payload, or_model="-", ol_model="-", avg_ms="0"):
+        total = self._extract_metric_value(payload, "or_models_total") or "0"
+        available = self._extract_metric_value(payload, "or_models_available") or "0"
+        rate_limited = self._extract_metric_value(payload, "or_models_rate_limited") or "0"
+        failed = self._extract_metric_value(payload, "or_models_failed") or "0"
+        json_failures = self._extract_metric_value(payload, "or_json_failures") or "0"
+        last_json_failures = self._extract_metric_value(payload, "or_last_json_failures") or "0"
+        success_rate = self._extract_metric_value(payload, "or_last_success_rate") or "0"
+        avg_suspicion = self._extract_metric_value(payload, "or_avg_suspicion") or "0"
+        last_suspicion = self._extract_metric_value(payload, "or_last_suspicion") or "0"
+        max_cooldown = self._extract_metric_value(payload, "or_max_cooldown_s") or "0"
+        last_cooldown = self._extract_metric_value(payload, "or_last_cooldown_s") or "0"
+        cost = self._extract_metric_value(payload, "or_cost_usd") or "0"
+        reason = (self._extract_metric_value(payload, "or_selection_reason") or "-").replace("_", " ")
+        openrouter_error = (self._extract_metric_value(payload, "openrouter_last_error") or "-").replace("_", " ")
+        try:
+            success_percent = float(success_rate) * 100.0
+        except Exception:
+            success_percent = 0.0
+        try:
+            cost_value = float(cost or 0.0)
+        except Exception:
+            cost_value = 0.0
+
+        remaining_cost = "-"
+        item = self._find_form_item_by_url(self.current_form_url)
+        if item:
+            meta = item.data(Qt.UserRole + 1) or {}
+            completed = int(meta.get("completed", 0) or 0)
+            total_answers = int(meta.get("total", 0) or 0)
+            if completed > 0 and total_answers > completed and cost_value > 0:
+                remaining = (cost_value / completed) * (total_answers - completed)
+                remaining_cost = f"${remaining:.4f}"
+
+        self._set_model_health_row(
+            "current",
+            f"OpenRouter: {or_model} | Ollama: {ol_model}",
+            f"OpenRouter current/last model: {or_model}\nOllama current/last model: {ol_model}",
+        )
+        self._set_model_health_row(
+            "success",
+            f"{success_percent:.1f}% success on current OpenRouter model | avg {avg_ms}ms",
+        )
+        self._set_model_health_row(
+            "limits",
+            f"{available}/{total} available | {rate_limited} rate-limited | {failed} failed",
+            f"Last OpenRouter error: {openrouter_error}",
+        )
+        self._set_model_health_row(
+            "json",
+            f"{json_failures} JSON failures total | {last_json_failures} on current model",
+        )
+        self._set_model_health_row(
+            "quality",
+            f"Ollama suspicion avg {avg_suspicion} | current {last_suspicion}",
+            "0.00 is trusted, 1.00 is highly suspicious according to the local Ollama monitor.",
+        )
+        self._set_model_health_row(
+            "cooldown",
+            f"current {self._format_seconds_compact(last_cooldown)} | max {self._format_seconds_compact(max_cooldown)}",
+        )
+        self._set_model_health_row(
+            "cost",
+            f"${cost_value:.4f} so far | est remaining {remaining_cost}",
+        )
+        self._set_model_health_row("reason", reason)
 
     def _update_app_worker(self, payload):
         worker_id = self._extract_metric_value(payload, "id") or "ai"

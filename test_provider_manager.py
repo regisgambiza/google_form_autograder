@@ -51,6 +51,45 @@ def _request(judge_name="semantic_judge"):
     )
 
 
+def test_provider_strategy_cheap_paid_only_uses_paid_models(monkeypatch):
+    cfg = {
+        "provider_strategy": "cheap_paid_only",
+        "openrouter_dynamic_model_pool_enabled": False,
+        "openrouter_models": {"semantic_judge": ["free-role:free"]},
+        "openrouter_fallback_models": ["free-fallback:free"],
+        "openrouter_paid_fallback_models": ["cheap-paid"],
+        "openrouter_blocked_models": [],
+        "openrouter_blocked_model_keywords": [],
+    }
+    monkeypatch.setattr(provider_manager, "load_config", lambda: cfg)
+    manager = ProviderManager()
+
+    assert manager._provider_order(_request()) == ["openrouter"]
+    assert manager._models_for_provider("openrouter", _request()) == ["cheap-paid"]
+
+
+def test_provider_strategy_free_first_paid_fallback_appends_paid_models(monkeypatch):
+    cfg = {
+        "provider_strategy": "free_first_paid_fallback",
+        "provider_priority": ["openrouter", "ollama"],
+        "openrouter_dynamic_model_pool_enabled": False,
+        "openrouter_models": {"semantic_judge": ["free-role:free"]},
+        "openrouter_fallback_models": ["free-fallback:free"],
+        "openrouter_paid_fallback_models": ["cheap-paid"],
+        "openrouter_blocked_models": [],
+        "openrouter_blocked_model_keywords": [],
+    }
+    monkeypatch.setattr(provider_manager, "load_config", lambda: cfg)
+    manager = ProviderManager()
+
+    assert manager._provider_order(_request()) == ["openrouter", "ollama"]
+    assert manager._models_for_provider("openrouter", _request()) == [
+        "free-role:free",
+        "free-fallback:free",
+        "cheap-paid",
+    ]
+
+
 def _audit_item():
     return _AuditItem(
         request_id="audit-1",

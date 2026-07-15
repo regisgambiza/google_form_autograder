@@ -130,6 +130,8 @@ class ProviderManager:
             "openrouter_audits_completed": 0,
             "openrouter_audits_failed": 0,
             "openrouter_audits_skipped": 0,
+            "openrouter_estimated_cost_usd": 0.0,
+            "openrouter_last_selection_reason": "-",
             "total_latency_ms": 0.0,
             "started_at": time.time(),
         }
@@ -225,6 +227,7 @@ class ProviderManager:
                         response = self._submit_and_wait(item)
                         self._record_success(provider_name, response.latency_ms)
                         self._record_model_success(provider_name, model, response.latency_ms, request.judge_name)
+                        self._record_openrouter_cost(provider_name, model, response.tokens)
                         _trace_model_selection(
                             "model_success",
                             request_id=request.request_id,
@@ -613,7 +616,13 @@ class ProviderManager:
 
     def _provider_order(self, request: ProviderRequest) -> List[str]:
         cfg = load_config()
-        configured = [str(x).lower() for x in cfg.get("provider_priority", ["openrouter", "ollama"])]
+        strategy = str(cfg.get("provider_strategy", "") or "").strip().casefold()
+        if strategy in {"ollama_only", "local_only"}:
+            configured = ["ollama"]
+        elif strategy in {"openrouter_only", "cheap_paid_only"}:
+            configured = ["openrouter"]
+        else:
+            configured = [str(x).lower() for x in cfg.get("provider_priority", ["openrouter", "ollama"])]
         order = [str(x).lower() for x in (request.metadata.get("provider_priority") or configured)]
         deduped = []
         for provider in order:
@@ -625,6 +634,7 @@ class ProviderManager:
             request_id=request.request_id,
             judge=request.judge_name,
             configured=configured,
+            provider_strategy=strategy or "configured",
             metadata_priority=request.metadata.get("provider_priority"),
             resolved=resolved,
         )
@@ -643,10 +653,17 @@ class ProviderManager:
                 models=models,
             )
             return models
+        strategy = str(cfg.get("provider_strategy", "free_first_ollama_fallback") or "").strip().casefold()
         role_models = ((cfg.get("openrouter_models") or {}).get(request.judge_name) or [])
-        fallback_models = self._rotate_models_for_role(cfg.get("openrouter_fallback_models") or [], request.judge_name)
+        free_fallback_models = self._rotate_models_for_role(cfg.get("openrouter_fallback_models") or [], request.judge_name)
+        paid_fallback_models = self._rotate_models_for_role(cfg.get("openrouter_paid_fallback_models") or [], request.judge_name)
         request_fallback_models = self._rotate_models_for_role(request.fallback_models, request.judge_name)
-        models = [*request.model_preferences, *role_models, *request_fallback_models, *fallback_models]
+        if strategy == "cheap_paid_only":
+            models = [*request.model_preferences, *paid_fallback_models]
+        elif strategy in {"free_first_paid_fallback", "paid_fallback"}:
+            models = [*request.model_preferences, *role_models, *request_fallback_models, *free_fallback_models, *paid_fallback_models]
+        else:
+            models = [*request.model_preferences, *role_models, *request_fallback_models, *free_fallback_models]
         ordered = self._openrouter_registry.order_models(request.judge_name, models, cfg)
         avoid = {
             str(model).strip().casefold()
@@ -667,7 +684,9 @@ class ProviderManager:
             request_model_preferences=list(request.model_preferences),
             request_fallback_models=list(request.fallback_models),
             rotated_request_fallback_models=request_fallback_models,
-            rotated_config_fallback_models=fallback_models,
+            rotated_config_fallback_models=free_fallback_models,
+            rotated_paid_fallback_models=paid_fallback_models,
+            provider_strategy=strategy,
             raw_candidate_count=len(models),
             raw_candidates=models,
             ordered_count=len(ordered),
@@ -688,6 +707,7 @@ class ProviderManager:
                 reason="avoid_disabled_or_empty",
                 selected=ordered,
             )
+            self._record_openrouter_selection_reason("avoid_disabled_or_empty")
             return ordered
         fresh = [model for model in ordered if model.casefold() not in avoid]
         reused = [model for model in ordered if model.casefold() in avoid]
@@ -707,6 +727,7 @@ class ProviderManager:
                     selected=fresh,
                     excluded_reused=reused,
                 )
+                self._record_openrouter_selection_reason("fresh_only_reuse_disabled")
                 return fresh
             _trace_model_selection(
                 "openrouter_selected_pool",
@@ -717,6 +738,7 @@ class ProviderManager:
                 selected=[*fresh, *reused],
                 reused=reused,
             )
+            self._record_openrouter_selection_reason("fresh_then_reused_reuse_enabled")
             return [*fresh, *reused]
         if not bool(cfg.get("openrouter_allow_model_reuse_when_exhausted", False)):
             log(
@@ -733,6 +755,7 @@ class ProviderManager:
                 selected=[],
                 excluded_reused=reused,
             )
+            self._record_openrouter_selection_reason("all_candidates_avoided_reuse_disabled")
             return []
         log(
             "WARNING",
@@ -748,7 +771,12 @@ class ProviderManager:
             selected=ordered,
             reused=reused,
         )
+        self._record_openrouter_selection_reason("all_candidates_avoided_reuse_enabled")
         return ordered
+
+    def _record_openrouter_selection_reason(self, reason: str) -> None:
+        with self._lock:
+            self._metrics["openrouter_last_selection_reason"] = str(reason or "-")
 
     @staticmethod
     def _rotate_models_for_role(models: List[str], role: str) -> List[str]:
@@ -760,6 +788,20 @@ class ProviderManager:
 
     def _provider_accepts_request(self, provider_name: str, request: ProviderRequest) -> bool:
         """Prevent oversized batched prompts from falling back into local Ollama."""
+        if provider_name == "openrouter":
+            cfg = load_config()
+            max_spend = float(cfg.get("max_openrouter_spend_usd_per_run", 0.0) or 0.0)
+            if max_spend > 0:
+                with self._lock:
+                    spent = float(self._metrics.get("openrouter_estimated_cost_usd", 0.0) or 0.0)
+                if spent >= max_spend:
+                    log(
+                        "WARNING",
+                        f"[PROVIDER ROUTE] skip provider=openrouter request={request.request_id} "
+                        f"estimated_spend=${spent:.4f} cap=${max_spend:.4f}",
+                    )
+                    return False
+            return True
         if provider_name != "ollama":
             return True
         try:
@@ -815,6 +857,26 @@ class ProviderManager:
     def _record_model_success(self, provider_name: str, model: str, latency_ms: float, role: str) -> None:
         if provider_name == "openrouter":
             self._openrouter_registry.record_success(model, latency_ms, role=role)
+
+    def _record_openrouter_cost(self, provider_name: str, model: str, tokens: Dict[str, object]) -> None:
+        if provider_name != "openrouter" or not tokens:
+            return
+        cfg = load_config()
+        prices = (cfg.get("openrouter_model_prices_per_million") or {}).get(model) or {}
+        try:
+            prompt_tokens = float(tokens.get("prompt_tokens", tokens.get("input_tokens", 0)) or 0)
+            completion_tokens = float(tokens.get("completion_tokens", tokens.get("output_tokens", 0)) or 0)
+            prompt_price = float(prices.get("prompt", 0.0) or 0.0)
+            completion_price = float(prices.get("completion", 0.0) or 0.0)
+        except Exception:
+            return
+        cost = (prompt_tokens / 1_000_000.0 * prompt_price) + (completion_tokens / 1_000_000.0 * completion_price)
+        if cost <= 0:
+            return
+        with self._lock:
+            self._metrics["openrouter_estimated_cost_usd"] = float(
+                self._metrics.get("openrouter_estimated_cost_usd", 0.0) or 0.0
+            ) + cost
 
     def _record_failure(self, provider_name: str, ex: ProviderError) -> None:
         with self._lock:
@@ -879,9 +941,38 @@ class ProviderManager:
         providers = snap["providers"]
         metrics = snap["metrics"]
         provider_metrics = snap["provider_metrics"]
+        openrouter_models = ((snap.get("openrouter_models") or {}).get("models") or {})
         completed = int(metrics.get("completed", 0))
         avg_ms = (float(metrics.get("total_latency_ms", 0.0)) / completed) if completed else 0.0
         elapsed_min = max(1.0 / 60.0, (time.time() - float(metrics.get("started_at", time.time()))) / 60.0)
+        or_last_model = str(provider_metrics["openrouter"]["last_model"] or "-")
+        or_last_stats = openrouter_models.get(or_last_model, {}) if or_last_model != "-" else {}
+        audited = [
+            stats for stats in openrouter_models.values()
+            if int(stats.get("quality_audits", 0) or 0) > 0
+        ]
+        audit_count = sum(int(stats.get("quality_audits", 0) or 0) for stats in audited)
+        weighted_suspicion = (
+            sum(
+                float(stats.get("avg_suspicion", 0.0) or 0.0)
+                * int(stats.get("quality_audits", 0) or 0)
+                for stats in audited
+            ) / audit_count
+            if audit_count
+            else 0.0
+        )
+        rate_limited_models = sum(1 for stats in openrouter_models.values() if int(stats.get("rate_limits", 0) or 0) > 0)
+        failed_models = sum(1 for stats in openrouter_models.values() if int(stats.get("failures", 0) or 0) > 0)
+        json_failures = sum(int(stats.get("validation_failures", 0) or 0) for stats in openrouter_models.values())
+        available_models = sum(1 for stats in openrouter_models.values() if float(stats.get("cooldown_remaining_s", 0.0) or 0.0) <= 0.0)
+        max_cooldown_s = max(
+            [float(stats.get("cooldown_remaining_s", 0.0) or 0.0) for stats in openrouter_models.values()]
+            or [0.0]
+        )
+        or_success_rate = float(or_last_stats.get("success_rate", 0.0) or 0.0)
+        or_last_suspicion = float(or_last_stats.get("avg_suspicion", 0.0) or 0.0)
+        or_last_cooldown_s = float(or_last_stats.get("cooldown_remaining_s", 0.0) or 0.0)
+        or_last_json_failures = int(or_last_stats.get("validation_failures", 0) or 0)
 
         def token(value: object) -> str:
             return str(value or "-").replace(" ", "_")
@@ -896,6 +987,19 @@ class ProviderManager:
             f"openrouter_last_ms={float(provider_metrics['openrouter']['last_latency_ms']):.0f}",
             f"openrouter_last_model={provider_metrics['openrouter']['last_model']}",
             f"openrouter_last_error={token(provider_metrics['openrouter']['last_error'])}",
+            f"or_models_total={len(openrouter_models)}",
+            f"or_models_available={available_models}",
+            f"or_models_rate_limited={rate_limited_models}",
+            f"or_models_failed={failed_models}",
+            f"or_json_failures={json_failures}",
+            f"or_last_success_rate={or_success_rate:.3f}",
+            f"or_last_json_failures={or_last_json_failures}",
+            f"or_avg_suspicion={weighted_suspicion:.3f}",
+            f"or_last_suspicion={or_last_suspicion:.3f}",
+            f"or_max_cooldown_s={max_cooldown_s:.0f}",
+            f"or_last_cooldown_s={or_last_cooldown_s:.0f}",
+            f"or_cost_usd={float(metrics.get('openrouter_estimated_cost_usd', 0.0) or 0.0):.6f}",
+            f"or_selection_reason={token(metrics.get('openrouter_last_selection_reason', '-'))}",
             f"ollama_health={providers['ollama']['health']}",
             f"ollama_circuit={providers['ollama']['circuit']}",
             f"ollama_done={provider_metrics['ollama']['completed']}",

@@ -17,7 +17,9 @@ from answer_key_policy import (
 
 BACKUP_DIR = Path("backups") / "answer_keys"
 REVIEW_QUEUE_PATH = Path("answer_key_review_queue.json")
+TEACHER_MEMORY_PATH = Path("teacher_answer_memory.json")
 _REVIEW_LOCK = threading.Lock()
+_MEMORY_LOCK = threading.Lock()
 
 
 @dataclass
@@ -379,6 +381,88 @@ def enqueue_review(record: Dict) -> None:
         REVIEW_QUEUE_PATH.write_text(json.dumps(data, indent=2, ensure_ascii=True), encoding="utf-8")
 
 
+def _memory_key(value: str) -> str:
+    return re.sub(r"\s+", " ", clean_display(value)).strip().casefold()
+
+
+def load_teacher_memory(form_id: str = "", item_id: str = "") -> Dict:
+    if not TEACHER_MEMORY_PATH.exists():
+        return {"version": 1, "items": []}
+    try:
+        data = json.loads(TEACHER_MEMORY_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"version": 1, "items": []}
+    if not form_id and not item_id:
+        return data if isinstance(data, dict) else {"version": 1, "items": []}
+    items = []
+    for item in data.get("items", []):
+        if form_id and item.get("form_id") != form_id:
+            continue
+        if item_id and str(item.get("item_id", "")) != str(item_id):
+            continue
+        items.append(item)
+    return {"version": int(data.get("version", 1) or 1), "items": items}
+
+
+def remember_teacher_decision(
+    form_id: str,
+    item_id: str,
+    question_id: str,
+    answer: str,
+    decision: str,
+    source: str = "teacher_review",
+) -> None:
+    decision = str(decision or "").strip().upper()
+    if decision not in {"YES", "NO"}:
+        return
+    answer_text = str(answer or "")
+    normalized = _memory_key(answer_text)
+    if not form_id or not item_id or not normalized:
+        return
+    now = datetime.now(timezone.utc).isoformat()
+    with _MEMORY_LOCK:
+        data = load_teacher_memory()
+        items = data.setdefault("items", [])
+        for item in items:
+            if (
+                item.get("form_id") == form_id
+                and str(item.get("item_id", "")) == str(item_id)
+                and item.get("normalized") == normalized
+            ):
+                item.update({
+                    "question_id": question_id or item.get("question_id", ""),
+                    "answer": answer_text,
+                    "decision": decision,
+                    "source": source,
+                    "updated_at": now,
+                })
+                break
+        else:
+            items.append({
+                "form_id": form_id,
+                "item_id": item_id,
+                "question_id": question_id or "",
+                "answer": answer_text,
+                "normalized": normalized,
+                "decision": decision,
+                "source": source,
+                "created_at": now,
+                "updated_at": now,
+            })
+        TEACHER_MEMORY_PATH.write_text(json.dumps(data, indent=2, ensure_ascii=True), encoding="utf-8")
+
+
+def lookup_teacher_memory(form_id: str, item_id: str, answer: str) -> Optional[Dict]:
+    normalized = _memory_key(str(answer or ""))
+    if not form_id or not item_id or not normalized:
+        return None
+    data = load_teacher_memory(form_id, item_id)
+    for item in data.get("items", []):
+        if item.get("normalized") == normalized:
+            return dict(item)
+    return None
+
+
 def resolve_reviews(form_id: str, item_id: str, status: str) -> int:
     if status not in {"approved", "rejected"} or not REVIEW_QUEUE_PATH.exists():
         return 0
@@ -395,6 +479,23 @@ def resolve_reviews(form_id: str, item_id: str, status: str) -> int:
                 and str(item.get("item_id", "")) == str(item_id)
                 and item.get("status", "pending") == "pending"
             ):
+                if status == "approved":
+                    yes_answers = item.get("accepted", []) or (
+                        item.get("candidates", []) if not any(key in item for key in ("accepted", "needs_approval", "rejected")) else []
+                    )
+                    no_answers = item.get("rejected", []) or []
+                    decisions = [("YES", answer) for answer in yes_answers] + [("NO", answer) for answer in no_answers]
+                else:
+                    decisions = [("NO", answer) for answer in item.get("candidates", []) or []]
+                for label, answer in decisions:
+                    remember_teacher_decision(
+                        form_id,
+                        str(item.get("item_id", "")),
+                        str(item.get("question_id", "")),
+                        str(answer),
+                        label,
+                        source=f"review_{status}",
+                    )
                 item["status"] = status
                 item["resolved_at"] = datetime.now(timezone.utc).isoformat()
                 changed += 1

@@ -14,7 +14,7 @@ from deterministic_checks import run_deterministic_checks
 from evaluator_config import load_config
 from logger import log
 from normalization import normalize, semantic_deduplicate
-from accuracy_policy import adaptive_math_jury_decision, conservative_jury_decision
+from accuracy_policy import adaptive_math_jury_decision, conservative_jury_decision, strictness_profile
 from decision_audit import record_decision
 from domain_validation import validate_answer_domain
 from semantic_scoring import score_concepts
@@ -350,23 +350,72 @@ def evaluate_answer(
         final_score = combine_scores(agg, emb_score, bool(misconception["misconception_detected"]), cfg)
         accuracy_cfg = cfg.get("accuracy_policy", {})
         adaptive_cfg = cfg.get("adaptive_math_jury", {})
+        profile = strictness_profile(cfg.get("grading_strictness", cfg.get("leniency", "balanced")))
+        policy_min_confidence = float(profile.get(
+            "minimum_judge_confidence",
+            accuracy_cfg.get("minimum_judge_confidence", 0.90),
+        ))
+        require_distinct = bool(profile.get(
+            "require_distinct_models",
+            accuracy_cfg.get("require_distinct_models", True),
+        ))
         if bool(adaptive_cfg.get("enabled", False)):
             decision, confidence, reason, policy_evidence = adaptive_math_jury_decision(
                 judges,
                 cfg.get("jury_models", {}),
-                min_confidence=float(adaptive_cfg.get("minimum_primary_confidence", accuracy_cfg.get("minimum_judge_confidence", 0.90))),
+                min_confidence=policy_min_confidence,
                 primary_roles=adaptive_cfg.get("primary_roles", ["semantic_judge", "factual_judge", "concept_judge"]),
                 adjudicator_role=str(adaptive_cfg.get("adjudicator_role", "strict_judge")),
-                require_distinct_models=bool(accuracy_cfg.get("require_distinct_models", True)),
+                require_distinct_models=require_distinct,
             )
         else:
             decision, confidence, reason, policy_evidence = conservative_jury_decision(
                 judges,
                 cfg.get("jury_models", {}),
-                min_confidence=float(accuracy_cfg.get("minimum_judge_confidence", 0.90)),
+                min_confidence=policy_min_confidence,
                 required_roles=accuracy_cfg.get("required_accept_roles", ["semantic_judge", "factual_judge", "strict_judge"]),
-                require_distinct_models=bool(accuracy_cfg.get("require_distinct_models", True)),
+                require_distinct_models=require_distinct,
             )
+        policy_evidence["strictness_mode"] = profile.get("mode", "balanced")
+        policy_evidence["strictness_profile"] = profile
+        if decision == "REVIEW" and bool(profile.get("accept_unanimous_yes", False)):
+            yes_votes = [
+                j for j in active
+                if str(j.get("decision", "")).upper() == "YES"
+                and float(j.get("confidence", 0.0) or 0.0) >= policy_min_confidence
+                and not j.get("requirements_missing")
+                and not j.get("contradictions")
+            ]
+            if active and len(yes_votes) == len(active):
+                decision = "YES"
+                confidence = min(float(j.get("confidence", 0.0) or 0.0) for j in yes_votes)
+                reason = f"{profile.get('mode', 'balanced')}_unanimous_yes"
+                policy_evidence["strictness_override"] = reason
+        if decision == "REVIEW" and bool(profile.get("accept_yes_majority", False)):
+            yes_votes = [
+                j for j in active
+                if str(j.get("decision", "")).upper() == "YES"
+                and float(j.get("confidence", 0.0) or 0.0) >= policy_min_confidence
+                and not j.get("contradictions")
+            ]
+            no_votes = [j for j in active if str(j.get("decision", "")).upper() == "NO"]
+            if len(yes_votes) >= 2 and len(no_votes) <= 1:
+                decision = "YES"
+                confidence = min(float(j.get("confidence", 0.0) or 0.0) for j in yes_votes)
+                reason = f"{profile.get('mode', 'balanced')}_yes_majority"
+                policy_evidence["strictness_override"] = reason
+        if decision == "NO" and bool(profile.get("soften_rejections", False)):
+            no_votes = [j for j in active if str(j.get("decision", "")).upper() == "NO"]
+            high_conf_no = [
+                j for j in no_votes
+                if float(j.get("confidence", 0.0) or 0.0) >= policy_min_confidence
+                and (j.get("requirements_missing") or j.get("contradictions"))
+            ]
+            if len(high_conf_no) < max(2, len(active) - 1):
+                decision = "REVIEW"
+                confidence = min((float(j.get("confidence", 0.0) or 0.0) for j in no_votes), default=0.0)
+                reason = f"{profile.get('mode', 'balanced')}_softened_rejection"
+                policy_evidence["strictness_override"] = reason
         # Domain/deterministic PROVEN evidence is diagnostic only: it must not
         # turn a jury rejection/review into an auto-accept. Only hard
         # deterministic contradictions may force a rejection; broad symbolic

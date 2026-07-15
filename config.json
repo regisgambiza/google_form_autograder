@@ -14,7 +14,8 @@
     },
     "embedding_model": "mxbai-embed-large",
     "reasoning_model": "phi4:14b",
-    "leniency": "balanced",
+    "leniency": "lenient",
+    "grading_strictness": "lenient",
     "leniency_note": "options: extreme, lenient, balanced, strict",
     "evaluator": "ai_evaluator_semantic",
     "generate_report": false,
@@ -46,6 +47,7 @@
     "openrouter_judge_answer_batch_size": 25,
     "judge_batch_num_predict": 8192,
     "provider_manager_enabled": true,
+    "provider_strategy": "free_first_ollama_fallback",
     "provider_priority": [
         "openrouter",
         "ollama"
@@ -103,6 +105,31 @@
         "tencent/hy3:free",
         "openrouter/free"
     ],
+    "openrouter_paid_fallback_models": [
+        "inclusionai/ling-2.6-flash",
+        "meta-llama/llama-3.1-8b-instruct",
+        "mistralai/mistral-nemo",
+        "qwen/qwen-2.5-7b-instruct"
+    ],
+    "openrouter_model_prices_per_million": {
+        "inclusionai/ling-2.6-flash": {
+            "prompt": 0.01,
+            "completion": 0.03
+        },
+        "meta-llama/llama-3.1-8b-instruct": {
+            "prompt": 0.02,
+            "completion": 0.03
+        },
+        "mistralai/mistral-nemo": {
+            "prompt": 0.02,
+            "completion": 0.03
+        },
+        "qwen/qwen-2.5-7b-instruct": {
+            "prompt": 0.04,
+            "completion": 0.1
+        }
+    },
+    "max_openrouter_spend_usd_per_run": 0.0,
     "openrouter_dynamic_model_pool_enabled": true,
     "openrouter_model_catalog_refresh_enabled": true,
     "openrouter_model_catalog_refresh_seconds": 3600,
@@ -291,5 +318,6 @@
         "strict_judge"
     ],
     "truncate_answers_before_grading": false,
-    "rubric_timeout_seconds": 3600
+    "rubric_timeout_seconds": 3600,
+    "enable_deduplication": true
 }

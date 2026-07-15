@@ -26,6 +26,7 @@ from answer_key_manager import (
     list_backups,
     keep_teacher_answers_only,
     load_pending_review_records,
+    remember_teacher_decision,
     remove_form_duplicates,
     resolve_reviews,
     restore_backup,
@@ -556,6 +557,28 @@ class AnswerKeyDashboard(QDialog):
 
     def _on_save_finished(self, progress, finding, benchmark_examples=None):
         progress.close()
+        checked_answers = self._checked_answers()
+        checked_set = set(checked_answers)
+        for answer in checked_answers:
+            remember_teacher_decision(
+                self.form_id,
+                finding.item_id,
+                finding.question_id,
+                answer,
+                "YES",
+                source="answer_key_dashboard",
+            )
+        for record in getattr(finding, "review_records", []) or []:
+            for answer in record.get("candidates", []) or []:
+                if answer not in checked_set:
+                    remember_teacher_decision(
+                        self.form_id,
+                        finding.item_id,
+                        finding.question_id,
+                        answer,
+                        "NO",
+                        source="answer_key_dashboard",
+                    )
         resolve_reviews(self.form_id, finding.item_id, "approved")
         # Notify parent/main window to refresh displayed review counts
         try:

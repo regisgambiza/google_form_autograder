@@ -162,12 +162,51 @@ def test_queued_wrong_candidate_is_rejected():
 
 def test_review_decisions_are_persistent(tmp_path, monkeypatch):
     path = tmp_path / "reviews.json"
+    memory_path = tmp_path / "memory.json"
     monkeypatch.setattr(manager, "REVIEW_QUEUE_PATH", path)
+    monkeypatch.setattr(manager, "TEACHER_MEMORY_PATH", memory_path)
     manager.enqueue_review({"form_id": "f", "item_id": "i", "candidates": ["candidate"]})
     assert manager.resolve_reviews("f", "i", "rejected") == 1
     assert manager.load_pending_reviews("f") == {}
     saved = json.loads(path.read_text(encoding="utf-8"))
     assert saved["items"] == []
+    memory = manager.lookup_teacher_memory("f", "i", "candidate")
+    assert memory["decision"] == "NO"
+
+
+def test_teacher_memory_records_and_updates_decisions(tmp_path, monkeypatch):
+    memory_path = tmp_path / "memory.json"
+    monkeypatch.setattr(manager, "TEACHER_MEMORY_PATH", memory_path)
+
+    manager.remember_teacher_decision("f", "i", "q", "  Correct Answer ", "YES")
+    assert manager.lookup_teacher_memory("f", "i", "correct answer")["decision"] == "YES"
+
+    manager.remember_teacher_decision("f", "i", "q", "correct answer", "NO")
+    data = json.loads(memory_path.read_text(encoding="utf-8"))
+    assert len(data["items"]) == 1
+    assert manager.lookup_teacher_memory("f", "i", "Correct   Answer")["decision"] == "NO"
+
+
+def test_approved_review_memory_preserves_candidate_categories(tmp_path, monkeypatch):
+    path = tmp_path / "reviews.json"
+    memory_path = tmp_path / "memory.json"
+    monkeypatch.setattr(manager, "REVIEW_QUEUE_PATH", path)
+    monkeypatch.setattr(manager, "TEACHER_MEMORY_PATH", memory_path)
+    manager.enqueue_review({
+        "form_id": "f",
+        "item_id": "i",
+        "question_id": "q",
+        "candidates": ["yes", "maybe", "no"],
+        "accepted": ["yes"],
+        "needs_approval": ["maybe"],
+        "rejected": ["no"],
+    })
+
+    assert manager.resolve_reviews("f", "i", "approved") == 1
+
+    assert manager.lookup_teacher_memory("f", "i", "yes")["decision"] == "YES"
+    assert manager.lookup_teacher_memory("f", "i", "no")["decision"] == "NO"
+    assert manager.lookup_teacher_memory("f", "i", "maybe") is None
 
 
 def test_one_click_dedup_preserves_distinct_answers_and_points(tmp_path, monkeypatch):
