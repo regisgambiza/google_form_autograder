@@ -24,7 +24,13 @@ from form_utils import get_form_structure
 from logger import gui_event, log, runtime_snapshot, stage_banner, update_runtime_state
 from response_utils import save_grading_time
 from updater import update_correct_answers
-from answer_key_manager import enqueue_review, lookup_teacher_memory
+from answer_key_manager import (
+    enqueue_review,
+    format_learning_profile_for_prompt,
+    lookup_similar_teacher_memory,
+    lookup_teacher_memory,
+    question_learning_profile,
+)
 
 
 @dataclass
@@ -573,6 +579,66 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                 progress["ai_backlog"] = max(0, progress["ai_backlog"] - 1)
             raise
 
+    def get_question_context_with_learning(form_id: str, question: Dict) -> str:
+        context = get_question_context(question)
+        if not bool(cfg.get("teacher_learning_prompt_enabled", True)):
+            return context
+        profile = question_learning_profile(
+            form_id,
+            str(question.get("itemId", "")),
+            limit=max(1, int(cfg.get("teacher_learning_prompt_examples", 8) or 8)),
+        )
+        learning_context = format_learning_profile_for_prompt(profile)
+        if not learning_context:
+            return context
+        return f"{context}\n\n{learning_context}"
+
+    def teacher_memory_result(t: Task, memory: Dict, stage: str) -> EvaluationResult:
+        decision = "YES" if str(memory.get("decision", "")).upper() == "YES" else "NO"
+        confidence = 1.0 if stage == "teacher_memory" else float(memory.get("similarity", 0.97) or 0.97)
+        evidence = {
+            "question": get_question_context_with_learning(t.form_id, t.question),
+            "expected": t.expected,
+            "answer": t.answer,
+            "teacher_memory": memory,
+            "policy": {"policy_reason": stage},
+            "key_eligible": decision == "YES",
+        }
+        return EvaluationResult(
+            answer=t.answer,
+            decision=decision,
+            final_score=confidence if decision == "YES" else 0.0,
+            semantic_score=confidence if decision == "YES" else 0.0,
+            concept_score=confidence if decision == "YES" else 0.0,
+            factual_score=confidence if decision == "YES" else 0.0,
+            misconception_detected=False,
+            misconception_description="",
+            missing_concepts=[],
+            accepted_concepts=[],
+            model_agreement=1.0,
+            confidence=confidence,
+            fast_path_used=True,
+            latency_ms=0.0,
+            stage_reached=stage,
+            evidence=evidence,
+        )
+
+    def lookup_task_memory(t: Task) -> tuple[Optional[Dict], str]:
+        memory = lookup_teacher_memory(t.form_id, str(t.question.get("itemId", "")), t.answer)
+        if memory:
+            return memory, "teacher_memory"
+        if bool(cfg.get("teacher_memory_similar_accept_enabled", True)):
+            memory = lookup_similar_teacher_memory(
+                t.form_id,
+                str(t.question.get("itemId", "")),
+                t.answer,
+                min_similarity=float(cfg.get("teacher_memory_similarity_threshold", 0.94)),
+                decision="YES",
+            )
+            if memory:
+                return memory, "teacher_memory_similar"
+        return None, ""
+
     def evaluate_answer_bounded(t: Task) -> EvaluationResult:
         hard_timeout_s = max(
             float(cfg.get("max_latency_per_answer_seconds", 45.0)) + 45.0,
@@ -582,43 +648,13 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
 
         def _runner():
             try:
-                memory = lookup_teacher_memory(t.form_id, str(t.question.get("itemId", "")), t.answer)
+                memory, memory_stage = lookup_task_memory(t)
                 if memory:
-                    decision = "YES" if str(memory.get("decision", "")).upper() == "YES" else "NO"
-                    confidence = 1.0
-                    evidence = {
-                        "question": get_question_context(t.question),
-                        "expected": t.expected,
-                        "answer": t.answer,
-                        "teacher_memory": memory,
-                        "policy": {"policy_reason": "teacher_memory"},
-                        "key_eligible": decision == "YES",
-                    }
-                    result_holder.put((
-                        "ok",
-                        EvaluationResult(
-                            answer=t.answer,
-                            decision=decision,
-                            final_score=confidence if decision == "YES" else 0.0,
-                            semantic_score=confidence if decision == "YES" else 0.0,
-                            concept_score=confidence if decision == "YES" else 0.0,
-                            factual_score=confidence if decision == "YES" else 0.0,
-                            misconception_detected=False,
-                            misconception_description="",
-                            missing_concepts=[],
-                            accepted_concepts=[],
-                            model_agreement=1.0,
-                            confidence=confidence,
-                            fast_path_used=True,
-                            latency_ms=0.0,
-                            stage_reached="teacher_memory",
-                            evidence=evidence,
-                        ),
-                    ))
+                    result_holder.put(("ok", teacher_memory_result(t, memory, memory_stage)))
                     return
                 result_holder.put((
                     "ok",
-                    evaluate_answer(t.answer, t.expected, get_question_context(t.question)),
+                    evaluate_answer(t.answer, t.expected, get_question_context_with_learning(t.form_id, t.question)),
                 ))
             except Exception as ex:
                 result_holder.put(("error", ex))
@@ -664,12 +700,32 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
 
         def _runner():
             try:
-                results = evaluate_answers_model_first(
-                    [task.answer for task in batch.tasks],
-                    batch.tasks[0].expected if batch.tasks else [],
-                    get_question_context(batch.question),
-                )
-                result_holder.put(("ok", list(zip(batch.tasks, results))))
+                remembered: Dict[int, EvaluationResult] = {}
+                ai_tasks: List[Task] = []
+                for index, task in enumerate(batch.tasks):
+                    memory, memory_stage = lookup_task_memory(task)
+                    if memory:
+                        remembered[index] = teacher_memory_result(task, memory, memory_stage)
+                    else:
+                        ai_tasks.append(task)
+                ai_results_by_task: Dict[int, EvaluationResult] = {}
+                if ai_tasks:
+                    results = evaluate_answers_model_first(
+                        [task.answer for task in ai_tasks],
+                        ai_tasks[0].expected,
+                        get_question_context_with_learning(batch.form_id, batch.question),
+                    )
+                    ai_results_by_task = {
+                        id(task): result
+                        for task, result in zip(ai_tasks, results)
+                    }
+                ordered: List[tuple[Task, EvaluationResult]] = []
+                for index, task in enumerate(batch.tasks):
+                    if index in remembered:
+                        ordered.append((task, remembered[index]))
+                    else:
+                        ordered.append((task, ai_results_by_task[id(task)]))
+                result_holder.put(("ok", ordered))
             except Exception as ex:
                 result_holder.put(("error", ex))
 

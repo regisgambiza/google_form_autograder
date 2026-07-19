@@ -187,6 +187,30 @@ def test_teacher_memory_records_and_updates_decisions(tmp_path, monkeypatch):
     assert manager.lookup_teacher_memory("f", "i", "Correct   Answer")["decision"] == "NO"
 
 
+def test_teacher_learning_profile_and_similar_lookup(tmp_path, monkeypatch):
+    memory_path = tmp_path / "memory.json"
+    monkeypatch.setattr(manager, "TEACHER_MEMORY_PATH", memory_path)
+    manager.remember_teacher_decision("f", "i", "q", "because 3 is a factor of 6", "YES")
+    manager.remember_teacher_decision("f", "i", "q", "6 is a factor of 3", "NO")
+
+    profile = manager.question_learning_profile("f", "i")
+    prompt_text = manager.format_learning_profile_for_prompt(profile)
+    similar = manager.lookup_similar_teacher_memory(
+        "f",
+        "i",
+        "because 3 is factor of 6",
+        min_similarity=0.80,
+        decision="YES",
+    )
+
+    assert profile["accepted_examples"] == ["because 3 is a factor of 6"]
+    assert profile["rejected_examples"] == ["6 is a factor of 3"]
+    assert "Previously accepted student answers" in prompt_text
+    assert "Previously rejected student answers" in prompt_text
+    assert similar["decision"] == "YES"
+    assert similar["similarity"] >= 0.80
+
+
 def test_approved_review_memory_preserves_candidate_categories(tmp_path, monkeypatch):
     path = tmp_path / "reviews.json"
     memory_path = tmp_path / "memory.json"

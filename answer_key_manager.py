@@ -4,6 +4,7 @@ import re
 import threading
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
@@ -461,6 +462,70 @@ def lookup_teacher_memory(form_id: str, item_id: str, answer: str) -> Optional[D
         if item.get("normalized") == normalized:
             return dict(item)
     return None
+
+
+def lookup_similar_teacher_memory(
+    form_id: str,
+    item_id: str,
+    answer: str,
+    min_similarity: float = 0.94,
+    decision: str = "YES",
+) -> Optional[Dict]:
+    normalized = _memory_key(str(answer or ""))
+    if not form_id or not item_id or not normalized:
+        return None
+    target_decision = str(decision or "").upper()
+    best: Optional[Dict] = None
+    best_score = 0.0
+    for item in load_teacher_memory(form_id, item_id).get("items", []):
+        if target_decision and str(item.get("decision", "")).upper() != target_decision:
+            continue
+        candidate = str(item.get("normalized", ""))
+        if not candidate or candidate == normalized:
+            continue
+        score = SequenceMatcher(None, normalized, candidate).ratio()
+        if score > best_score:
+            best = dict(item)
+            best_score = score
+    if best and best_score >= float(min_similarity):
+        best["similarity"] = best_score
+        return best
+    return None
+
+
+def question_learning_profile(form_id: str, item_id: str, limit: int = 8) -> Dict[str, List[str]]:
+    accepted: List[str] = []
+    rejected: List[str] = []
+    for item in load_teacher_memory(form_id, item_id).get("items", []):
+        answer = str(item.get("answer", "")).strip()
+        if not answer:
+            continue
+        if str(item.get("decision", "")).upper() == "YES":
+            accepted.append(answer)
+        elif str(item.get("decision", "")).upper() == "NO":
+            rejected.append(answer)
+    return {
+        "accepted_examples": list(dict.fromkeys(accepted))[:limit],
+        "rejected_examples": list(dict.fromkeys(rejected))[:limit],
+    }
+
+
+def format_learning_profile_for_prompt(profile: Dict[str, Sequence[str]]) -> str:
+    accepted = [str(x).strip() for x in profile.get("accepted_examples", []) if str(x).strip()]
+    rejected = [str(x).strip() for x in profile.get("rejected_examples", []) if str(x).strip()]
+    if not accepted and not rejected:
+        return ""
+    lines = [
+        "Teacher learning profile for this exact question:",
+        "Use these teacher-reviewed examples as local grading precedent. The teacher answer remains authoritative.",
+    ]
+    if accepted:
+        lines.append("Previously accepted student answers:")
+        lines.extend(f"- {value}" for value in accepted)
+    if rejected:
+        lines.append("Previously rejected student answers:")
+        lines.extend(f"- {value}" for value in rejected)
+    return "\n".join(lines)
 
 
 def resolve_reviews(form_id: str, item_id: str, status: str) -> int:
