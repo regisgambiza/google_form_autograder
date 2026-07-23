@@ -5,7 +5,13 @@ a = Analysis(
     ['gui_main.py'],
     pathex=[],
     binaries=[],
-    datas=[('config.json', '.'), ('forms_to_grade.json', '.'), ('predefined_folders.json', '.')],
+    datas=[
+        ('config.json', '.'),
+        ('forms_to_grade.json', '.'),
+        ('predefined_folders.json', '.'),
+        ('client_secrets.json', '.'),
+        ('assets/app_icon.ico', 'assets'),
+    ],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -19,8 +25,7 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
+    [],
     [],
     name='GoogleFormAutograder',
     debug=False,
@@ -30,9 +35,21 @@ exe = EXE(
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,
+    icon='assets/app_icon.ico',
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    exclude_binaries=True,
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name='GoogleFormAutograder',
 )

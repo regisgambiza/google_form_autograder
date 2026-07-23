@@ -22,6 +22,7 @@ ALL_SCOPES = [
 _credentials_cache = None
 _credentials_lock = threading.Lock()
 CLIENT_SECRETS_FILE = "client_secrets.json"
+TOKEN_FILE = "token.json"
 
 
 def _get_credentials():
@@ -36,12 +37,12 @@ def _get_credentials():
         creds = None
 
         # Load token if it exists
-        if os.path.exists("token.json"):
-            log("DEBUG", "Loading credentials from token.json")
+        if os.path.exists(TOKEN_FILE):
+            log("DEBUG", f"Loading credentials from {TOKEN_FILE}")
             try:
-                creds = Credentials.from_authorized_user_file("token.json", ALL_SCOPES)
+                creds = Credentials.from_authorized_user_file(TOKEN_FILE, ALL_SCOPES)
             except Exception as e:
-                log("WARNING", f"Failed to load token.json: {e}. Will re-authenticate.")
+                log("WARNING", f"Failed to load {TOKEN_FILE}: {e}. Will re-authenticate.")
                 creds = None
 
         # If invalid or missing, refresh or re-auth
@@ -53,9 +54,9 @@ def _get_credentials():
                     log("DEBUG", "Token refreshed successfully")
                     
                     # Save refreshed token
-                    with open("token.json", "w") as token_file:
+                    with open(TOKEN_FILE, "w") as token_file:
                         token_file.write(creds.to_json())
-                    log("DEBUG", "Refreshed credentials saved to token.json")
+                    log("DEBUG", f"Refreshed credentials saved to {TOKEN_FILE}")
                     
                 except RefreshError as e:
                     log("ERROR", f"Token refresh failed: {e}. Re-authenticating...")
@@ -82,9 +83,9 @@ def _get_credentials():
                     )
                     creds = flow.run_local_server(port=0)
 
-                    with open("token.json", "w") as token_file:
+                    with open(TOKEN_FILE, "w") as token_file:
                         token_file.write(creds.to_json())
-                    log("DEBUG", "New credentials saved to token.json.")
+                    log("DEBUG", f"New credentials saved to {TOKEN_FILE}.")
                 except Exception as e:
                     log("ERROR", f"OAuth flow failed: {e}")
                     raise
@@ -92,6 +93,32 @@ def _get_credentials():
         # Cache the credentials
         _credentials_cache = creds
         return creds
+
+
+def has_saved_login() -> bool:
+    return os.path.exists(TOKEN_FILE)
+
+
+def clear_cached_credentials() -> None:
+    global _credentials_cache
+    with _credentials_lock:
+        _credentials_cache = None
+
+
+def sign_in():
+    """Force credential creation/refresh and return authenticated credentials."""
+    return _get_credentials()
+
+
+def sign_out(remove_token: bool = True) -> bool:
+    """Clear cached credentials and optionally remove the saved OAuth token."""
+    clear_cached_credentials()
+    removed = False
+    if remove_token and os.path.exists(TOKEN_FILE):
+        os.remove(TOKEN_FILE)
+        removed = True
+        log("INFO", f"Signed out and removed {TOKEN_FILE}")
+    return removed
 
 
 def get_service():

@@ -58,13 +58,19 @@ class GraderThread(QThread):
             return
         current_pid = os.getpid()
         main_path = os.path.abspath("main.py").replace("'", "''")
+        exe_path = os.path.abspath(sys.executable).replace("'", "''")
         script = (
-            f"$self={current_pid}; $main='{main_path}'; "
+            f"$self={current_pid}; $main='{main_path}'; $exe='{exe_path}'; "
             "Get-CimInstance Win32_Process | "
             "Where-Object { "
-            "($_.Name -in @('python.exe','pythonw.exe')) -and "
             "$_.ProcessId -ne $self -and "
-            "$_.CommandLine -like ('*' + $main + '*') "
+            "(("
+            "$_.Name -in @('python.exe','pythonw.exe') -and "
+            "$_.CommandLine -like ('*' + $main + '*')"
+            ") -or ("
+            "$_.ExecutablePath -eq $exe -and "
+            "$_.CommandLine -like '*--grader*'"
+            ")) "
             "} | ForEach-Object { "
             "try { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop } catch {} "
             "}"
@@ -336,12 +342,15 @@ class GraderThread(QThread):
             my_env["AUTOGRADER_GRADER"] = "1"
             self._open_gui_terminal_logs()
 
-            main_path = os.path.abspath("main.py")
             creationflags = 0
             if os.name == "nt":
                 creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
 
-            args = [sys.executable, main_path]
+            if getattr(sys, "frozen", False):
+                args = [sys.executable, "--grader"]
+            else:
+                main_path = os.path.abspath("main.py")
+                args = [sys.executable, main_path]
             if self.form_urls:
                 args.extend(self.form_urls)
 

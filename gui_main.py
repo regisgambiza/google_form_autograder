@@ -3,6 +3,7 @@ import sys
 import os
 import json
 import subprocess
+import shutil
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLineEdit, QListWidget, QListWidgetItem, QMessageBox,
@@ -13,13 +14,21 @@ from PyQt5.QtWidgets import (
 )
 
 from PyQt5.QtCore import Qt, QDate, QTimer, QSize, QThread, pyqtSignal
-from PyQt5.QtGui import QColor, QBrush, QFont, QPalette
+from PyQt5.QtGui import QColor, QBrush, QFont, QIcon, QPalette
 from datetime import datetime, timedelta, timezone, time
 import ctypes
 import atexit
 
 # Local imports
-from auth import get_service, get_drive_service, get_classroom_service
+from auth import (
+    clear_cached_credentials,
+    get_service,
+    get_drive_service,
+    get_classroom_service,
+    has_saved_login,
+    sign_in,
+    sign_out,
+)
 from form_searcher import (
     find_all_forms_in_sources,
     find_forms_with_submissions_in_range,
@@ -39,6 +48,54 @@ from answer_key_manager import load_pending_review_records, keep_teacher_answers
 import re
 
 BANGKOK_TZ = timezone(timedelta(hours=7))
+APP_ID = "regis.google_form_autograder"
+APP_DATA_DIR_NAME = "GoogleFormAutograder"
+RUNTIME_DEFAULT_FILES = (
+    "config.json",
+    "forms_to_grade.json",
+    "predefined_folders.json",
+    "client_secrets.json",
+)
+RUNTIME_DIRS = (
+    "logs",
+    "cache",
+    os.path.join("cache", "results"),
+    os.path.join("cache", "embeddings"),
+    os.path.join("cache", "form_context"),
+    os.path.join("cache", "vision"),
+    "backups",
+    os.path.join("backups", "answer_keys"),
+)
+
+
+def resource_path(*parts):
+    base = getattr(sys, "_MEIPASS", os.path.abspath(os.path.dirname(__file__)))
+    return os.path.join(base, *parts)
+
+
+def app_icon():
+    return QIcon(resource_path("assets", "app_icon.ico"))
+
+
+def _user_data_dir():
+    base = os.environ.get("APPDATA") or os.path.expanduser("~")
+    return os.path.join(base, APP_DATA_DIR_NAME)
+
+
+def ensure_runtime_environment():
+    """Prepare writable runtime files for packaged builds."""
+    if getattr(sys, "frozen", False):
+        target_dir = _user_data_dir()
+        os.makedirs(target_dir, exist_ok=True)
+        for filename in RUNTIME_DEFAULT_FILES:
+            target = os.path.join(target_dir, filename)
+            source = resource_path(filename)
+            if not os.path.exists(target) and os.path.exists(source):
+                shutil.copy2(source, target)
+        os.chdir(target_dir)
+
+    for directory in RUNTIME_DIRS:
+        os.makedirs(directory, exist_ok=True)
 
 
 class SourceScanThread(QThread):
@@ -315,6 +372,7 @@ def normalize_execution_mode(mode_name):
 class FormManager(QMainWindow):
     def __init__(self):
         super().__init__()
+        self.setWindowIcon(app_icon())
         self.setWindowTitle("Google Form Autograder")
         self.setGeometry(100, 100, 1250, 820)
         self.setMinimumSize(1000, 700)
@@ -423,6 +481,11 @@ class FormManager(QMainWindow):
             }
             QPushButton#Danger:hover {
                 background-color: #b02a37;
+            }
+            QPushButton#Danger[compactControl="true"] {
+                min-height: 42px;
+                max-height: 42px;
+                padding: 0 13px;
             }
             QComboBox, QTextEdit, QListWidget {
                 background-color: white;
@@ -577,6 +640,9 @@ class FormManager(QMainWindow):
         self.run_state_label.setObjectName("Muted")
         header_layout.addWidget(self.run_state_dot)
         header_layout.addWidget(self.run_state_label)
+        self.auth_status_label = QLabel()
+        self.auth_status_label.setObjectName("Muted")
+        header_layout.addWidget(self.auth_status_label)
 
         terminal_top_button = QPushButton(">_")
         terminal_top_button.setObjectName("IconButton")
@@ -646,6 +712,11 @@ class FormManager(QMainWindow):
         more_button.setFixedSize(36, 36)
         more_button.setToolTip("More actions")
         more_menu = QMenu(more_button)
+        login_action = more_menu.addAction("Login to Google")
+        login_action.triggered.connect(self.login_google)
+        logout_action = more_menu.addAction("Logout Google Account")
+        logout_action.triggered.connect(self.logout_google)
+        more_menu.addSeparator()
         auto_run_action = more_menu.addAction("Schedule Automatic Runs")
         auto_run_action.triggered.connect(self.open_auto_run_dialog)
         grade_all_action = more_menu.addAction("Grade All Queued Forms")
@@ -661,6 +732,8 @@ class FormManager(QMainWindow):
         exit_action = more_menu.addAction("Exit")
         exit_action.triggered.connect(self.exit_app)
         more_button.setMenu(more_menu)
+        self.login_action = login_action
+        self.logout_action = logout_action
         command_layout.addWidget(more_button)
         main_layout.addWidget(command_bar)
 
@@ -680,14 +753,20 @@ class FormManager(QMainWindow):
         queue_header.addWidget(self.form_queue_summary)
         queue_layout.addLayout(queue_header)
         queue_filters = QHBoxLayout()
+        queue_control_height = 42
         self.form_search_input = QLineEdit()
         self.form_search_input.setPlaceholderText("Search forms")
+        self.form_search_input.setFixedHeight(queue_control_height)
         self.form_search_input.textChanged.connect(self._filter_form_queue)
         self.form_filter_combo = QComboBox()
         self.form_filter_combo.addItems(["All", "Running", "Queued", "Done", "Partial", "Skipped", "Failed"])
+        self.form_filter_combo.setFixedHeight(queue_control_height)
+        self.form_filter_combo.setMinimumWidth(84)
         self.form_filter_combo.currentTextChanged.connect(self._filter_form_queue)
         self.clear_forms_button = QPushButton("Clear All")
         self.clear_forms_button.setObjectName("Danger")
+        self.clear_forms_button.setProperty("compactControl", True)
+        self.clear_forms_button.setFixedHeight(queue_control_height)
         self.clear_forms_button.setToolTip("Delete every form from the queue")
         self.clear_forms_button.clicked.connect(lambda: self.clear_all_forms(confirm=True))
         queue_filters.addWidget(self.form_search_input, 1)
@@ -998,6 +1077,8 @@ class FormManager(QMainWindow):
             self.form_list.setCurrentRow(0)
         self._setup_system_tray()
         apply_widget_theme(self)
+        self.refresh_auth_status()
+        QTimer.singleShot(500, self.prompt_login_if_needed)
 
     def _filter_form_queue(self, *_args):
         query = self.form_search_input.text().strip().lower() if hasattr(self, "form_search_input") else ""
@@ -1009,6 +1090,76 @@ class FormManager(QMainWindow):
             status = str(meta.get("status", "queued")).lower()
             status_matches = selected_status == "all" or status == selected_status
             item.setHidden(query not in title or not status_matches)
+
+    def refresh_auth_status(self):
+        signed_in = has_saved_login()
+        if hasattr(self, "auth_status_label"):
+            self.auth_status_label.setText("Google: signed in" if signed_in else "Google: not signed in")
+        if hasattr(self, "login_action"):
+            self.login_action.setEnabled(not signed_in)
+        if hasattr(self, "logout_action"):
+            self.logout_action.setEnabled(signed_in)
+
+    def prompt_login_if_needed(self):
+        if has_saved_login() or self.is_closing:
+            return
+        reply = QMessageBox.question(
+            self,
+            "Login to Google?",
+            "No saved Google login was found. Sign in now so the app can access Forms, Drive, and Classroom.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if reply == QMessageBox.Yes:
+            self.login_google()
+        else:
+            self.refresh_auth_status()
+
+    def login_google(self):
+        if self.is_grading or (self.grader_thread and self.grader_thread.isRunning()):
+            QMessageBox.information(self, "Grading Running", "Stop grading before changing Google login.")
+            return
+        try:
+            self.run_state_label.setText("Signing in")
+            QApplication.processEvents()
+            clear_cached_credentials()
+            sign_in()
+            self.service = None
+            self.drive_service = None
+            self.classroom_service = None
+            self.refresh_auth_status()
+            self.run_state_label.setText("Ready")
+            QMessageBox.information(self, "Google Login", "Google account is signed in.")
+        except Exception as exc:
+            self.run_state_label.setText("Ready")
+            self.refresh_auth_status()
+            QMessageBox.critical(self, "Google Login Failed", str(exc))
+
+    def logout_google(self):
+        if self.is_grading or (self.grader_thread and self.grader_thread.isRunning()):
+            QMessageBox.information(self, "Grading Running", "Stop grading before logging out.")
+            return
+        reply = QMessageBox.question(
+            self,
+            "Logout Google Account?",
+            "This will remove the saved Google login token from this computer. "
+            "The next login will open Google authentication again.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        try:
+            sign_out(remove_token=True)
+            self.service = None
+            self.drive_service = None
+            self.classroom_service = None
+            self.refresh_auth_status()
+            self.run_state_label.setText("Ready")
+            QMessageBox.information(self, "Google Logout", "Signed out. The saved Google token was removed.")
+        except Exception as exc:
+            self.refresh_auth_status()
+            QMessageBox.critical(self, "Google Logout Failed", str(exc))
 
     def _on_form_selection_changed(self, current, _previous=None):
         if not current:
@@ -3874,7 +4025,20 @@ class FormManager(QMainWindow):
 
 
 if __name__ == "__main__":
+    if sys.platform == "win32":
+        try:
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_ID)
+        except Exception:
+            pass
+    ensure_runtime_environment()
+    if os.environ.get("AUTOGRADER_GRADER") == "1" or "--grader" in sys.argv:
+        sys.argv = [arg for arg in sys.argv if arg != "--grader"]
+        from main import main as run_grader_main
+        sys.exit(run_grader_main() or 0)
     app = QApplication(sys.argv)
+    app.setApplicationName("Google Form Autograder")
+    app.setOrganizationName("Regis")
+    app.setWindowIcon(app_icon())
     apply_application_theme(app)
     palette = QPalette()
     palette.setColor(QPalette.Window, QColor(244, 246, 248))

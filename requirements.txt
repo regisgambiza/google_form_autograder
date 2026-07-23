@@ -8,3 +8,4 @@ sympy==1.14.0
 APScheduler==3.11.2
 pytest==9.1.0
 pytest-asyncio==1.4.0
+pyinstaller==6.21.0
