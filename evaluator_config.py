@@ -25,6 +25,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "gui_terminal_jsonl_path": "logs/gui_terminal.jsonl",
     "gui_decision_log_path": "logs/gui_decisions.log",
     "gui_decision_jsonl_path": "logs/gui_decisions.jsonl",
+    "detailed_log_max_mb": 50,
+    "model_selection_trace_max_mb": 50,
     "enable_form_context": True,
     "enable_vision_context": False,
     "vision_context_optional": True,
@@ -51,8 +53,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "openrouter_judge_answer_batch_size": 2,
     "judge_batch_num_predict": 8192,
     "provider_manager_enabled": True,
-    "provider_strategy": "free_first_ollama_fallback",
-    "provider_priority": ["openrouter", "ollama"],
+    "provider_strategy": "openrouter_llamacpp_ollama",
+    "provider_priority": ["openrouter", "llamacpp", "ollama"],
     "provider_retry_count": 2,
     "provider_timeout_seconds": 60,
     "provider_queue_size": 500,
@@ -61,6 +63,22 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "provider_health_check_interval_seconds": 30,
     "openrouter_worker_count": 10,
     "ollama_worker_count": 1,
+    "llamacpp_worker_count": 1,
+    "llamacpp_enabled": True,
+    "llamacpp_require_server": True,
+    "llamacpp_api_base_url": "http://127.0.0.1:8081",
+    "llamacpp_auto_detect_base_url": True,
+    "llamacpp_json_min_predict": 256,
+    "llamacpp_model_dir": r"C:\Users\regis\.lmstudio\models",
+    "llamacpp_judge_answer_batch_size": 1,
+    "llamacpp_models": {
+        "semantic_judge": [],
+        "factual_judge": [],
+        "concept_judge": [],
+        "strict_judge": [],
+        "misconception_judge": [],
+        "language_filter": [],
+    },
     "openrouter_api_base_url": "https://openrouter.ai/api/v1",
     "openrouter_api_key": "env:OPENROUTER_API_KEY",
     "openrouter_models": {
@@ -244,6 +262,63 @@ def load_config(path: str = "config.json") -> Dict[str, Any]:
         with open(path, "r", encoding="utf-8") as f:
             cfg = deep_merge(cfg, json.load(f))
     return cfg
+
+
+def configured_provider_names(cfg: Dict[str, Any]) -> list[str]:
+    """Return provider names enabled by the current routing strategy."""
+    strategy = str(cfg.get("provider_strategy", "") or "").strip().lower()
+    if strategy in {"openrouter_only"}:
+        return ["openrouter"]
+    if strategy in {"ollama_only", "local_only"}:
+        return ["ollama"]
+    if strategy in {"llamacpp_only", "llama.cpp_only", "llama_cpp_only"}:
+        return ["llamacpp"]
+    if strategy in {"openrouter_llamacpp", "openrouter_then_llamacpp"}:
+        return ["openrouter", "llamacpp"]
+    if strategy in {"llamacpp_openrouter", "llamacpp_then_openrouter"}:
+        return ["llamacpp", "openrouter"]
+    if strategy in {"openrouter_ollama", "openrouter_then_ollama", "free_first_ollama_fallback"}:
+        return ["openrouter", "ollama"]
+    if strategy in {"ollama_openrouter", "ollama_then_openrouter"}:
+        return ["ollama", "openrouter"]
+    if strategy in {"openrouter_llamacpp_ollama", "all_providers"}:
+        return ["openrouter", "llamacpp", "ollama"]
+
+    priority = cfg.get("provider_priority", ["openrouter", "llamacpp", "ollama"])
+    if not isinstance(priority, list):
+        priority = ["openrouter", "llamacpp", "ollama"]
+    out: list[str] = []
+    for provider in priority:
+        provider_name = str(provider).strip().lower()
+        if provider_name in {"openrouter", "llamacpp", "ollama"} and provider_name not in out:
+            out.append(provider_name)
+    return out or ["openrouter", "llamacpp", "ollama"]
+
+
+def is_llamacpp_only(cfg: Dict[str, Any]) -> bool:
+    """True when every AI model request should be routed only to llama.cpp."""
+    return configured_provider_names(cfg) == ["llamacpp"]
+
+
+def effective_ai_worker_count(cfg: Dict[str, Any]) -> int:
+    """Application AI workers after local-provider safety caps."""
+    if is_llamacpp_only(cfg):
+        return 1
+    return max(1, int(cfg.get("ai_worker_count", 4) or 4))
+
+
+def effective_provider_worker_counts(cfg: Dict[str, Any]) -> Dict[str, int]:
+    """Provider worker counts after strategy and local-provider safety caps."""
+    active = set(configured_provider_names(cfg))
+    counts = {
+        "openrouter": max(1, int(cfg.get("openrouter_worker_count", 4) or 4)),
+        "llamacpp": 1,
+        "ollama": max(1, int(cfg.get("ollama_worker_count", 1) or 1)),
+    }
+    return {
+        provider: (counts[provider] if provider in active else 0)
+        for provider in ("openrouter", "llamacpp", "ollama")
+    }
 
 
 def sha256_text(text: str) -> str:

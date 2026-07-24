@@ -4,8 +4,8 @@ from pathlib import Path
 import pytest
 
 import provider_manager
-from provider_manager import ProviderManager, _AuditItem
 from provider_types import ProviderError, ProviderRequest, ProviderValidationError
+from provider_manager import ProviderManager, _AuditItem
 
 
 class _FakeProvider:
@@ -222,10 +222,12 @@ def _batch_request(answer_count, judge_name="semantic_judge"):
     )
 
 
-def _make_manager(monkeypatch, cfg, openrouter, ollama):
+def _make_manager(monkeypatch, cfg, openrouter, ollama, llamacpp=None):
     monkeypatch.setattr(provider_manager, "load_config", lambda: cfg)
     manager = ProviderManager()
     manager._providers = {"openrouter": openrouter, "ollama": ollama}
+    if llamacpp is not None:
+        manager._providers["llamacpp"] = llamacpp
     manager._states = {name: provider_manager._ProviderState() for name in manager._providers}
     manager._queues = {name: provider_manager.queue.Queue(maxsize=20) for name in manager._providers}
     manager._provider_metrics = {
@@ -446,6 +448,36 @@ def test_provider_manager_fails_over_to_ollama_after_malformed_openrouter(monkey
     assert snapshot["metrics"]["validation_failed"] == 1
 
 
+def test_provider_manager_accepts_json_with_trailing_provider_text(monkeypatch):
+    cfg = {
+        "provider_priority": ["llamacpp"],
+        "provider_strategy": "llamacpp_only",
+        "provider_retry_count": 1,
+        "llamacpp_worker_count": 1,
+        "llamacpp_models": {"semantic_judge": "local-model.gguf"},
+    }
+    noisy_content = (
+        '{"decision":"YES","confidence":1.0,"reason_short":"exact match"}\n'
+        "The answer is exactly the same as the teacher answer."
+    )
+    llamacpp = _FakeProvider([_raw_ollama_response(noisy_content)])
+    manager = _make_manager(
+        monkeypatch,
+        cfg,
+        openrouter=_FakeProvider(configured=False),
+        ollama=_FakeProvider(configured=False),
+        llamacpp=llamacpp,
+    )
+
+    response = manager.ask(_request())
+    snapshot = manager.snapshot()
+
+    assert response.provider == "llamacpp"
+    assert response.success is True
+    assert response.parsed_json["decision"] == "YES"
+    assert snapshot["metrics"]["validation_failed"] == 0
+
+
 def test_provider_manager_does_not_send_oversized_batch_to_ollama_fallback(monkeypatch):
     cfg = {
         "provider_priority": ["openrouter", "ollama"],
@@ -590,6 +622,123 @@ def test_ollama_model_comes_from_existing_jury_settings(monkeypatch):
     assert ollama.calls[0][0]["model"] == "settings-factual-model"
 
 
+def test_llamacpp_model_comes_from_llamacpp_jury_settings(monkeypatch):
+    cfg = {
+        "provider_strategy": "llamacpp_only",
+        "provider_priority": ["llamacpp"],
+        "provider_retry_count": 1,
+        "llamacpp_worker_count": 1,
+        "llamacpp_models": {"concept_judge": ["local/model.gguf"]},
+        "openrouter_models": {},
+        "openrouter_fallback_models": [],
+    }
+    monkeypatch.setattr(provider_manager, "load_config", lambda: cfg)
+    llamacpp = _FakeProvider([_ollama_response({"decision": "YES", "confidence": 0.95, "reason_short": "ok"})])
+    manager = ProviderManager()
+    manager._providers = {"llamacpp": llamacpp}
+    manager._states = {name: provider_manager._ProviderState() for name in manager._providers}
+    manager._queues = {name: provider_manager.queue.Queue(maxsize=20) for name in manager._providers}
+    manager._provider_metrics = {
+        name: {
+            "submitted": 0,
+            "completed": 0,
+            "failed": 0,
+            "validation_failed": 0,
+            "total_latency_ms": 0.0,
+            "last_model": "-",
+            "last_latency_ms": 0.0,
+            "last_error": "",
+        }
+        for name in manager._providers
+    }
+    req = _request("concept_judge")
+    req.payload.pop("model")
+
+    response = manager.ask(req)
+
+    assert response.provider == "llamacpp"
+    assert response.model == "local/model.gguf"
+    assert llamacpp.calls[0][0]["model"] == "local/model.gguf"
+
+
+def test_llamacpp_does_not_fall_back_to_ollama_jury_model(monkeypatch):
+    cfg = {
+        "provider_strategy": "llamacpp_only",
+        "provider_priority": ["llamacpp"],
+        "provider_retry_count": 1,
+        "llamacpp_worker_count": 1,
+        "llamacpp_models": {"semantic_judge": []},
+        "jury_models": {"semantic_judge": "llama3.1:8b"},
+        "openrouter_models": {},
+        "openrouter_fallback_models": [],
+    }
+    monkeypatch.setattr(provider_manager, "load_config", lambda: cfg)
+
+    class _LocalModelProvider(_FakeProvider):
+        def list_local_models(self):
+            return ["local/grade-model.gguf"]
+
+    llamacpp = _LocalModelProvider([
+        _ollama_response({"decision": "YES", "confidence": 0.95, "reason_short": "ok"})
+    ])
+    manager = ProviderManager()
+    manager._providers = {"llamacpp": llamacpp}
+    manager._states = {name: provider_manager._ProviderState() for name in manager._providers}
+    manager._queues = {name: provider_manager.queue.Queue(maxsize=20) for name in manager._providers}
+    manager._provider_metrics = {
+        name: {
+            "submitted": 0,
+            "completed": 0,
+            "failed": 0,
+            "validation_failed": 0,
+            "total_latency_ms": 0.0,
+            "last_model": "-",
+            "last_latency_ms": 0.0,
+            "last_error": "",
+        }
+        for name in manager._providers
+    }
+
+    response = manager.ask(_request("semantic_judge"))
+
+    assert response.provider == "llamacpp"
+    assert response.model == "local/grade-model.gguf"
+    assert llamacpp.calls[0][0]["model"] == "local/grade-model.gguf"
+
+
+def test_llamacpp_only_does_not_start_or_log_ollama_components(monkeypatch):
+    cfg = {
+        "provider_strategy": "llamacpp_only",
+        "provider_priority": ["openrouter", "llamacpp", "ollama"],
+        "provider_retry_count": 1,
+        "openrouter_worker_count": 1,
+        "ollama_worker_count": 1,
+        "llamacpp_worker_count": 1,
+        "openrouter_ollama_supervisor_enabled": True,
+        "llamacpp_models": {"semantic_judge": ["local/model.gguf"]},
+        "openrouter_models": {},
+        "openrouter_fallback_models": [],
+    }
+    log_lines = []
+    monkeypatch.setattr(provider_manager, "log", lambda _level, message: log_lines.append(str(message)))
+    llamacpp = _FakeProvider([_ollama_response({"decision": "YES", "confidence": 0.95, "reason_short": "ok"})])
+    manager = _make_manager(
+        monkeypatch,
+        cfg,
+        openrouter=_FakeProvider([]),
+        ollama=_FakeProvider([]),
+        llamacpp=llamacpp,
+    )
+
+    response = manager.ask(_request("semantic_judge"))
+    joined = "\n".join(log_lines).casefold()
+
+    assert response.provider == "llamacpp"
+    assert "provider=ollama" not in joined
+    assert "ollama_health" not in joined
+    assert "ollama quality monitor enabled" not in joined
+
+
 def test_provider_manager_raises_when_every_provider_fails(monkeypatch):
     cfg = {
         "provider_priority": ["openrouter"],
@@ -604,3 +753,85 @@ def test_provider_manager_raises_when_every_provider_fails(monkeypatch):
 
     with pytest.raises(Exception):
         manager.ask(_request())
+
+
+def test_validation_failures_degrade_provider_without_opening_circuit(monkeypatch):
+    cfg = {
+        "provider_priority": ["llamacpp"],
+        "provider_strategy": "llamacpp_only",
+        "provider_retry_count": 1,
+        "provider_circuit_failure_threshold": 1,
+        "llamacpp_worker_count": 1,
+        "llamacpp_models": {"semantic_judge": ["local/model.gguf"]},
+    }
+    manager = _make_manager(
+        monkeypatch,
+        cfg,
+        openrouter=_FakeProvider([]),
+        ollama=_FakeProvider([]),
+        llamacpp=_FakeProvider([{"message": {"content": "not-json"}}]),
+    )
+
+    with pytest.raises(Exception):
+        manager.ask(_request())
+
+    snapshot = manager.snapshot()
+    assert snapshot["providers"]["llamacpp"]["health"] == "DEGRADED"
+    assert snapshot["providers"]["llamacpp"]["circuit"] == "CLOSED"
+
+
+def test_llamacpp_schema_failures_do_not_open_provider_circuit(monkeypatch):
+    cfg = {
+        "provider_priority": ["llamacpp"],
+        "provider_strategy": "llamacpp_only",
+        "provider_retry_count": 1,
+        "provider_circuit_failure_threshold": 1,
+        "llamacpp_worker_count": 1,
+        "llamacpp_models": {"semantic_judge": ["local/model.gguf"]},
+    }
+    manager = _make_manager(
+        monkeypatch,
+        cfg,
+        openrouter=_FakeProvider([]),
+        ollama=_FakeProvider([]),
+        llamacpp=_FakeProvider([ProviderError("missing calculation_check", "llama_schema_mismatch")]),
+    )
+
+    with pytest.raises(ProviderError):
+        manager.ask(_request())
+
+    snapshot = manager.snapshot()
+    assert snapshot["metrics"]["validation_failed"] == 1
+    assert snapshot["providers"]["llamacpp"]["health"] == "DEGRADED"
+    assert snapshot["providers"]["llamacpp"]["circuit"] == "CLOSED"
+
+
+def test_provider_manager_validates_schema_types_and_enums():
+    manager = ProviderManager()
+    schema = {
+        "type": "object",
+        "properties": {
+            "decision": {"type": "string", "enum": ["YES", "NO"]},
+            "confidence": {"type": "number"},
+            "requirements_met": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["decision", "confidence", "requirements_met"],
+    }
+
+    with pytest.raises(ProviderValidationError, match="enum"):
+        manager._validate_response(
+            {"message": {"content": '{"decision":"D","confidence":1.0,"requirements_met":[]}'}},
+            schema,
+        )
+
+    with pytest.raises(ProviderValidationError, match="not a number"):
+        manager._validate_response(
+            {"message": {"content": '{"decision":"YES","confidence":"100%","requirements_met":[]}'}},
+            schema,
+        )
+
+    with pytest.raises(ProviderValidationError, match="non-string"):
+        manager._validate_response(
+            {"message": {"content": '{"decision":"YES","confidence":1.0,"requirements_met":[1]}'}},
+            schema,
+        )

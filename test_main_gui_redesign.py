@@ -212,13 +212,13 @@ def test_detail_panel_shows_live_worker_rows():
     assert "f1:q123" in app_card["secondary"].text()
 
     window._update_provider_worker(
-        "id=openrouter-1 provider=openrouter status=running model=nvidia/test:free "
+        "id=llamacpp-1 provider=llamacpp status=running model=local/test.gguf "
         "request=judge-batch-1 latency_ms=0 queue_wait_ms=5"
     )
-    assert window.provider_worker_states["openrouter-1"]["state"] == "running"
-    provider_card = window.provider_worker_cards["openrouter-1"]
+    assert window.provider_worker_states["llamacpp-1"]["state"] == "running"
+    provider_card = window.provider_worker_cards["llamacpp-1"]
     assert provider_card["status"].text() == "Running"
-    assert provider_card["primary"].text() == "nvidia/test:free"
+    assert provider_card["primary"].text() == "local/test.gguf"
     assert "judge-batch-1" in provider_card["secondary"].text()
     assert window.provider_worker_summary.text()
 
@@ -252,16 +252,16 @@ def test_model_health_dashboard_summarizes_provider_metrics():
 def test_ai_worker_rows_use_transformers_names_and_expand_dynamically(monkeypatch):
     window = FormManager()
     assert window.app_worker_cards["ai-1"]["title"].text() == "Optimus Prime"
-    assert window.app_worker_cards["ai-2"]["title"].text() == "Bumblebee"
 
     monkeypatch.setattr(
         window,
         "_configured_worker_counts",
-        lambda: {"ai": 6, "openrouter": 4, "ollama": 1},
+        lambda: {"ai": 6, "openrouter": 4, "llamacpp": 1, "ollama": 1},
     )
     window._sync_worker_cards_to_config()
 
     assert len(window.app_worker_cards) >= 6
+    assert window.app_worker_cards["ai-2"]["title"].text() == "Bumblebee"
     assert window.app_worker_cards["ai-5"]["title"].text() == "Arcee"
     assert window.app_worker_cards["ai-6"]["title"].text() == "Jazz"
 
@@ -271,7 +271,7 @@ def test_provider_worker_rows_expand_dynamically(monkeypatch):
     monkeypatch.setattr(
         window,
         "_configured_worker_counts",
-        lambda: {"ai": 4, "openrouter": 6, "ollama": 2},
+        lambda: {"ai": 4, "openrouter": 6, "llamacpp": 1, "ollama": 2},
     )
     window._sync_worker_cards_to_config()
 
@@ -306,10 +306,15 @@ def test_settings_exposes_cache_and_history_clear_action(monkeypatch):
     assert "raw mode; take every response exactly as read from the form" in source
     assert "Ollama Answers per Judge Call:" in source
     assert "OpenRouter Answers per Judge Call:" in source
+    assert "llama.cpp Answers per Judge Call:" in source
+    assert "llama.cpp Model Folder:" in source
+    assert "No llama.cpp GGUF models found" in source
+    assert "mmproj files are hidden" in source
     assert "OpenRouter Monitor Model:" in source
     assert 'config_data["openrouter_supervisor_ollama_model"]' in source
     assert 'config_data["ollama_judge_answer_batch_size"]' in source
     assert 'config_data["openrouter_judge_answer_batch_size"]' in source
+    assert 'config_data["llamacpp_judge_answer_batch_size"]' in source
 
 
 def test_settings_hides_low_level_expert_controls():

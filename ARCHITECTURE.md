@@ -42,12 +42,38 @@ evaluate_answer(answer, expected, question):
 run_judges(answer, question, expected, rubric):
     1. For each judge type:
        a. Prepare prompt + rubric
-       b. Call LLM with format parameter
+       b. Submit ProviderRequest through ProviderManager.ask(...)
        c. Parse JSON response
        d. Validate and normalize output
     2. Apply early exit if unanimous + high confidence
     3. Return list of judge results
 ```
+
+### 3.1 Provider Boundary
+
+The active grading path must route judge model calls through `provider_manager.py`.
+Judges build prompts and validate verdicts; they do not choose OpenRouter,
+llama.cpp, or Ollama directly.
+
+```
+global_dispatcher.py
+    -> evaluation_pipeline.py
+        -> ai_judges.py
+            -> ProviderManager.ask(ProviderRequest)
+                -> providers/openrouter_provider.py
+                -> providers/llamacpp_provider.py
+                -> providers/ollama_provider.py
+```
+
+Direct Ollama callers still exist for non-grading subsystems:
+
+- `embeddings.py`: embedding model calls.
+- `vision_context.py`: optional image/context extraction.
+- `feedback.py`: optional generated feedback reports.
+- `rubric_generator.py` and legacy evaluators: compatibility/older paths.
+
+Those modules should not be used for normal judge grading unless the selected
+application mode explicitly calls them.
 
 **Judge Output Schema:**
 ```json

@@ -16,6 +16,7 @@ _CONSOLE_MIN_LEVEL = "INFO"
 _CONSOLE_ENABLED = True
 _CONSOLE_STAGE_BANNERS = True
 _CONSOLE_COLOR_ENABLED = True
+_DIAG_MAX_BYTES = 50 * 1024 * 1024
 _RUNTIME_STATE = {}
 _RUNTIME_STATE_LOCK = threading.Lock()
 _LEVEL_ORDER = {
@@ -30,6 +31,7 @@ _LEVEL_ORDER = {
 def _init_diagnostics():
     global _DIAG_INIT, _DIAG_TEXT_FH, _DIAG_JSON_FH, _DIAG_TEXT_PATH, _DIAG_JSON_PATH
     global _CONSOLE_MIN_LEVEL, _CONSOLE_ENABLED, _CONSOLE_STAGE_BANNERS, _CONSOLE_COLOR_ENABLED
+    global _DIAG_MAX_BYTES
     if _DIAG_INIT:
         return
     _DIAG_INIT = True
@@ -44,16 +46,31 @@ def _init_diagnostics():
         _CONSOLE_ENABLED = bool(cfg.get("console_log_enabled", True))
         _CONSOLE_STAGE_BANNERS = bool(cfg.get("console_stage_banners", True))
         _CONSOLE_COLOR_ENABLED = bool(cfg.get("console_color_enabled", True))
+        _DIAG_MAX_BYTES = max(1, int(float(cfg.get("detailed_log_max_mb", 50)) * 1024 * 1024))
     except Exception:
         pass
     try:
         os.makedirs(os.path.dirname(_DIAG_TEXT_PATH) or ".", exist_ok=True)
         os.makedirs(os.path.dirname(_DIAG_JSON_PATH) or ".", exist_ok=True)
+        _rotate_log_if_needed(_DIAG_TEXT_PATH, _DIAG_MAX_BYTES)
+        _rotate_log_if_needed(_DIAG_JSON_PATH, _DIAG_MAX_BYTES)
         _DIAG_TEXT_FH = open(_DIAG_TEXT_PATH, "a", encoding="utf-8")
         _DIAG_JSON_FH = open(_DIAG_JSON_PATH, "a", encoding="utf-8")
     except Exception:
         _DIAG_TEXT_FH = None
         _DIAG_JSON_FH = None
+
+
+def _rotate_log_if_needed(path: str, max_bytes: int) -> None:
+    try:
+        if max_bytes <= 0 or not os.path.exists(path) or os.path.getsize(path) <= max_bytes:
+            return
+        rotated = f"{path}.1"
+        if os.path.exists(rotated):
+            os.remove(rotated)
+        os.replace(path, rotated)
+    except Exception:
+        pass
 
 
 def _close_diagnostics():

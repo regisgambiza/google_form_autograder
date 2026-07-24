@@ -72,7 +72,8 @@ class GraderThread(QThread):
             "$_.CommandLine -like '*--grader*'"
             ")) "
             "} | ForEach-Object { "
-            "try { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop } catch {} "
+            "try { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop; "
+            "Wait-Process -Id $_.ProcessId -Timeout 5 -ErrorAction SilentlyContinue } catch {} "
             "}"
         )
         try:
@@ -185,6 +186,18 @@ class GraderThread(QThread):
         }
 
     @staticmethod
+    def _display_judge_label(judge):
+        provider = str(judge.get("provider") or "").strip()
+        role = str(judge.get("role") or "").strip()
+        model = str(judge.get("model") or "").strip()
+        if model.startswith("provider-managed:"):
+            model = role or model.split(":", 1)[1]
+        model_label = model or role
+        if provider and model_label:
+            return f"{provider} / {model_label}"
+        return model_label or provider or "judge"
+
+    @staticmethod
     def _format_decision_audit_record(record):
         lines = [
             f"Answer {record['answer_number']} / {record['total_answers']}",
@@ -203,7 +216,7 @@ class GraderThread(QThread):
         if record.get("judges"):
             lines.extend(["", "Judge votes:"])
             for judge in record["judges"]:
-                label = " / ".join(part for part in (judge.get("provider"), judge.get("model") or judge.get("role")) if part)
+                label = GraderThread._display_judge_label(judge)
                 lines.append(
                     f"  - {label}: {judge['decision']} ({judge['confidence'] * 100:.0f}%) - {judge.get('reason', '')}"
                 )
@@ -248,8 +261,8 @@ class GraderThread(QThread):
             )
         if kind == "answer_result":
             decision = str(event.get("decision", "REVIEW")).upper()
-            icon = {"YES": "✓", "NO": "✗", "REVIEW": "?"}.get(decision, "?")
-            label = {"YES": "ACCEPTED", "NO": "REJECTED", "REVIEW": "NEEDS REVIEW"}.get(decision, decision)
+            icon = {"YES": "✓", "NO": "✗", "REVIEW": "?", "ERROR": "!"}.get(decision, "?")
+            label = {"YES": "ACCEPTED", "NO": "REJECTED", "REVIEW": "NEEDS REVIEW", "ERROR": "FAILED"}.get(decision, decision)
             lines = [
                 f"<b>Answer {int(event.get('current', 0))} / {int(event.get('total', 0))}</b>",
                 f"<b>Question {int(event.get('question_number', 0))}:</b> {esc(event.get('question'))}",
@@ -269,10 +282,7 @@ class GraderThread(QThread):
                     verdict = str(judge.get("decision", "ERROR")).upper()
                     jicon = "✓" if verdict == "YES" else "✗" if verdict == "NO" else "?"
                     confidence = float(judge.get("confidence", 0.0) or 0.0) * 100
-                    provider = str(judge.get("provider") or "").strip()
-                    model_label = str(judge.get("model") or judge.get("role") or "")
-                    if provider:
-                        model_label = f"{provider} / {model_label}"
+                    model_label = GraderThread._display_judge_label(judge)
                     lines.append(
                         f"{jicon} {esc(model_label)}: "
                         f"{esc(verdict)} ({confidence:.0f}%) — {esc(judge.get('reason'))}"

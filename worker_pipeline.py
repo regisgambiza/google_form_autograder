@@ -6,7 +6,7 @@ from typing import Dict, List, Optional, Union
 
 from deterministic_checks import run_deterministic_checks
 from evaluation_pipeline import EvaluationResult, _result_for_raw_answer, evaluate_answer
-from evaluator_config import load_config
+from evaluator_config import effective_ai_worker_count, load_config
 from logger import log
 from normalization import normalize, semantic_deduplicate
 
@@ -40,7 +40,7 @@ def evaluate_answers_worker_pipeline(
         log("INFO", f"[Worker Pipeline] Answer processing mode: raw form responses ({len(answers)} answers, no deduplication)")
 
     det_workers = max(1, int(cfg.get("deterministic_worker_count", 6)))
-    ai_workers = max(1, int(cfg.get("ai_worker_count", 2)))
+    ai_workers = effective_ai_worker_count(cfg)
     qsize = max(100, int(cfg.get("worker_queue_size", 2000)))
     numeric_tolerance = float(cfg.get("numeric_tolerance", 0.01))
 

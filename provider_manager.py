@@ -8,7 +8,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from evaluator_config import load_config
+from evaluator_config import effective_provider_worker_counts, load_config
 from logger import log, update_runtime_state
 from openrouter_model_registry import OpenRouterModelRegistry
 from provider_types import (
@@ -21,9 +21,22 @@ from provider_types import (
 )
 from providers.ollama_provider import OllamaProvider
 from providers.openrouter_provider import OpenRouterProvider
+from providers.llamacpp_provider import LlamaCppProvider
 
 
 _MODEL_TRACE_LOCK = threading.Lock()
+
+
+def _rotate_trace_if_needed(path: str, max_bytes: int) -> None:
+    try:
+        if max_bytes <= 0 or not os.path.exists(path) or os.path.getsize(path) <= max_bytes:
+            return
+        rotated = f"{path}.1"
+        if os.path.exists(rotated):
+            os.remove(rotated)
+        os.replace(path, rotated)
+    except Exception:
+        pass
 
 
 def _trace_model_selection(event: str, **payload: Any) -> None:
@@ -32,6 +45,7 @@ def _trace_model_selection(event: str, **payload: Any) -> None:
         if not bool(cfg.get("model_selection_trace_enabled", False)):
             return
         path = str(cfg.get("model_selection_trace_path", "logs/model_selection.jsonl"))
+        max_bytes = max(1, int(float(cfg.get("model_selection_trace_max_mb", 50)) * 1024 * 1024))
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         record = {
             "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -40,6 +54,7 @@ def _trace_model_selection(event: str, **payload: Any) -> None:
             **payload,
         }
         with _MODEL_TRACE_LOCK:
+            _rotate_trace_if_needed(path, max_bytes)
             with open(path, "a", encoding="utf-8") as fh:
                 fh.write(json.dumps(record, ensure_ascii=True, default=str) + "\n")
     except Exception:
@@ -71,6 +86,37 @@ def _parse_supervisor_json(content: str) -> Dict[str, Any]:
             last_error = exc
     snippet = text[:160].replace("\n", "\\n")
     raise ProviderValidationError(f"supervisor audit response is not valid JSON: {last_error}; raw={snippet!r}")
+
+
+def _parse_provider_json_content(content: str) -> Dict[str, Any]:
+    text = str(content or "").strip()
+    if not text:
+        raise ProviderValidationError("response message content is empty")
+
+    clean = re.sub(r"```(?:json)?\s*(.*?)\s*```", r"\1", text, flags=re.IGNORECASE | re.DOTALL).strip()
+    clean = re.sub(r"<think>.*?</think>", "", clean, flags=re.IGNORECASE | re.DOTALL).strip()
+
+    decoder = json.JSONDecoder()
+    candidates = [clean]
+    for match in re.finditer(r"\{", clean):
+        if match.start() == 0:
+            continue
+        candidates.append(clean[match.start():])
+
+    last_error: Optional[Exception] = None
+    for candidate in candidates:
+        try:
+            parsed, _ = decoder.raw_decode(candidate.lstrip())
+            if not isinstance(parsed, dict):
+                raise ProviderValidationError("parsed content is not a JSON object")
+            return parsed
+        except ProviderValidationError:
+            raise
+        except Exception as exc:
+            last_error = exc
+
+    snippet = clean[:160].replace("\n", "\\n")
+    raise ProviderValidationError(f"message content is not valid JSON: {last_error}; raw={snippet!r}")
 
 
 @dataclass
@@ -110,6 +156,7 @@ class ProviderManager:
         self._providers = {
             "openrouter": OpenRouterProvider(),
             "ollama": OllamaProvider(),
+            "llamacpp": LlamaCppProvider(),
         }
         self._openrouter_registry = OpenRouterModelRegistry()
         self._states = {name: _ProviderState() for name in self._providers}
@@ -167,6 +214,17 @@ class ProviderManager:
                     state=self._states[provider_name].health.value,
                     circuit=self._states[provider_name].circuit.value,
                 )
+                continue
+            if not self._provider_configured(provider_name):
+                _trace_model_selection(
+                    "provider_skipped",
+                    request_id=request.request_id,
+                    judge=request.judge_name,
+                    provider=provider_name,
+                    reason="provider_not_configured",
+                    metadata=dict(request.metadata),
+                )
+                last_error = ProviderError(f"{provider_name} is not configured", "disabled")
                 continue
             if not self._provider_accepts_request(provider_name, request):
                 _trace_model_selection(
@@ -319,23 +377,29 @@ class ProviderManager:
             if self._workers_started:
                 return
             cfg = load_config()
+            active_providers = self._configured_providers_from_config(cfg)
             self._openrouter_registry.configure_from_config(cfg)
-            openrouter_fetcher = getattr(self._providers["openrouter"], "list_free_models", lambda: [])
-            self._openrouter_registry.start_background_refresh(
-                load_config,
-                openrouter_fetcher,
-            )
-            self._ensure_openrouter_auditor(cfg)
-            counts = {
-                "openrouter": max(1, int(cfg.get("openrouter_worker_count", 4))),
-                "ollama": max(1, int(cfg.get("ollama_worker_count", 1))),
-            }
+            if "openrouter" in active_providers and "openrouter" in self._providers:
+                openrouter_fetcher = getattr(self._providers["openrouter"], "list_free_models", lambda: [])
+                self._openrouter_registry.start_background_refresh(
+                    load_config,
+                    openrouter_fetcher,
+                )
+            self._ensure_openrouter_auditor(cfg, active_providers)
+            counts = effective_provider_worker_counts(cfg)
             for provider_name, count in counts.items():
+                if provider_name not in active_providers or provider_name not in self._providers:
+                    continue
                 for i in range(count):
                     self._start_worker(provider_name, i + 1)
             self._workers_started = True
 
-    def _ensure_openrouter_auditor(self, cfg: Dict[str, Any]) -> None:
+    def _ensure_openrouter_auditor(self, cfg: Dict[str, Any], active_providers: Optional[List[str]] = None) -> None:
+        active = active_providers if active_providers is not None else self._configured_providers_from_config(cfg)
+        if "openrouter" not in active:
+            return
+        if "ollama" not in active:
+            return
         if not bool(cfg.get("openrouter_ollama_supervisor_enabled", False)):
             return
         if self._audit_worker_started:
@@ -616,19 +680,14 @@ class ProviderManager:
 
     def _provider_order(self, request: ProviderRequest) -> List[str]:
         cfg = load_config()
+        configured = self._configured_providers_from_config(cfg)
         strategy = str(cfg.get("provider_strategy", "") or "").strip().casefold()
-        if strategy in {"ollama_only", "local_only"}:
-            configured = ["ollama"]
-        elif strategy in {"openrouter_only", "cheap_paid_only"}:
-            configured = ["openrouter"]
-        else:
-            configured = [str(x).lower() for x in cfg.get("provider_priority", ["openrouter", "ollama"])]
         order = [str(x).lower() for x in (request.metadata.get("provider_priority") or configured)]
         deduped = []
         for provider in order:
             if provider in self._providers and provider not in deduped:
                 deduped.append(provider)
-        resolved = deduped or ["openrouter", "ollama"]
+        resolved = deduped or ["openrouter", "llamacpp", "ollama"]
         _trace_model_selection(
             "provider_order",
             request_id=request.request_id,
@@ -639,6 +698,31 @@ class ProviderManager:
             resolved=resolved,
         )
         return resolved
+
+    def _configured_providers_from_config(self, cfg: Dict[str, Any]) -> List[str]:
+        strategy = str(cfg.get("provider_strategy", "") or "").strip().casefold()
+        if strategy in {"ollama_only", "local_only"}:
+            configured = ["ollama"]
+        elif strategy in {"llamacpp_only", "llama.cpp_only", "llama_cpp_only"}:
+            configured = ["llamacpp"]
+        elif strategy in {"openrouter_llamacpp", "openrouter_then_llamacpp"}:
+            configured = ["openrouter", "llamacpp"]
+        elif strategy in {"llamacpp_openrouter", "llamacpp_then_openrouter"}:
+            configured = ["llamacpp", "openrouter"]
+        elif strategy in {"all_providers", "openrouter_llamacpp_ollama"}:
+            configured = ["openrouter", "llamacpp", "ollama"]
+        elif strategy == "local_all":
+            configured = ["llamacpp", "ollama"]
+        elif strategy in {"openrouter_only", "cheap_paid_only"}:
+            configured = ["openrouter"]
+        else:
+            configured = [str(x).lower() for x in cfg.get("provider_priority", ["openrouter", "llamacpp", "ollama"])]
+        deduped = []
+        for provider in configured:
+            provider_name = str(provider or "").strip().casefold()
+            if provider_name in self._providers and provider_name not in deduped:
+                deduped.append(provider_name)
+        return deduped or ["openrouter", "llamacpp", "ollama"]
 
     def _models_for_provider(self, provider_name: str, request: ProviderRequest) -> List[str]:
         cfg = load_config()
@@ -653,6 +737,49 @@ class ProviderManager:
                 models=models,
             )
             return models
+        if provider_name == "llamacpp":
+            role_models = ((cfg.get("llamacpp_models") or {}).get(request.judge_name) or [])
+            if isinstance(role_models, str):
+                role_models = [role_models]
+            fallback_models = cfg.get("llamacpp_fallback_models") or []
+            if isinstance(fallback_models, str):
+                fallback_models = [fallback_models]
+            models = [
+                str(model).strip()
+                for model in [*request.model_preferences, *role_models, *request.fallback_models, *fallback_models]
+                if str(model or "").strip()
+            ]
+            if not models:
+                provider = self._providers.get(provider_name)
+                list_local = getattr(provider, "list_local_models", None)
+                if callable(list_local):
+                    try:
+                        models.extend(str(model).strip() for model in list_local() if str(model).strip())
+                    except Exception as exc:
+                        log("WARNING", f"[PROVIDER MODELS] llama.cpp local model scan failed: {exc}")
+            if not models:
+                provider = self._providers.get(provider_name)
+                list_server = getattr(provider, "list_server_models", None)
+                if callable(list_server):
+                    try:
+                        models.extend(str(model).strip() for model in list_server() if str(model).strip())
+                    except Exception as exc:
+                        log("WARNING", f"[PROVIDER MODELS] llama.cpp server model scan failed: {exc}")
+            deduped_models = []
+            seen = set()
+            for model in models:
+                key = model.casefold()
+                if key not in seen:
+                    deduped_models.append(model)
+                    seen.add(key)
+            _trace_model_selection(
+                "llamacpp_models",
+                request_id=request.request_id,
+                judge=request.judge_name,
+                provider=provider_name,
+                models=deduped_models,
+            )
+            return deduped_models
         strategy = str(cfg.get("provider_strategy", "free_first_ollama_fallback") or "").strip().casefold()
         role_models = ((cfg.get("openrouter_models") or {}).get(request.judge_name) or [])
         free_fallback_models = self._rotate_models_for_role(cfg.get("openrouter_fallback_models") or [], request.judge_name)
@@ -802,7 +929,7 @@ class ProviderManager:
                     )
                     return False
             return True
-        if provider_name != "ollama":
+        if provider_name not in {"ollama", "llamacpp"}:
             return True
         try:
             batch_count = int(request.metadata.get("batch_answer_count", 1) or 1)
@@ -812,14 +939,17 @@ class ProviderManager:
             return True
         cfg = load_config()
         legacy = int(cfg.get("judge_answer_batch_size", 1) or 1)
-        ollama_limit = max(1, int(cfg.get("ollama_judge_answer_batch_size", legacy) or legacy))
-        if batch_count <= ollama_limit:
+        if provider_name == "llamacpp":
+            local_limit = 1
+        else:
+            local_limit = max(1, int(cfg.get("ollama_judge_answer_batch_size", legacy) or legacy))
+        if batch_count <= local_limit:
             return True
         log(
             "WARNING",
-            f"[PROVIDER ROUTE] skip provider=ollama request={request.request_id} "
+            f"[PROVIDER ROUTE] skip provider={provider_name} request={request.request_id} "
             f"judge={request.judge_name} batch_answers={batch_count} "
-            f"ollama_limit={ollama_limit}; batch will fall back to smaller judge calls",
+            f"local_limit={local_limit}; batch will fall back to smaller judge calls",
         )
         return False
 
@@ -837,6 +967,28 @@ class ProviderManager:
                     return True
                 return False
             return True
+
+    def _provider_configured(self, provider_name: str) -> bool:
+        provider = self._providers.get(provider_name)
+        if provider is None:
+            return False
+        try:
+            configured = bool(provider.is_configured())
+        except Exception as exc:
+            configured = False
+            with self._lock:
+                if provider_name in self._states:
+                    self._states[provider_name].last_error = str(exc)
+        if configured:
+            return True
+        with self._lock:
+            state = self._states[provider_name]
+            state.health = HealthState.OFFLINE
+            state.circuit = CircuitState.OPEN
+            state.opened_at = time.monotonic()
+            state.last_error = "provider is not configured"
+        log("WARNING", f"[PROVIDER ROUTE] skip provider={provider_name} reason=not_configured")
+        return False
 
     def _record_success(self, provider_name: str, latency_ms: float) -> None:
         with self._lock:
@@ -887,9 +1039,18 @@ class ProviderManager:
             provider_metrics = self._provider_metrics[provider_name]
             provider_metrics["failed"] += 1
             provider_metrics["last_error"] = str(ex)
-            if ex.category == "validation":
+            validation_categories = {
+                "validation",
+                "llama_malformed_json",
+                "llama_schema_mismatch",
+                "llama_repair_failed",
+                "llama_truncated_response",
+            }
+            if ex.category in validation_categories:
                 self._metrics["validation_failed"] += 1
                 provider_metrics["validation_failed"] += 1
+                state.health = HealthState.DEGRADED
+                return
             if ex.category == "model_not_found":
                 return
             if ex.category == "rate_limited":
@@ -942,10 +1103,25 @@ class ProviderManager:
         metrics = snap["metrics"]
         provider_metrics = snap["provider_metrics"]
         openrouter_models = ((snap.get("openrouter_models") or {}).get("models") or {})
+        active_providers = self._configured_providers_from_config(load_config())
+        def provider_state(name: str) -> Dict[str, Any]:
+            return providers.get(name, {"queue_size": 0, "health": "-", "circuit": "-"})
+
+        def provider_metric(name: str) -> Dict[str, Any]:
+            return provider_metrics.get(name, {
+                "completed": 0,
+                "failed": 0,
+                "validation_failed": 0,
+                "last_latency_ms": 0.0,
+                "last_model": "-",
+                "last_error": "",
+            })
+
         completed = int(metrics.get("completed", 0))
         avg_ms = (float(metrics.get("total_latency_ms", 0.0)) / completed) if completed else 0.0
         elapsed_min = max(1.0 / 60.0, (time.time() - float(metrics.get("started_at", time.time()))) / 60.0)
-        or_last_model = str(provider_metrics["openrouter"]["last_model"] or "-")
+        openrouter_metric = provider_metric("openrouter")
+        or_last_model = str(openrouter_metric["last_model"] or "-")
         or_last_stats = openrouter_models.get(or_last_model, {}) if or_last_model != "-" else {}
         audited = [
             stats for stats in openrouter_models.values()
@@ -977,36 +1153,59 @@ class ProviderManager:
         def token(value: object) -> str:
             return str(value or "-").replace(" ", "_")
 
-        parts = [
-            f"q_openrouter={providers['openrouter']['queue_size']}",
-            f"q_ollama={providers['ollama']['queue_size']}",
-            f"openrouter_health={providers['openrouter']['health']}",
-            f"openrouter_circuit={providers['openrouter']['circuit']}",
-            f"openrouter_done={provider_metrics['openrouter']['completed']}",
-            f"openrouter_failed={provider_metrics['openrouter']['failed']}",
-            f"openrouter_last_ms={float(provider_metrics['openrouter']['last_latency_ms']):.0f}",
-            f"openrouter_last_model={provider_metrics['openrouter']['last_model']}",
-            f"openrouter_last_error={token(provider_metrics['openrouter']['last_error'])}",
-            f"or_models_total={len(openrouter_models)}",
-            f"or_models_available={available_models}",
-            f"or_models_rate_limited={rate_limited_models}",
-            f"or_models_failed={failed_models}",
-            f"or_json_failures={json_failures}",
-            f"or_last_success_rate={or_success_rate:.3f}",
-            f"or_last_json_failures={or_last_json_failures}",
-            f"or_avg_suspicion={weighted_suspicion:.3f}",
-            f"or_last_suspicion={or_last_suspicion:.3f}",
-            f"or_max_cooldown_s={max_cooldown_s:.0f}",
-            f"or_last_cooldown_s={or_last_cooldown_s:.0f}",
-            f"or_cost_usd={float(metrics.get('openrouter_estimated_cost_usd', 0.0) or 0.0):.6f}",
-            f"or_selection_reason={token(metrics.get('openrouter_last_selection_reason', '-'))}",
-            f"ollama_health={providers['ollama']['health']}",
-            f"ollama_circuit={providers['ollama']['circuit']}",
-            f"ollama_done={provider_metrics['ollama']['completed']}",
-            f"ollama_failed={provider_metrics['ollama']['failed']}",
-            f"ollama_last_ms={float(provider_metrics['ollama']['last_latency_ms']):.0f}",
-            f"ollama_last_model={provider_metrics['ollama']['last_model']}",
-            f"ollama_last_error={token(provider_metrics['ollama']['last_error'])}",
+        parts = []
+        if "openrouter" in active_providers:
+            openrouter_state = provider_state("openrouter")
+            parts.extend([
+                f"q_openrouter={openrouter_state['queue_size']}",
+                f"openrouter_health={openrouter_state['health']}",
+                f"openrouter_circuit={openrouter_state['circuit']}",
+                f"openrouter_done={openrouter_metric['completed']}",
+                f"openrouter_failed={openrouter_metric['failed']}",
+                f"openrouter_last_ms={float(openrouter_metric['last_latency_ms']):.0f}",
+                f"openrouter_last_model={openrouter_metric['last_model']}",
+                f"openrouter_last_error={token(openrouter_metric['last_error'])}",
+                f"or_models_total={len(openrouter_models)}",
+                f"or_models_available={available_models}",
+                f"or_models_rate_limited={rate_limited_models}",
+                f"or_models_failed={failed_models}",
+                f"or_json_failures={json_failures}",
+                f"or_last_success_rate={or_success_rate:.3f}",
+                f"or_last_json_failures={or_last_json_failures}",
+                f"or_avg_suspicion={weighted_suspicion:.3f}",
+                f"or_last_suspicion={or_last_suspicion:.3f}",
+                f"or_max_cooldown_s={max_cooldown_s:.0f}",
+                f"or_last_cooldown_s={or_last_cooldown_s:.0f}",
+                f"or_cost_usd={float(metrics.get('openrouter_estimated_cost_usd', 0.0) or 0.0):.6f}",
+                f"or_selection_reason={token(metrics.get('openrouter_last_selection_reason', '-'))}",
+            ])
+        if "ollama" in active_providers:
+            ollama_metric = provider_metric("ollama")
+            ollama_state = provider_state("ollama")
+            parts.extend([
+                f"q_ollama={ollama_state['queue_size']}",
+                f"ollama_health={ollama_state['health']}",
+                f"ollama_circuit={ollama_state['circuit']}",
+                f"ollama_done={ollama_metric['completed']}",
+                f"ollama_failed={ollama_metric['failed']}",
+                f"ollama_last_ms={float(ollama_metric['last_latency_ms']):.0f}",
+                f"ollama_last_model={ollama_metric['last_model']}",
+                f"ollama_last_error={token(ollama_metric['last_error'])}",
+            ])
+        if "llamacpp" in active_providers:
+            llamacpp_metric = provider_metric("llamacpp")
+            llamacpp_state = provider_state("llamacpp")
+            parts.extend([
+                f"q_llamacpp={llamacpp_state['queue_size']}",
+                f"llamacpp_health={llamacpp_state['health']}",
+                f"llamacpp_circuit={llamacpp_state['circuit']}",
+                f"llamacpp_done={llamacpp_metric['completed']}",
+                f"llamacpp_failed={llamacpp_metric['failed']}",
+                f"llamacpp_last_ms={float(llamacpp_metric['last_latency_ms']):.0f}",
+                f"llamacpp_last_model={llamacpp_metric['last_model']}",
+                f"llamacpp_last_error={token(llamacpp_metric['last_error'])}",
+            ])
+        parts.extend([
             f"submitted={metrics['submitted']}",
             f"completed={metrics['completed']}",
             f"failed={metrics['failed']}",
@@ -1018,7 +1217,7 @@ class ProviderManager:
             f"or_audits_failed={metrics.get('openrouter_audits_failed', 0)}",
             f"rpm={float(metrics['submitted']) / elapsed_min:.2f}",
             f"avg_ms={avg_ms:.0f}",
-        ]
+        ])
         log("INFO", "[PROVIDER METRICS] " + " ".join(parts))
 
     def _validate_response(self, payload: Dict[str, Any], schema: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -1027,33 +1226,58 @@ class ProviderManager:
         content = (payload.get("message") or {}).get("content")
         if not isinstance(content, str) or not content.strip():
             raise ProviderValidationError("response message content is empty")
-        try:
-            parsed = json.loads(content)
-        except Exception as ex:
-            raise ProviderValidationError(f"message content is not valid JSON: {ex}") from ex
+        parsed = _parse_provider_json_content(content)
         if schema:
             self._validate_against_required_shape(parsed, schema)
         return parsed
 
     def _validate_against_required_shape(self, parsed: Any, schema: Dict[str, Any]) -> None:
         required = list(schema.get("required") or [])
+        properties = schema.get("properties") or {}
         if not isinstance(parsed, dict):
             raise ProviderValidationError("parsed content is not a JSON object")
         for key in required:
             if key not in parsed:
                 raise ProviderValidationError(f"parsed content missing required field {key}")
+            self._validate_schema_property(parsed.get(key), properties.get(key) or {}, f"parsed content field {key}")
         if "results" in required:
             results = parsed.get("results")
             if not isinstance(results, list):
                 raise ProviderValidationError("batch results field is not a list")
             item_schema = (((schema.get("properties") or {}).get("results") or {}).get("items") or {})
             item_required = list(item_schema.get("required") or [])
+            item_properties = item_schema.get("properties") or {}
             for item in results:
                 if not isinstance(item, dict):
                     raise ProviderValidationError("batch result item is not an object")
                 for key in item_required:
                     if key not in item:
                         raise ProviderValidationError(f"batch result item missing required field {key}")
+                    self._validate_schema_property(item.get(key), item_properties.get(key) or {}, f"batch result field {key}")
+
+    def _validate_schema_property(self, value: Any, prop_schema: Dict[str, Any], label: str) -> None:
+        if not isinstance(prop_schema, dict) or not prop_schema:
+            return
+        enum = prop_schema.get("enum")
+        if enum and value not in enum:
+            raise ProviderValidationError(f"{label} value {value!r} is not in enum {enum!r}")
+        expected_type = prop_schema.get("type")
+        if expected_type == "string" and not isinstance(value, str):
+            raise ProviderValidationError(f"{label} is not a string")
+        if expected_type == "number" and (not isinstance(value, (int, float)) or isinstance(value, bool)):
+            raise ProviderValidationError(f"{label} is not a number")
+        if expected_type == "integer" and (not isinstance(value, int) or isinstance(value, bool)):
+            raise ProviderValidationError(f"{label} is not an integer")
+        if expected_type == "array":
+            if not isinstance(value, list):
+                raise ProviderValidationError(f"{label} is not an array")
+            item_schema = prop_schema.get("items") or {}
+            if isinstance(item_schema, dict) and item_schema.get("type") == "string":
+                for item in value:
+                    if not isinstance(item, str):
+                        raise ProviderValidationError(f"{label} contains a non-string item")
+        if expected_type == "object" and not isinstance(value, dict):
+            raise ProviderValidationError(f"{label} is not an object")
 
 
 _MANAGER: Optional[ProviderManager] = None

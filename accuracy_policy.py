@@ -85,6 +85,16 @@ def _effective_role_models(roles: Sequence[str], by_role: Dict[str, Dict[str, ob
     }
 
 
+def _evidence_model_label(role: str, judge: Dict[str, object], jury_models: Dict[str, str]) -> str:
+    """Avoid displaying configured legacy model hints for unavailable provider-managed judges."""
+    model = str(judge.get("model") or "").strip()
+    if model:
+        return model
+    if str(judge.get("decision", "ERROR")).upper() == "ERROR":
+        return f"provider-managed:{role}"
+    return str(jury_models.get(role, "")).strip()
+
+
 def _has_minimum_model_diversity(roles: Sequence[str], by_role: Dict[str, Dict[str, object]], jury_models: Dict[str, str], minimum: int = 2) -> bool:
     models = {
         model.casefold()
@@ -136,7 +146,7 @@ def conservative_jury_decision(
                 "decision": str(j.get("decision", "ERROR")).upper(),
                 "confidence": float(j.get("confidence", 0.0) or 0.0),
                 "reason": str(j.get("reason_short", "")),
-                "model": str(j.get("model", jury_models.get(role, ""))),
+                "model": _evidence_model_label(role, j, jury_models),
                 "provider": str(j.get("provider", "")),
                 "provider_latency_ms": float(j.get("provider_latency_ms", 0.0) or 0.0),
                 "provider_queue_wait_ms": float(j.get("provider_queue_wait_ms", 0.0) or 0.0),
@@ -191,7 +201,7 @@ def adaptive_math_jury_decision(
                 "decision": str(j.get("decision", "ERROR")).upper(),
                 "confidence": float(j.get("confidence", 0.0) or 0.0),
                 "reason": str(j.get("reason_short", "")),
-                "model": str(j.get("model", jury_models.get(role, ""))),
+                "model": _evidence_model_label(role, j, jury_models),
                 "provider": str(j.get("provider", "")),
                 "provider_latency_ms": float(j.get("provider_latency_ms", 0.0) or 0.0),
                 "provider_queue_wait_ms": float(j.get("provider_queue_wait_ms", 0.0) or 0.0),

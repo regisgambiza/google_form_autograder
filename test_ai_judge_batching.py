@@ -150,6 +150,36 @@ def test_judge_answer_batch_size_is_provider_specific():
     assert ai_judges._judge_answer_batch_size(cfg, "openrouter") == 2
 
 
+def test_judge_answer_batch_size_respects_provider_strategy():
+    cfg = {
+        "provider_manager_enabled": True,
+        "provider_strategy": "llamacpp_only",
+        "provider_priority": ["openrouter", "llamacpp", "ollama"],
+        "judge_answer_batch_size": 25,
+        "ollama_judge_answer_batch_size": 1,
+        "openrouter_judge_answer_batch_size": 25,
+        "llamacpp_judge_answer_batch_size": 20,
+    }
+
+    assert ai_judges._preferred_batch_provider(cfg) == "llamacpp"
+    assert ai_judges._judge_answer_batch_size(cfg) == 1
+    assert ai_judges._judge_answer_batch_size(cfg, "llamacpp") == 1
+
+
+def test_provider_manager_start_label_does_not_claim_requested_model(monkeypatch):
+    monkeypatch.setattr(ai_judges, "load_config", lambda: {"provider_manager_enabled": True})
+
+    assert ai_judges._judge_start_model_label("semantic_judge", "llama3.1:8b") == (
+        "provider=managed role=semantic_judge"
+    )
+    assert ai_judges._pre_provider_active_model("semantic_judge", "llama3.1:8b") == (
+        "provider-managed:semantic_judge"
+    )
+    assert ai_judges._unavailable_model_label("factual_judge", "qwen3:8b") == (
+        "provider-managed:factual_judge"
+    )
+
+
 def test_judge_answer_batch_size_uses_ollama_when_provider_manager_disabled():
     cfg = {
         "provider_manager_enabled": False,

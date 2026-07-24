@@ -245,15 +245,20 @@ def evaluate_answer(
     circuit_enabled = bool(cfg.get("enable_jury_circuit_breaker", not patient_mode))
     if circuit_enabled and jury_disabled_until > time.time():
         lat = (time.perf_counter() - start) * 1000.0
-        decision = "REVIEW"
+        decision = "ERROR"
         res = EvaluationResult(
             answer, decision, emb_score, float(concept["semantic_score"]), float(concept["concept_score"]),
             float(concept["semantic_score"]), bool(misconception["misconception_detected"]),
             str(misconception["misconception_description"]), list(concept["missing_concepts"]),
-            list(concept["accepted_concepts"]), 0.0, emb_score, False, lat, "jury_circuit_open"
+            list(concept["accepted_concepts"]), 0.0, emb_score, False, lat, "jury_circuit_open",
+            {"question": question, "expected": expected, "answer": answer, "policy": {
+                "policy_reason": "ai_grading_unavailable",
+                "processing_error": "jury_circuit_open",
+            }, "domain_validation": domain.to_dict(), "teacher_answer_is_authoritative": True, "key_eligible": False}
         )
         with RESULT_CACHE_LOCK:
             RESULT_CACHE[ck] = res
+        record_decision(asdict(res), str(cfg.get("decision_audit_path", "logs/grading_decisions.jsonl")))
         return res
     judges = precomputed_judges
     if judges is None:
@@ -262,8 +267,8 @@ def evaluate_answer(
         acquired = jury_sem.acquire() if patient_mode else jury_sem.acquire(timeout=sem_wait_timeout_s)
         if not acquired:
             lat = (time.perf_counter() - start) * 1000.0
-            log("WARNING", f"[PIPELINE] jury semaphore wait timed out after {sem_wait_timeout_s:.1f}s; using embedding fallback")
-            decision = "REVIEW"
+            log("WARNING", f"[PIPELINE] jury semaphore wait timed out after {sem_wait_timeout_s:.1f}s; marking answer as ERROR")
+            decision = "ERROR"
             res = EvaluationResult(
                 answer,
                 decision,
@@ -280,9 +285,14 @@ def evaluate_answer(
                 False,
                 lat,
                 "jury_wait_timeout",
+                {"question": question, "expected": expected, "answer": answer, "policy": {
+                    "policy_reason": "ai_grading_unavailable",
+                    "processing_error": "jury_wait_timeout",
+                }, "domain_validation": domain.to_dict(), "teacher_answer_is_authoritative": True, "key_eligible": False},
             )
             with RESULT_CACHE_LOCK:
                 RESULT_CACHE[ck] = res
+            record_decision(asdict(res), str(cfg.get("decision_audit_path", "logs/grading_decisions.jsonl")))
             try:
                 agent = get_global_agent()
                 if agent:
@@ -315,7 +325,7 @@ def evaluate_answer(
             if circuit_enabled:
                 with JURY_CIRCUIT_LOCK:
                     JURY_DISABLED_UNTIL_TS = time.time() + max(60, int(cfg.get("jury_circuit_break_seconds", 600)))
-            log("ERROR", f"[PIPELINE] jury failed: {jury_ex}; routing answer to REVIEW")
+            log("ERROR", f"[PIPELINE] jury failed after retries: {jury_ex}; marking answer as ERROR")
             judges = []
         finally:
             try:
@@ -325,8 +335,16 @@ def evaluate_answer(
     active = [j for j in judges if j.get("decision") in {"YES", "NO"}]
     policy_evidence = {}
     if not active:
-        final_score, decision, stage, confidence = emb_score, "REVIEW", "jury_unavailable", 0.0
+        final_score, decision, stage, confidence = emb_score, "ERROR", "jury_unavailable", 0.0
         factual = 0.0
+        policy_evidence = {
+            "policy_reason": "ai_grading_unavailable",
+            "processing_error": "no_valid_ai_judge_verdicts",
+            "judge_decisions": {
+                str(j.get("role") or f"judge_{idx + 1}"): dict(j)
+                for idx, j in enumerate(judges or [])
+            },
+        }
         agg = {"semantic_similarity": float(concept["semantic_score"]), "concept_coverage": float(concept["concept_score"]), "factual_accuracy": 0.0, "strict_judge_score": 0.0, "language_noise_ratio": 0.0}
     else:
         by_role = {str(j.get("role", "")): j for j in active}
@@ -359,15 +377,31 @@ def evaluate_answer(
             "require_distinct_models",
             accuracy_cfg.get("require_distinct_models", True),
         ))
+        required_ai_roles = accuracy_cfg.get(
+            "required_accept_roles",
+            ["semantic_judge", "factual_judge", "strict_judge"],
+        )
         if bool(adaptive_cfg.get("enabled", False)):
+            primary_roles = adaptive_cfg.get("primary_roles", ["semantic_judge", "factual_judge", "concept_judge"])
+            required_ai_roles = primary_roles
             decision, confidence, reason, policy_evidence = adaptive_math_jury_decision(
                 judges,
                 cfg.get("jury_models", {}),
                 min_confidence=policy_min_confidence,
-                primary_roles=adaptive_cfg.get("primary_roles", ["semantic_judge", "factual_judge", "concept_judge"]),
+                primary_roles=primary_roles,
                 adjudicator_role=str(adaptive_cfg.get("adjudicator_role", "strict_judge")),
                 require_distinct_models=require_distinct,
             )
+            if reason in {"adjudicator_unavailable", "judge_unavailable_or_invalid", "missing_required_judges"}:
+                valid_primary = [
+                    role for role in primary_roles
+                    if str((by_role.get(role) or {}).get("decision", "")).upper() in {"YES", "NO"}
+                ]
+                if len(valid_primary) < len(primary_roles):
+                    decision = "ERROR"
+                    confidence = 0.0
+                    reason = "incomplete_ai_jury"
+                    policy_evidence["processing_error"] = "incomplete_ai_jury"
         else:
             decision, confidence, reason, policy_evidence = conservative_jury_decision(
                 judges,
@@ -376,6 +410,24 @@ def evaluate_answer(
                 required_roles=accuracy_cfg.get("required_accept_roles", ["semantic_judge", "factual_judge", "strict_judge"]),
                 require_distinct_models=require_distinct,
             )
+            if reason in {"judge_unavailable_or_invalid", "missing_required_judges"}:
+                decision = "ERROR"
+                confidence = 0.0
+                reason = "incomplete_ai_jury"
+                policy_evidence["processing_error"] = "incomplete_ai_jury"
+        valid_required_roles = [
+            role for role in required_ai_roles
+            if str((by_role.get(role) or {}).get("decision", "")).upper() in {"YES", "NO"}
+        ]
+        required_jury_complete = len(valid_required_roles) == len(required_ai_roles)
+        if not required_jury_complete and decision != "NO":
+            decision = "ERROR"
+            confidence = 0.0
+            reason = "incomplete_ai_jury"
+            policy_evidence["processing_error"] = "incomplete_ai_jury"
+            policy_evidence["missing_or_invalid_required_roles"] = [
+                role for role in required_ai_roles if role not in valid_required_roles
+            ]
         policy_evidence["strictness_mode"] = profile.get("mode", "balanced")
         policy_evidence["strictness_profile"] = profile
         if decision == "REVIEW" and bool(profile.get("accept_unanimous_yes", False)):
@@ -422,8 +474,9 @@ def evaluate_answer(
         # math checks can be too brittle when the mark scheme is prose.
         policy_evidence["deterministic_evidence_non_authoritative"] = domain.to_dict()
         if (
-            decision == "REVIEW"
+            decision in {"YES", "REVIEW"}
             and _domain_proof_can_confirm_ai_acceptance(domain)
+            and required_jury_complete
             and active
             and all(str(j.get("decision", "")).upper() == "YES" for j in active)
         ):
@@ -431,11 +484,11 @@ def evaluate_answer(
             confidence = max(float(confidence), float(domain.confidence))
             reason = f"domain_{domain.domain}_confirmed_by_ai"
             policy_evidence["domain_proof_confirmed_unanimous_ai_yes"] = True
-        if _domain_contradiction_can_force_rejection(domain):
+        if decision != "ERROR" and _domain_contradiction_can_force_rejection(domain):
             decision = "NO"
             confidence = max(float(confidence), float(domain.confidence))
             reason = f"domain_contradiction_{domain.domain}"
-        stage = "jury" if decision in {"YES", "NO"} else "review"
+        stage = "jury" if decision in {"YES", "NO"} else "jury_unavailable" if decision == "ERROR" else "review"
         policy_evidence["policy_reason"] = reason
         factual = float(agg["factual_accuracy"])
 

@@ -46,6 +46,72 @@ def test_gui_event_is_machine_readable(capsys):
     assert "run_id" in event
 
 
+def test_gui_answer_event_renders_processing_failure_not_review():
+    rendered = GraderThread._format_gui_event({
+        "type": "answer_result",
+        "current": 1,
+        "total": 1,
+        "question_number": 1,
+        "question": "3a",
+        "expected": "36",
+        "answer": "36",
+        "formatting": {"proven": True, "reason": "exact normalized match"},
+        "judges": [],
+        "decision": "ERROR",
+        "action": "Grading failed after retries; answer was not added to Google Forms or teacher review.",
+        "accepted": 0,
+        "review": 0,
+        "rejected": 0,
+        "elapsed": "00:00:30",
+    })
+
+    assert "Final decision:" in rendered
+    assert "FAILED" in rendered
+    assert "NEEDS REVIEW" not in rendered
+    assert "not added to Google Forms or teacher review" in rendered
+
+
+def test_provider_managed_error_labels_do_not_show_legacy_ollama_models():
+    rendered = GraderThread._format_gui_event({
+        "type": "answer_result",
+        "current": 42,
+        "total": 167,
+        "question_number": 16,
+        "question": "Bearing reason",
+        "expected": "Bearings should have 3 digits",
+        "answer": "090^",
+        "formatting": {"proven": False, "reason": "requires semantic and factual judging"},
+        "judges": [
+            {
+                "role": "semantic_judge",
+                "model": "provider-managed:semantic_judge",
+                "decision": "ERROR",
+                "confidence": 0.0,
+                "reason": "empty_response",
+            },
+            {
+                "role": "factual_judge",
+                "model": "provider-managed:factual_judge",
+                "decision": "ERROR",
+                "confidence": 0.0,
+                "reason": "empty_response",
+            },
+        ],
+        "decision": "ERROR",
+        "action": "Grading failed after retries; answer was not added to Google Forms or teacher review.",
+        "accepted": 0,
+        "review": 1,
+        "rejected": 0,
+        "elapsed": "00:15:14",
+    })
+
+    assert "semantic_judge: ERROR" in rendered
+    assert "factual_judge: ERROR" in rendered
+    assert "llama3.1:8b" not in rendered
+    assert "qwen3:8b" not in rendered
+    assert "provider-managed:" not in rendered
+
+
 def test_gui_terminal_events_are_persisted_as_text_and_jsonl(tmp_path):
     worker = GraderThread()
     text_path = tmp_path / "gui.log"

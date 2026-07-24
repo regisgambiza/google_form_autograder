@@ -12,7 +12,7 @@ from typing import Dict, List, Optional
 from auth import get_service
 from deterministic_checks import run_deterministic_checks
 from evaluation_pipeline import EvaluationResult, evaluate_answer, evaluate_answers_model_first
-from evaluator_config import load_config
+from evaluator_config import effective_ai_worker_count, load_config
 from feedback import generate_form_feedback
 from form_context_builder import (
     apply_question_context,
@@ -116,7 +116,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
     staged_startup = bool(cfg.get("staged_thread_startup", True))
     fetch_workers = max(1, int(cfg.get("global_prefetch_workers", 4)))
     det_workers = max(1, int(cfg.get("deterministic_worker_count", 5)))
-    ai_workers = max(1, int(cfg.get("ai_worker_count", 3)))
+    ai_workers = effective_ai_worker_count(cfg)
     model_first_batching = (
         bool(cfg.get("model_first_question_batching", False))
         and bool(cfg.get("force_ai_jury_for_all_answers", False))
@@ -670,7 +670,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
             )
             return EvaluationResult(
                 answer=t.answer,
-                decision="NO",
+                decision="ERROR",
                 final_score=0.0,
                 semantic_score=0.0,
                 concept_score=0.0,
@@ -742,7 +742,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
             for task in batch.tasks:
                 failed_results.append((task, EvaluationResult(
                     answer=task.answer,
-                    decision="NO",
+                    decision="ERROR",
                     final_score=0.0,
                     semantic_score=0.0,
                     concept_score=0.0,
@@ -854,7 +854,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                     batch_results = []
                     for task in batch.tasks:
                         batch_results.append((task, EvaluationResult(
-                            answer=task.answer, decision="NO", final_score=0.0, semantic_score=0.0,
+                            answer=task.answer, decision="ERROR", final_score=0.0, semantic_score=0.0,
                             concept_score=0.0, factual_score=0.0, misconception_detected=False,
                             misconception_description="batch_worker_error", missing_concepts=[],
                             accepted_concepts=[], model_agreement=0.0, confidence=0.0,
@@ -929,7 +929,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
             except Exception as exx:
                 log("ERROR", f"[DISPATCH] ai worker error: {exx}")
                 r = EvaluationResult(
-                    answer=t.answer, decision="NO", final_score=0.0, semantic_score=0.0, concept_score=0.0,
+                    answer=t.answer, decision="ERROR", final_score=0.0, semantic_score=0.0, concept_score=0.0,
                     factual_score=0.0, misconception_detected=False, misconception_description="error",
                     missing_concepts=[], accepted_concepts=[], model_agreement=0.0, confidence=0.0,
                     fast_path_used=False, latency_ms=0.0, stage_reached="worker_error"
@@ -939,7 +939,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
             if (not patient_mode) and elapsed_s > hard_budget_s:
                 log("WARNING", f"[DISPATCH] evaluate_answer exceeded budget: {elapsed_s:.1f}s > {hard_budget_s:.1f}s")
                 r = EvaluationResult(
-                    answer=t.answer, decision="NO", final_score=0.0, semantic_score=0.0, concept_score=0.0,
+                    answer=t.answer, decision="ERROR", final_score=0.0, semantic_score=0.0, concept_score=0.0,
                     factual_score=0.0, misconception_detected=False, misconception_description="timeout",
                     missing_concepts=[], accepted_concepts=[], model_agreement=0.0, confidence=0.0,
                     fast_path_used=False, latency_ms=hard_budget_s * 1000.0, stage_reached="timeout"
@@ -1095,6 +1095,8 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                 action = "Answer accepted; queued for the answer key audit." if accepted_variant else "Answer accepted; it matches an existing accepted form."
             elif r.decision == "REVIEW":
                 action = "Answer added to Google Forms; pending teacher review."
+            elif r.decision == "ERROR":
+                action = "Grading failed after retries; answer was not added to Google Forms or teacher review."
             else:
                 action = "Rejected and not added to Google Forms."
             shown_answer = safe_text(t.answer) if bool(cfg.get("gui_show_student_answers", True)) else "[hidden]"

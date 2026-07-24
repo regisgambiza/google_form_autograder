@@ -158,6 +158,7 @@ class OpenRouterModelRegistry:
             import json
             import os
             path = str(cfg.get("model_selection_trace_path", "logs/model_selection.jsonl"))
+            max_bytes = max(1, int(float(cfg.get("model_selection_trace_max_mb", 50)) * 1024 * 1024))
             os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
             diagnostics = []
             for index, model in enumerate(ordered):
@@ -192,8 +193,21 @@ class OpenRouterModelRegistry:
                 "available": available,
                 "diagnostics": diagnostics,
             }
+            self._rotate_trace_if_needed(path, max_bytes)
             with open(path, "a", encoding="utf-8") as fh:
                 fh.write(json.dumps(record, ensure_ascii=True, default=str) + "\n")
+        except Exception:
+            pass
+
+    @staticmethod
+    def _rotate_trace_if_needed(path: str, max_bytes: int) -> None:
+        try:
+            if max_bytes <= 0 or not os.path.exists(path) or os.path.getsize(path) <= max_bytes:
+                return
+            rotated = f"{path}.1"
+            if os.path.exists(rotated):
+                os.remove(rotated)
+            os.replace(path, rotated)
         except Exception:
             pass
 

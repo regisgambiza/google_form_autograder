@@ -286,3 +286,26 @@ def test_missing_teacher_answer_key_is_review_even_for_blank_student_answer():
 
     assert domain.status == "REVIEW"
     assert domain.domain == "missing_key"
+
+
+def test_error_judge_evidence_does_not_fall_back_to_legacy_model_names():
+    decision, _confidence, reason, evidence = adaptive_math_jury_decision(
+        [
+            {"role": "semantic_judge", "decision": "ERROR", "confidence": 0.0},
+            {"role": "factual_judge", "decision": "ERROR", "confidence": 0.0},
+            {"role": "concept_judge", "decision": "ERROR", "confidence": 0.0},
+        ],
+        {
+            "semantic_judge": "llama3.1:8b",
+            "factual_judge": "qwen3:8b",
+            "concept_judge": "qwen2.5:7b",
+            "strict_judge": "qwen3:8b",
+        },
+        require_distinct_models=False,
+    )
+
+    assert decision == "REVIEW"
+    assert reason == "adjudicator_unavailable"
+    assert evidence["judge_decisions"]["semantic_judge"]["model"] == "provider-managed:semantic_judge"
+    assert evidence["judge_decisions"]["factual_judge"]["model"] == "provider-managed:factual_judge"
+    assert "qwen" not in str(evidence["judge_decisions"])

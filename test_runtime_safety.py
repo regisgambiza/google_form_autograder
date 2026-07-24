@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import grader_thread
+from evaluator_config import effective_ai_worker_count, effective_provider_worker_counts
 
 
 def test_current_jury_models_use_configured_fast_local_roles():
@@ -14,14 +15,32 @@ def test_current_jury_models_use_configured_fast_local_roles():
     assert cfg["reasoning_model"] == "phi4:14b"
 
 
-def test_provider_manager_prefers_openrouter_with_ollama_failover():
+def test_provider_manager_strategy_and_priority_are_consistent():
     cfg = json.loads(Path("config.json").read_text(encoding="utf-8"))
     assert cfg["provider_manager_enabled"] is True
-    assert cfg["provider_priority"] == ["openrouter", "ollama"]
+    strategy = str(cfg.get("provider_strategy", "")).casefold()
+    priority = cfg.get("provider_priority", [])
+    if strategy == "llamacpp_only":
+        assert priority == ["llamacpp"]
+    elif strategy == "ollama_only":
+        assert priority == ["ollama"]
+    elif strategy == "openrouter_only":
+        assert priority == ["openrouter"]
+    else:
+        assert priority == ["openrouter", "llamacpp", "ollama"]
     assert cfg["openrouter_worker_count"] >= 1
+    assert cfg["llamacpp_worker_count"] >= 1
     assert cfg["ollama_worker_count"] == 1
     assert cfg["openrouter_api_key"] == "env:OPENROUTER_API_KEY"
     assert "openrouter/free" in cfg["openrouter_fallback_models"]
+    assert cfg["llamacpp_model_dir"].endswith(r".lmstudio\models")
+    if strategy == "llamacpp_only":
+        assert effective_ai_worker_count(cfg) == 1
+        assert effective_provider_worker_counts(cfg) == {
+            "openrouter": 0,
+            "llamacpp": 1,
+            "ollama": 0,
+        }
 
 
 def test_patient_ai_mode_avoids_short_timeout_fallbacks():
@@ -82,3 +101,20 @@ def test_window_close_is_exit_not_implicit_tray_hide():
 def test_grader_subprocess_is_unbuffered():
     source = Path("grader_thread.py").read_text(encoding="utf-8")
     assert 'my_env["PYTHONUNBUFFERED"] = "1"' in source
+
+
+def test_stale_grader_processes_are_waited_after_stop():
+    source = Path("grader_thread.py").read_text(encoding="utf-8")
+    assert "Stop-Process -Id $_.ProcessId -Force" in source
+    assert "Wait-Process -Id $_.ProcessId -Timeout 5" in source
+
+
+def test_active_grading_path_uses_provider_managed_pipeline():
+    cfg = json.loads(Path("config.json").read_text(encoding="utf-8"))
+    dispatcher = Path("global_dispatcher.py").read_text(encoding="utf-8")
+    judges = Path("ai_judges.py").read_text(encoding="utf-8")
+
+    assert cfg["dispatch_mode"] == "global"
+    assert cfg["evaluator"] == "ai_evaluator_semantic"
+    assert "from evaluation_pipeline import EvaluationResult, evaluate_answer, evaluate_answers_model_first" in dispatcher
+    assert "get_provider_manager().ask" in judges

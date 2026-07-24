@@ -39,7 +39,12 @@ from auto_add_dialog import AutoAddDialog, SearchThread
 from grader_thread import GraderThread
 from class_loader_thread import ClassLoaderThread
 import ollama
-from evaluator_config import DEFAULT_CONFIG
+from evaluator_config import (
+    DEFAULT_CONFIG,
+    effective_ai_worker_count,
+    effective_provider_worker_counts,
+    is_llamacpp_only,
+)
 from scheduler import scheduler as auto_scheduler
 from answer_key_dashboard import AnswerKeyDashboard
 from app_theme import apply_application_theme, apply_widget_theme
@@ -129,6 +134,55 @@ class SourceScanThread(QThread):
             self.finished.emit(forms)
         except Exception as exc:
             self.failed.emit(str(exc))
+
+
+class SettingsModelDiscoveryThread(QThread):
+    finished = pyqtSignal(object, object, str)
+
+    def __init__(self, llamacpp_model_dir):
+        super().__init__()
+        self.llamacpp_model_dir = str(llamacpp_model_dir or "")
+
+    def run(self):
+        errors = []
+        ollama_models = []
+        llamacpp_models = []
+        try:
+            ollama_models = [
+                self._read_ollama_model_name(model_info)
+                for model_info in ollama.list().get("models", [])
+            ]
+            ollama_models = [m for m in ollama_models if m]
+        except Exception as exc:
+            errors.append(f"Ollama models unavailable: {exc}")
+        try:
+            llamacpp_models = self._find_llamacpp_models(self.llamacpp_model_dir)
+        except Exception as exc:
+            errors.append(f"llama.cpp model scan failed: {exc}")
+        self.finished.emit(ollama_models, llamacpp_models, "; ".join(errors))
+
+    @staticmethod
+    def _read_ollama_model_name(model_info):
+        if isinstance(model_info, dict):
+            return model_info.get("name") or model_info.get("model")
+        return getattr(model_info, "name", None) or getattr(model_info, "model", None)
+
+    @staticmethod
+    def _find_llamacpp_models(model_dir):
+        root = os.path.expandvars(os.path.expanduser(str(model_dir or "")))
+        found = []
+        if not root or not os.path.isdir(root):
+            return found
+        for dirpath, _dirnames, filenames in os.walk(root):
+            for filename in filenames:
+                lower_name = filename.lower()
+                if not lower_name.endswith(".gguf"):
+                    continue
+                if lower_name.startswith("mmproj-") or "mmproj" in lower_name:
+                    continue
+                path = os.path.join(dirpath, filename)
+                found.append(os.path.relpath(path, root).replace("\\", "/"))
+        return sorted(found, key=str.casefold)
 
 AI_WORKER_DISPLAY_NAMES = [
     "Optimus Prime",
@@ -960,7 +1014,7 @@ class FormManager(QMainWindow):
         self.app_worker_list.setSpacing(0)
         detail_layout.addLayout(self.app_worker_list)
 
-        self.provider_worker_summary = QLabel("OpenRouter: - | Ollama: -")
+        self.provider_worker_summary = QLabel("OpenRouter: - | llama.cpp: - | Ollama: -")
         self.provider_worker_summary.setObjectName("Muted")
         provider_worker_label = QLabel("Provider workers")
         provider_worker_label.setObjectName("Muted")
@@ -1312,10 +1366,12 @@ class FormManager(QMainWindow):
                 cfg = json.load(fh)
         except Exception:
             cfg = {}
+        provider_counts = effective_provider_worker_counts(cfg)
         return {
-            "ai": max(1, int(cfg.get("ai_worker_count", 4) or 4)),
-            "openrouter": max(0, int(cfg.get("openrouter_worker_count", 4) or 4)),
-            "ollama": max(0, int(cfg.get("ollama_worker_count", 1) or 1)),
+            "ai": effective_ai_worker_count(cfg),
+            "openrouter": provider_counts["openrouter"],
+            "llamacpp": provider_counts["llamacpp"],
+            "ollama": provider_counts["ollama"],
         }
 
     def _ai_worker_display_name(self, worker_id):
@@ -1329,17 +1385,62 @@ class FormManager(QMainWindow):
 
     def _sync_worker_cards_to_config(self):
         counts = self._configured_worker_counts()
-        for index in range(len(self.app_worker_cards), counts["ai"]):
+        self._prune_worker_cards_to_counts(counts)
+        for index in range(len(self.app_worker_cards), counts.get("ai", 4)):
             self._ensure_worker_card("app", f"ai-{index + 1}", "AI worker")
-        for index in range(len([wid for wid in self.provider_worker_cards if wid.startswith("openrouter-")]), counts["openrouter"]):
+        for index in range(len([wid for wid in self.provider_worker_cards if wid.startswith("openrouter-")]), counts.get("openrouter", 4)):
             worker_id = f"openrouter-{index + 1}"
             self.provider_worker_states.setdefault(worker_id, {"state": "idle"})
             self._ensure_worker_card("provider", worker_id, "OpenRouter")
-        for index in range(len([wid for wid in self.provider_worker_cards if wid.startswith("ollama-")]), counts["ollama"]):
+        for index in range(len([wid for wid in self.provider_worker_cards if wid.startswith("llamacpp-")]), counts.get("llamacpp", 0)):
+            worker_id = f"llamacpp-{index + 1}"
+            self.provider_worker_states.setdefault(worker_id, {"state": "idle"})
+            self._ensure_worker_card("provider", worker_id, "llama.cpp")
+        for index in range(len([wid for wid in self.provider_worker_cards if wid.startswith("ollama-")]), counts.get("ollama", 1)):
             worker_id = f"ollama-{index + 1}"
             self.provider_worker_states.setdefault(worker_id, {"state": "idle"})
             self._ensure_worker_card("provider", worker_id, "Ollama")
         self._refresh_worker_summaries()
+
+    def _remove_worker_card(self, group, worker_id):
+        cards = self.app_worker_cards if group == "app" else self.provider_worker_cards
+        card = cards.pop(worker_id, None)
+        if not card:
+            return
+        frame = card.get("frame")
+        layout = self.app_worker_list if group == "app" else self.provider_worker_list
+        if frame is not None:
+            layout.removeWidget(frame)
+            frame.setParent(None)
+            frame.deleteLater()
+        if group != "app":
+            self.provider_worker_states.pop(worker_id, None)
+
+    def _worker_number(self, worker_id):
+        try:
+            return int(str(worker_id).rsplit("-", 1)[-1])
+        except Exception:
+            return 0
+
+    def _prune_worker_cards_to_counts(self, counts):
+        for worker_id in list(self.app_worker_cards):
+            if self._worker_number(worker_id) > counts.get("ai", 1):
+                self._remove_worker_card("app", worker_id)
+        for provider in ("openrouter", "llamacpp", "ollama"):
+            limit = counts.get(provider, 0)
+            for worker_id in list(self.provider_worker_cards):
+                if worker_id.startswith(f"{provider}-") and self._worker_number(worker_id) > limit:
+                    self._remove_worker_card("provider", worker_id)
+
+    def _worker_allowed_by_config(self, group, worker_id):
+        counts = self._configured_worker_counts()
+        number = self._worker_number(worker_id)
+        if group == "app":
+            return number <= counts.get("ai", 1)
+        for provider in ("openrouter", "llamacpp", "ollama"):
+            if str(worker_id).startswith(f"{provider}-"):
+                return number <= counts.get(provider, 0)
+        return True
 
     def _initialize_worker_cards(self):
         counts = self._configured_worker_counts()
@@ -1348,6 +1449,9 @@ class FormManager(QMainWindow):
         for index in range(counts["openrouter"]):
             self.provider_worker_states[f"openrouter-{index + 1}"] = {"state": "idle"}
             self._ensure_worker_card("provider", f"openrouter-{index + 1}", "OpenRouter")
+        for index in range(counts["llamacpp"]):
+            self.provider_worker_states[f"llamacpp-{index + 1}"] = {"state": "idle"}
+            self._ensure_worker_card("provider", f"llamacpp-{index + 1}", "llama.cpp")
         for index in range(counts["ollama"]):
             self.provider_worker_states[f"ollama-{index + 1}"] = {"state": "idle"}
             self._ensure_worker_card("provider", f"ollama-{index + 1}", "Ollama")
@@ -1406,6 +1510,8 @@ class FormManager(QMainWindow):
         return cards[worker_id]
 
     def _set_worker_card(self, group, worker_id, title_prefix, status, primary, secondary, stats):
+        if not self._worker_allowed_by_config(group, worker_id):
+            return
         card = self._ensure_worker_card(group, worker_id, title_prefix)
         state = str(status or "idle").lower()
         card["state"] = state
@@ -1622,13 +1728,24 @@ class FormManager(QMainWindow):
         provider_strategy_combo = QComboBox(dialog)
         provider_strategy_combo.addItems([
             "free_first_ollama_fallback",
+            "openrouter_llamacpp_ollama",
+            "openrouter_llamacpp",
+            "llamacpp_openrouter",
+            "local_all",
+            "custom_priority",
             "free_first_paid_fallback",
             "cheap_paid_only",
             "openrouter_only",
+            "llamacpp_only",
             "ollama_only",
         ])
         provider_strategy_combo.setToolTip(
             "Controls provider routing. Paid strategies use the cheap paid fallback model list and respect the spend cap."
+        )
+        provider_priority_edit = QLineEdit(dialog)
+        provider_priority_edit.setText("openrouter,llamacpp,ollama")
+        provider_priority_edit.setToolTip(
+            "Custom provider order used by custom_priority and legacy/default routing. Example: openrouter,llamacpp,ollama"
         )
         max_openrouter_spend_spin = QDoubleSpinBox(dialog)
         max_openrouter_spend_spin.setRange(0.0, 100.0)
@@ -1660,6 +1777,7 @@ class FormManager(QMainWindow):
                 cfg = json.load(f)
         except Exception:
             cfg = {}
+        provider_priority_edit.setText(",".join(str(x) for x in cfg.get("provider_priority", ["openrouter", "llamacpp", "ollama"])))
 
         def normalize_model_key(model_name):
             text = str(model_name or "").strip()
@@ -1672,19 +1790,9 @@ class FormManager(QMainWindow):
                 model_names.append(text)
                 seen_keys.add(key)
 
-        def read_ollama_model_name(model_info):
-            if isinstance(model_info, dict):
-                return model_info.get("name") or model_info.get("model")
-            return getattr(model_info, "name", None) or getattr(model_info, "model", None)
-
         ollama_models = []
-        try:
-            ollama_models = [
-                read_ollama_model_name(model_info)
-                for model_info in ollama.list().get("models", [])
-            ]
-        except Exception as e:
-            print(f"Error fetching Ollama models: {e}")
+        llamacpp_model_dir = cfg.get("llamacpp_model_dir", r"C:\Users\regis\.lmstudio\models")
+        llamacpp_models = []
 
         ollama_keys = {
             normalize_model_key(model_name)
@@ -1722,7 +1830,8 @@ class FormManager(QMainWindow):
         model_status_label = QLabel(
             f"{len(available_models)} selectable models "
             f"({installed_model_count} installed"
-            f"{', ' + str(len(extra_configured_models)) + ' configured only' if extra_configured_models else ''}).",
+            f"{', ' + str(len(extra_configured_models)) + ' configured only' if extra_configured_models else ''}; "
+            "llama.cpp scan pending).",
             dialog,
         )
         model_status_label.setWordWrap(True)
@@ -1753,6 +1862,88 @@ class FormManager(QMainWindow):
             jury_combos[role] = combo
             jury_role_labels[role] = QLabel(role.replace('_', ' ').title() + ":", dialog)
 
+        llamacpp_role_combos = {}
+        llamacpp_role_labels = {}
+        cfg_llamacpp = cfg.get("llamacpp_models", {}) if cfg else {}
+        for role in jury_defaults:
+            combo = QComboBox(dialog)
+            configured = cfg_llamacpp.get(role, [])
+            if isinstance(configured, str):
+                configured = [configured]
+            role_models = list(llamacpp_models)
+            for configured_model in reversed([str(m).strip() for m in configured if str(m).strip()]):
+                if configured_model not in role_models:
+                    role_models.insert(0, configured_model)
+            if role_models:
+                combo.addItems(role_models)
+            else:
+                combo.addItem("No llama.cpp GGUF models found")
+                combo.setEnabled(False)
+            if configured:
+                combo.setCurrentText(str(configured[0]))
+            combo.setToolTip(
+                "Select a GGUF model found under the llama.cpp model folder. "
+                "Projector/mmproj files are hidden because they are not grading models."
+            )
+            llamacpp_role_combos[role] = combo
+            llamacpp_role_labels[role] = QLabel("llama.cpp " + role.replace('_', ' ').title() + ":", dialog)
+
+        def combo_contains(combo, text):
+            target = normalize_model_key(text)
+            return any(normalize_model_key(combo.itemText(i)) == target for i in range(combo.count()))
+
+        def add_combo_choice(combo, text):
+            text = str(text or "").strip()
+            if text and not combo_contains(combo, text):
+                combo.addItem(text)
+
+        def apply_discovered_models(discovered_ollama, discovered_llamacpp, error_text):
+            discovered_ollama = [str(m).strip() for m in discovered_ollama or [] if str(m).strip()]
+            discovered_llamacpp = [str(m).strip() for m in discovered_llamacpp or [] if str(m).strip()]
+            for model_name in discovered_ollama:
+                for combo in [model_combo, embedding_model_combo, reasoning_model_combo, supervisor_model_combo, *jury_combos.values()]:
+                    add_combo_choice(combo, model_name)
+            for role, combo in llamacpp_role_combos.items():
+                current = combo.currentText().strip()
+                placeholder = current == "No llama.cpp GGUF models found"
+                if placeholder:
+                    combo.clear()
+                for model_name in discovered_llamacpp:
+                    add_combo_choice(combo, model_name)
+                if placeholder and combo.count() == 0:
+                    combo.addItem("No llama.cpp GGUF models found")
+                    combo.setEnabled(False)
+                else:
+                    combo.setEnabled(True)
+                    configured = cfg_llamacpp.get(role, [])
+                    if isinstance(configured, str):
+                        configured = [configured]
+                    preferred = str((configured or [""])[0]).strip()
+                    if preferred and combo_contains(combo, preferred):
+                        combo.setCurrentText(preferred)
+                    elif current and current != "No llama.cpp GGUF models found" and combo_contains(combo, current):
+                        combo.setCurrentText(current)
+            ollama_keys_now = {
+                normalize_model_key(model_name)
+                for model_name in discovered_ollama
+                if normalize_model_key(model_name)
+            }
+            extra_now = sorted(key for key in seen_model_keys if key not in ollama_keys_now)
+            model_status_label.setText(
+                f"{model_combo.count()} selectable models "
+                f"({len(ollama_keys_now)} installed"
+                f"{', ' + str(len(extra_now)) + ' configured only' if extra_now else ''}; "
+                f"{len(discovered_llamacpp)} llama.cpp GGUF models found)."
+            )
+            if error_text:
+                model_status_label.setToolTip(str(error_text))
+            refresh_jury_status()
+
+        model_discovery_thread = SettingsModelDiscoveryThread(llamacpp_model_dir)
+        dialog._model_discovery_thread = model_discovery_thread
+        model_discovery_thread.finished.connect(apply_discovered_models)
+        model_discovery_thread.start()
+
         report_checkbox = QCheckBox("Generate Report", dialog)
         dedup_checkbox.setChecked(cfg.get("enable_deduplication", True))
         legacy_judge_answer_batch_size = max(1, int(cfg.get("judge_answer_batch_size", 3)))
@@ -1773,6 +1964,12 @@ class FormManager(QMainWindow):
         openrouter_judge_answer_batch_size_spin.setToolTip(
             "How many student answers are sent to each OpenRouter judge call. "
             "Higher values can improve throughput but may increase malformed JSON risk."
+        )
+        llamacpp_judge_answer_batch_size_spin = QSpinBox(dialog)
+        llamacpp_judge_answer_batch_size_spin.setRange(1, 1)
+        llamacpp_judge_answer_batch_size_spin.setValue(1)
+        llamacpp_judge_answer_batch_size_spin.setToolTip(
+            "llama.cpp is capped at 1 answer per judge call to avoid malformed local batch JSON."
         )
         ai_worker_count_spin = QSpinBox(dialog)
         ai_worker_count_spin.setRange(1, 12)
@@ -1795,6 +1992,20 @@ class FormManager(QMainWindow):
             "Ollama provider worker threads. Keep this at 1 unless your local hardware can run multiple model requests efficiently. "
             "Changes apply to the next grading run."
         )
+        llamacpp_worker_count_spin = QSpinBox(dialog)
+        llamacpp_worker_count_spin.setRange(1, 1)
+        llamacpp_worker_count_spin.setValue(1)
+        llamacpp_worker_count_spin.setToolTip(
+            "llama.cpp is capped at 1 provider worker because local GGUF models share one server/hardware lane."
+        )
+        llamacpp_enabled_checkbox = QCheckBox("Enable llama.cpp provider", dialog)
+        llamacpp_enabled_checkbox.setChecked(bool(cfg.get("llamacpp_enabled", True)))
+        llamacpp_require_server_checkbox = QCheckBox("Require running llama.cpp server", dialog)
+        llamacpp_require_server_checkbox.setChecked(bool(cfg.get("llamacpp_require_server", True)))
+        llamacpp_base_url_edit = QLineEdit(dialog)
+        llamacpp_base_url_edit.setText(str(cfg.get("llamacpp_api_base_url", "http://127.0.0.1:8080")))
+        llamacpp_model_dir_edit = QLineEdit(dialog)
+        llamacpp_model_dir_edit.setText(str(llamacpp_model_dir))
         supervisor_model_combo = QComboBox(dialog)
         supervisor_model_combo.setToolTip(
             "Local Ollama model used to audit OpenRouter judge quality. "
@@ -1960,12 +2171,21 @@ class FormManager(QMainWindow):
         form.addRow("Answer Processing:", dedup_checkbox)
         form.addRow("AI Worker Threads:", ai_worker_count_spin)
         form.addRow("OpenRouter Provider Workers:", openrouter_worker_count_spin)
+        form.addRow("llama.cpp Provider Workers:", llamacpp_worker_count_spin)
         form.addRow("Ollama Provider Workers:", ollama_worker_count_spin)
         form.addRow("Provider Strategy:", provider_strategy_combo)
+        form.addRow("Provider Priority:", provider_priority_edit)
         form.addRow("OpenRouter Spend Cap ($):", max_openrouter_spend_spin)
         form.addRow("OpenRouter Monitor Model:", supervisor_model_combo)
         form.addRow("Ollama Answers per Judge Call:", ollama_judge_answer_batch_size_spin)
         form.addRow("OpenRouter Answers per Judge Call:", openrouter_judge_answer_batch_size_spin)
+        form.addRow("llama.cpp Answers per Judge Call:", llamacpp_judge_answer_batch_size_spin)
+        form.addRow("llama.cpp:", llamacpp_enabled_checkbox)
+        form.addRow("llama.cpp Server URL:", llamacpp_base_url_edit)
+        form.addRow("llama.cpp Model Folder:", llamacpp_model_dir_edit)
+        form.addRow("llama.cpp Server Check:", llamacpp_require_server_checkbox)
+        for role in ("semantic_judge", "factual_judge", "concept_judge", "strict_judge"):
+            form.addRow(llamacpp_role_labels[role], llamacpp_role_combos[role])
 
         buttons = QWidget(dialog)
         b = QHBoxLayout(buttons)
@@ -2032,6 +2252,13 @@ class FormManager(QMainWindow):
             config_data["grading_strictness"] = strictness_combo.currentText()
             config_data["leniency"] = strictness_combo.currentText()
             config_data["provider_strategy"] = provider_strategy_combo.currentText()
+            priority = [
+                part.strip().lower()
+                for part in provider_priority_edit.text().split(",")
+                if part.strip().lower() in {"openrouter", "llamacpp", "ollama"}
+            ]
+            if priority:
+                config_data["provider_priority"] = list(dict.fromkeys(priority))
             config_data["max_openrouter_spend_usd_per_run"] = float(max_openrouter_spend_spin.value())
 
             if model_combo.currentText():
@@ -2097,7 +2324,22 @@ class FormManager(QMainWindow):
                 config_data[key] = value
             config_data["ai_worker_count"] = int(ai_worker_count_spin.value())
             config_data["openrouter_worker_count"] = int(openrouter_worker_count_spin.value())
+            config_data["llamacpp_worker_count"] = 1
             config_data["ollama_worker_count"] = int(ollama_worker_count_spin.value())
+            config_data["llamacpp_enabled"] = llamacpp_enabled_checkbox.isChecked()
+            config_data["llamacpp_require_server"] = llamacpp_require_server_checkbox.isChecked()
+            config_data["llamacpp_api_base_url"] = llamacpp_base_url_edit.text().strip() or "http://127.0.0.1:8080"
+            config_data["llamacpp_model_dir"] = llamacpp_model_dir_edit.text().strip() or r"C:\Users\regis\.lmstudio\models"
+            selected_llamacpp = {}
+            for role, combo in llamacpp_role_combos.items():
+                try:
+                    sel = combo.currentText().strip()
+                except Exception:
+                    sel = ""
+                if sel == "No llama.cpp GGUF models found":
+                    sel = ""
+                selected_llamacpp[role] = [sel] if sel else []
+            config_data["llamacpp_models"] = selected_llamacpp
             if supervisor_model_combo.currentText():
                 config_data["openrouter_supervisor_ollama_model"] = supervisor_model_combo.currentText()
             # Keep provider-level capacity in ProviderManager; application workers may
@@ -2105,7 +2347,7 @@ class FormManager(QMainWindow):
             config_data["max_concurrent_judge_http"] = 1
             config_data["max_concurrent_jury_answers"] = max(
                 1,
-                int(config_data.get("ai_worker_count", 1) or 1),
+                effective_ai_worker_count(config_data),
             )
             config_data["enable_async_judges"] = False
             config_data["sync_judge_parallelism"] = 1
@@ -2135,7 +2377,11 @@ class FormManager(QMainWindow):
             config_data["enable_deduplication"] = dedup_checkbox.isChecked()
             config_data["ollama_judge_answer_batch_size"] = int(ollama_judge_answer_batch_size_spin.value())
             config_data["openrouter_judge_answer_batch_size"] = int(openrouter_judge_answer_batch_size_spin.value())
+            config_data["llamacpp_judge_answer_batch_size"] = 1
             config_data["judge_answer_batch_size"] = int(openrouter_judge_answer_batch_size_spin.value())
+            if is_llamacpp_only(config_data):
+                config_data["ai_worker_count"] = 1
+                config_data["max_concurrent_jury_answers"] = 1
 
             # Save Heartbeat monitor settings
             config_data["heartbeat_timeout"] = heartbeat_timeout_spin.value()
@@ -3642,7 +3888,7 @@ class FormManager(QMainWindow):
         self.log_tabs.setTabText(1, "Producer (q: -)")
         self.log_tabs.setTabText(2, "Det Workers (q: -)")
         self.log_tabs.setTabText(3, "AI Workers (q: -)")
-        self.log_tabs.setTabText(4, "Providers (OR: - | OL: -)")
+        self.log_tabs.setTabText(4, "Providers (OR: - | LC: - | OL: -)")
         self.log_tabs.setTabText(5, "Aggregator (q: -)")
 
     def _extract_metric_int(self, payload, key):
@@ -3758,34 +4004,77 @@ class FormManager(QMainWindow):
             return None
 
     def _update_provider_metrics(self, payload):
+        provider_defs = [
+            ("openrouter", "OR", "OpenRouter"),
+            ("llamacpp", "LC", "llama.cpp"),
+            ("ollama", "OL", "Ollama"),
+        ]
+        active_provider_names = [
+            name for name, _short, _label in provider_defs
+            if f"q_{name}=" in payload or f"{name}_health=" in payload
+        ]
         q_openrouter = self._extract_metric_value(payload, "q_openrouter") or "-"
+        q_llamacpp = self._extract_metric_value(payload, "q_llamacpp") or "-"
         q_ollama = self._extract_metric_value(payload, "q_ollama") or "-"
         or_health = self._extract_metric_value(payload, "openrouter_health") or "-"
+        lc_health = self._extract_metric_value(payload, "llamacpp_health") or "-"
         ol_health = self._extract_metric_value(payload, "ollama_health") or "-"
         or_done = self._extract_metric_value(payload, "openrouter_done") or "0"
+        lc_done = self._extract_metric_value(payload, "llamacpp_done") or "0"
         ol_done = self._extract_metric_value(payload, "ollama_done") or "0"
         or_failed = self._extract_metric_value(payload, "openrouter_failed") or "0"
+        lc_failed = self._extract_metric_value(payload, "llamacpp_failed") or "0"
         ol_failed = self._extract_metric_value(payload, "ollama_failed") or "0"
         retries = self._extract_metric_value(payload, "retries") or "0"
         failovers = self._extract_metric_value(payload, "failovers") or "0"
         rpm = self._extract_metric_value(payload, "rpm") or "0"
         avg_ms = self._extract_metric_value(payload, "avg_ms") or "0"
         or_model = (self._extract_metric_value(payload, "openrouter_last_model") or "-").replace("_", " ")
+        lc_model = (self._extract_metric_value(payload, "llamacpp_last_model") or "-").replace("_", " ")
         ol_model = (self._extract_metric_value(payload, "ollama_last_model") or "-").replace("_", " ")
         self._update_model_health_dashboard(payload, or_model, ol_model, avg_ms)
 
-        self.log_tabs.setTabText(4, f"Providers (OR: {q_openrouter} | OL: {q_ollama})")
+        queue_by_provider = {"openrouter": q_openrouter, "llamacpp": q_llamacpp, "ollama": q_ollama}
+        health_by_provider = {"openrouter": or_health, "llamacpp": lc_health, "ollama": ol_health}
+        done_by_provider = {"openrouter": or_done, "llamacpp": lc_done, "ollama": ol_done}
+        failed_by_provider = {"openrouter": or_failed, "llamacpp": lc_failed, "ollama": ol_failed}
+        if active_provider_names:
+            tab_bits = [
+                f"{short}: {queue_by_provider[name]}"
+                for name, short, _label in provider_defs
+                if name in active_provider_names
+            ]
+            summary_bits = [
+                f"{short} {health_by_provider[name]} q:{queue_by_provider[name]} "
+                f"ok/fail:{done_by_provider[name]}/{failed_by_provider[name]}"
+                for name, short, _label in provider_defs
+                if name in active_provider_names
+            ]
+        else:
+            tab_bits = ["-"]
+            summary_bits = ["No active provider metrics yet"]
+        self.log_tabs.setTabText(4, f"Providers ({' | '.join(tab_bits)})")
         self._provider_summary_text = (
-            f"OR {or_health} q:{q_openrouter} ok/fail:{or_done}/{or_failed} · "
-            f"OL {ol_health} q:{q_ollama} ok/fail:{ol_done}/{ol_failed} · "
-            f"{rpm}/min avg {avg_ms}ms retry {retries} failover {failovers}"
+            f"{' | '.join(summary_bits)} | {rpm}/min avg {avg_ms}ms retry {retries} failover {failovers}"
         )
         self._refresh_worker_summaries()
-        if or_model != "-" or ol_model != "-":
-            active_model = or_model if or_model != "-" else ol_model
+        model_by_provider = {"openrouter": or_model, "llamacpp": lc_model, "ollama": ol_model}
+        visible_models = [
+            model_by_provider[name]
+            for name, _short, _label in provider_defs
+            if name in active_provider_names and model_by_provider[name] != "-"
+        ]
+        if visible_models:
+            active_model = visible_models[0]
             if active_model and active_model != "-":
                 self.metric_current_model.setText(active_model[:28] + ("..." if len(active_model) > 28 else ""))
-                self.metric_current_model.setToolTip(f"OpenRouter: {or_model}\nOllama: {ol_model}")
+                self.metric_current_model.setToolTip(
+                    "\n".join(
+                        f"{label}: {model_by_provider[name]}"
+                        for name, _short, label in provider_defs
+                        if name in active_provider_names
+                    )
+                )
 
     def _format_seconds_compact(self, raw_value):
         try:
@@ -3889,7 +4178,12 @@ class FormManager(QMainWindow):
             detail = f"{provider}: {model} request {request_id}"
         else:
             detail = f"{provider}: {status} last {latency_ms}ms wait {queue_wait_ms}ms"
-        title_prefix = "OpenRouter" if provider == "openrouter" else "Ollama" if provider == "ollama" else provider.title()
+        title_prefix = (
+            "OpenRouter" if provider == "openrouter"
+            else "llama.cpp" if provider == "llamacpp"
+            else "Ollama" if provider == "ollama"
+            else provider.title()
+        )
         primary = model if status == "running" else f"Last {latency_ms}ms"
         secondary = f"request {request_id}" if request_id != "-" else detail
         stats = f"latency {latency_ms}ms | wait {queue_wait_ms}ms"

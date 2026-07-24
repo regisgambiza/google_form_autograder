@@ -164,6 +164,24 @@ def _provider_manager_enabled() -> bool:
     return bool(load_config().get("provider_manager_enabled", True))
 
 
+def _judge_start_model_label(role: str, requested_model: object) -> str:
+    if _provider_manager_enabled():
+        return f"provider=managed role={role}"
+    return f"model={requested_model or '-'}"
+
+
+def _pre_provider_active_model(role: str, requested_model: object) -> str:
+    if _provider_manager_enabled():
+        return f"provider-managed:{role}"
+    return str(requested_model or "-")
+
+
+def _unavailable_model_label(role: str, requested_model: object) -> str:
+    if _provider_manager_enabled():
+        return f"provider-managed:{role}"
+    return str(requested_model or "-")
+
+
 def _provider_schema(payload: Dict[str, object]) -> Optional[Dict[str, object]]:
     fmt = payload.get("format")
     return fmt if isinstance(fmt, dict) else None
@@ -629,8 +647,8 @@ async def call_judge_async(
     judge_timeout_s = max(10, int(cfg.get("judge_timeout_seconds", 45)))
     judge_http_timeout_s = max(judge_timeout_s, int(cfg.get("judge_http_timeout_seconds", 60)))
     start = time.perf_counter()
-    log("INFO", f"START judge_{role} (model={model})")
-    update_runtime_state(active_model=model, active_role=role, active_since=time.time())
+    log("INFO", f"START judge_{role} ({_judge_start_model_label(role, model)})")
+    update_runtime_state(active_model=_pre_provider_active_model(role, model), active_role=role, active_since=time.time())
 
     base_prompt = _make_judge_prompt(question, expected, answer, rubric)
     payload = {
@@ -710,7 +728,7 @@ async def call_judge_async(
                     pass
 
     out = _abstain("retries_exhausted")
-    out.update({"role": role, "model": model})
+    out.update({"role": role, "model": _unavailable_model_label(role, model)})
     return out
 
 
@@ -752,8 +770,8 @@ def call_judge_role_sync(
     def _call_once(repair: bool = False) -> Dict[str, object]:
         _write_heartbeat_if_needed()
         start = time.perf_counter()
-        log("INFO", f"START judge_{role} (model={role_model})")
-        update_runtime_state(active_model=role_model, active_role=role, active_since=time.time())
+        log("INFO", f"START judge_{role} ({_judge_start_model_label(role, role_model)})")
+        update_runtime_state(active_model=_pre_provider_active_model(role, role_model), active_role=role, active_since=time.time())
         user_prompt = _make_judge_prompt(question, expected, answer, rubric)
         if repair:
             user_prompt += "\n\nREPAIR: Your previous response was invalid. Output only the required JSON object."
@@ -775,9 +793,9 @@ def call_judge_role_sync(
             if not sem.acquire(timeout=sem_wait):
                 log("WARNING", f"Judge {role} semaphore wait timeout ({sem_wait}s); no verdict produced")
                 duration_ms = (time.perf_counter() - start) * 1000
-                _log_judge_result(role, role_model, duration_ms, "ERROR", 0.0)
+                _log_judge_result(role, _unavailable_model_label(role, role_model), duration_ms, "ERROR", 0.0)
                 out = _abstain("semaphore_timeout")
-                out.update({"role": role, "model": role_model})
+                out.update({"role": role, "model": _unavailable_model_label(role, role_model)})
                 return out
             acquired = True
 
@@ -793,23 +811,23 @@ def call_judge_role_sync(
             category = getattr(ex, "category", "provider_error")
             log("WARNING", f"Judge {role} provider attempt failed category={category}: {ex}")
             duration_ms = (time.perf_counter() - start) * 1000
-            _log_judge_result(role, role_model, duration_ms, "ERROR", 0.0)
+            _log_judge_result(role, _unavailable_model_label(role, role_model), duration_ms, "ERROR", 0.0)
             out = _abstain(category)
-            out.update({"role": role, "model": role_model})
+            out.update({"role": role, "model": _unavailable_model_label(role, role_model)})
             return out
         except requests.Timeout:
             log("WARNING", f"Judge {role} timed out after {TIMEOUT_SECONDS}s without a binary verdict")
             duration_ms = (time.perf_counter() - start) * 1000
-            _log_judge_result(role, role_model, duration_ms, "ERROR", 0.0)
+            _log_judge_result(role, _unavailable_model_label(role, role_model), duration_ms, "ERROR", 0.0)
             out = _abstain("timeout")
-            out.update({"role": role, "model": role_model})
+            out.update({"role": role, "model": _unavailable_model_label(role, role_model)})
             return out
         except Exception as ex:
             log("WARNING", f"Judge {role} sync attempt failed: {ex}")
             duration_ms = (time.perf_counter() - start) * 1000
-            _log_judge_result(role, role_model, duration_ms, "ERROR", 0.0)
+            _log_judge_result(role, _unavailable_model_label(role, role_model), duration_ms, "ERROR", 0.0)
             out = _abstain("exception")
-            out.update({"role": role, "model": role_model})
+            out.update({"role": role, "model": _unavailable_model_label(role, role_model)})
             return out
         finally:
             if acquired:
@@ -830,11 +848,11 @@ def call_judge_role_sync(
             _log_judge_result(role, str(obj.get("model") or role_model), duration_ms, obj.get("decision", "ERROR"), obj.get("confidence", 0.0), obj)
             _write_heartbeat_if_needed()
             return obj
-        _log_judge_result(role, role_model, duration_ms, "ERROR", 0.0)
+        _log_judge_result(role, _unavailable_model_label(role, role_model), duration_ms, "ERROR", 0.0)
         log("WARNING", f"Judge {role} invalid output category={_failure_category(raw)} raw={repr(raw)[:1000]}")
         _write_heartbeat_if_needed()
         out = _abstain("invalid_response")
-        out.update({"role": role, "model": role_model})
+        out.update({"role": role, "model": _unavailable_model_label(role, role_model)})
         return out
 
     last = None
@@ -860,12 +878,31 @@ def _preferred_batch_provider(cfg: Optional[Dict[str, object]] = None) -> str:
     cfg = cfg if cfg is not None else load_config()
     if not bool(cfg.get("provider_manager_enabled", True)):
         return "ollama"
-    priority = cfg.get("provider_priority", ["openrouter", "ollama"])
+    strategy = str(cfg.get("provider_strategy", "") or "").strip().lower().replace("-", "_")
+    strategy_map = {
+        "ollama_only": "ollama",
+        "local_only": "ollama",
+        "llamacpp_only": "llamacpp",
+        "llama_cpp_only": "llamacpp",
+        "llama.cpp_only": "llamacpp",
+        "openrouter_only": "openrouter",
+        "cheap_paid_only": "openrouter",
+        "openrouter_then_llamacpp": "openrouter",
+        "openrouter_llamacpp": "openrouter",
+        "openrouter_llamacpp_ollama": "openrouter",
+        "all_providers": "openrouter",
+        "llamacpp_then_openrouter": "llamacpp",
+        "llamacpp_openrouter": "llamacpp",
+        "local_all": "llamacpp",
+    }
+    if strategy in strategy_map:
+        return strategy_map[strategy]
+    priority = cfg.get("provider_priority", ["openrouter", "llamacpp", "ollama"])
     if not isinstance(priority, list):
-        priority = ["openrouter", "ollama"]
+        priority = ["openrouter", "llamacpp", "ollama"]
     for provider in priority:
         provider_name = str(provider).strip().lower()
-        if provider_name in {"openrouter", "ollama"}:
+        if provider_name in {"openrouter", "llamacpp", "ollama"}:
             return provider_name
     return "openrouter"
 
@@ -884,13 +921,30 @@ def _judge_answer_batch_size(cfg: Optional[Dict[str, object]] = None, provider: 
         return max(1, int(cfg.get("ollama_judge_answer_batch_size", legacy)))
     if provider_name == "openrouter":
         return max(1, int(cfg.get("openrouter_judge_answer_batch_size", legacy)))
+    if provider_name in {"llamacpp", "llama.cpp", "llama_cpp"}:
+        return 1
     return max(1, legacy)
 
 
-def _ollama_answer_batch_size(cfg: Optional[Dict[str, object]] = None) -> int:
+def _local_answer_batch_size(cfg: Optional[Dict[str, object]] = None) -> int:
     cfg = cfg if cfg is not None else load_config()
-    legacy = int(cfg.get("judge_answer_batch_size", 1) or 1)
-    return max(1, int(cfg.get("ollama_judge_answer_batch_size", legacy) or legacy))
+    priority = cfg.get("provider_priority", ["ollama"])
+    if not isinstance(priority, list):
+        priority = ["ollama"]
+    sizes: List[int] = []
+    for provider in priority:
+        provider_name = str(provider).strip().lower()
+        if provider_name in {"llamacpp", "llama.cpp", "llama_cpp"}:
+            sizes.append(1)
+        elif provider_name == "ollama":
+            sizes.append(_judge_answer_batch_size(cfg, "ollama"))
+    if sizes:
+        return max(1, min(sizes))
+    return _judge_answer_batch_size(cfg, "ollama")
+
+
+def _ollama_answer_batch_size(cfg: Optional[Dict[str, object]] = None) -> int:
+    return _local_answer_batch_size(cfg)
 
 
 def call_judge_role_batch_sync(
@@ -907,6 +961,8 @@ def call_judge_role_batch_sync(
     Invalid/missing batch items are retried through the single-answer path so
     batching improves speed without weakening correctness.
     """
+    if not answers:
+        return {}
     cfg = load_config()
     jury_models = cfg.get("jury_models", {})
     TIMEOUT_SECONDS = max(10, int(cfg.get("judge_timeout_seconds", 45)))
@@ -925,8 +981,8 @@ def call_judge_role_batch_sync(
         last_provider_error_category = ""
         _write_heartbeat_if_needed()
         start = time.perf_counter()
-        log("INFO", f"START judge_{role}_batch (model={role_model}, answers={len(answers)})")
-        update_runtime_state(active_model=role_model, active_role=role, active_since=time.time())
+        log("INFO", f"START judge_{role}_batch ({_judge_start_model_label(role, role_model)}, answers={len(answers)})")
+        update_runtime_state(active_model=_pre_provider_active_model(role, role_model), active_role=role, active_since=time.time())
         user_prompt = _make_batch_judge_prompt(question, expected, indexed_answers, comparison_by_index)
         if repair:
             user_prompt += "\n\nREPAIR: Your previous response was invalid or incomplete. Output only the required JSON object with one result for every answer_index."
@@ -1001,18 +1057,21 @@ def call_judge_role_batch_sync(
         parsed_by_index = _call_once(repair=attempt > 0)
         if len(parsed_by_index) == len(answers):
             break
+        provider_managed = _provider_manager_enabled()
         ollama_limit = _ollama_answer_batch_size()
         if (
-            not split_fallback_used
-            and _provider_manager_enabled()
-            and len(answers) > ollama_limit
+            provider_managed
             and last_provider_error_category
+            and
+            not split_fallback_used
+            and len(answers) > ollama_limit
         ):
             split_fallback_used = True
+            error_reason = last_provider_error_category or "incomplete batch results"
             log(
                 "WARNING",
-                f"Judge {role} batch switching to Ollama-sized chunks after provider "
-                f"{last_provider_error_category}; answers={len(answers)} chunk_size={ollama_limit}",
+                f"Judge {role} batch switching to Ollama-sized chunks after {error_reason}; "
+                f"answers={len(answers)} chunk_size={ollama_limit}",
             )
             chunked_by_index: Dict[int, Dict[str, object]] = {}
             for chunk_start in range(0, len(indexed_answers), ollama_limit):
@@ -1254,8 +1313,8 @@ def _run_judges_sync(
         _write_heartbeat_if_needed()
         role_model = jury_models.get(role)
         start = time.perf_counter()
-        log("INFO", f"START judge_{role} (model={role_model})")
-        update_runtime_state(active_model=role_model, active_role=role, active_since=time.time())
+        log("INFO", f"START judge_{role} ({_judge_start_model_label(role, role_model)})")
+        update_runtime_state(active_model=_pre_provider_active_model(role, role_model), active_role=role, active_since=time.time())
         user_prompt = _make_judge_prompt(question, expected, answer, rubric)
         if repair:
             user_prompt += "\n\nREPAIR: Your previous response was invalid. Output only the required JSON object."
@@ -1277,8 +1336,8 @@ def _run_judges_sync(
             if not sem.acquire(timeout=sem_wait):
                 log("WARNING", f"Judge {role} semaphore wait timeout ({sem_wait}s); no verdict produced")
                 duration_ms = (time.perf_counter() - start) * 1000
-                _log_judge_result(role, role_model, duration_ms, "ERROR", 0.0)
-                out = _abstain("semaphore_timeout"); out.update({"role": role, "model": role_model}); return out
+                _log_judge_result(role, _unavailable_model_label(role, role_model), duration_ms, "ERROR", 0.0)
+                out = _abstain("semaphore_timeout"); out.update({"role": role, "model": _unavailable_model_label(role, role_model)}); return out
             acquired = True
 
         try:
@@ -1293,18 +1352,18 @@ def _run_judges_sync(
             category = getattr(ex, "category", "provider_error")
             log("WARNING", f"Judge {role} provider attempt failed category={category}: {ex}")
             duration_ms = (time.perf_counter() - start) * 1000
-            _log_judge_result(role, role_model, duration_ms, "ERROR", 0.0)
-            out = _abstain(category); out.update({"role": role, "model": role_model}); return out
+            _log_judge_result(role, _unavailable_model_label(role, role_model), duration_ms, "ERROR", 0.0)
+            out = _abstain(category); out.update({"role": role, "model": _unavailable_model_label(role, role_model)}); return out
         except requests.Timeout:
             log("WARNING", f"Judge {role} timed out after {TIMEOUT_SECONDS}s without a binary verdict")
             duration_ms = (time.perf_counter() - start) * 1000
-            _log_judge_result(role, role_model, duration_ms, "ERROR", 0.0)
-            out = _abstain("timeout"); out.update({"role": role, "model": role_model}); return out
+            _log_judge_result(role, _unavailable_model_label(role, role_model), duration_ms, "ERROR", 0.0)
+            out = _abstain("timeout"); out.update({"role": role, "model": _unavailable_model_label(role, role_model)}); return out
         except Exception as ex:
             log("WARNING", f"Judge {role} sync attempt failed: {ex}")
             duration_ms = (time.perf_counter() - start) * 1000
-            _log_judge_result(role, role_model, duration_ms, "ERROR", 0.0)
-            out = _abstain("exception"); out.update({"role": role, "model": role_model}); return out
+            _log_judge_result(role, _unavailable_model_label(role, role_model), duration_ms, "ERROR", 0.0)
+            out = _abstain("exception"); out.update({"role": role, "model": _unavailable_model_label(role, role_model)}); return out
         finally:
             if acquired:
                 try:
@@ -1324,10 +1383,10 @@ def _run_judges_sync(
             _log_judge_result(role, str(obj.get("model") or role_model), duration_ms, obj.get("decision", "ERROR"), obj.get("confidence", 0.0), obj)
             _write_heartbeat_if_needed()
             return obj
-        _log_judge_result(role, role_model, duration_ms, "ERROR", 0.0)
+        _log_judge_result(role, _unavailable_model_label(role, role_model), duration_ms, "ERROR", 0.0)
         log("WARNING", f"Judge {role} invalid output category={_failure_category(raw)} raw={repr(raw)[:1000]}")
         _write_heartbeat_if_needed()
-        out = _abstain("invalid_response"); out.update({"role": role, "model": role_model}); return out
+        out = _abstain("invalid_response"); out.update({"role": role, "model": _unavailable_model_label(role, role_model)}); return out
 
     def _call_one(role: str, avoid_models: Optional[List[str]] = None) -> Dict[str, object]:
         """Retry abstentions so transient/invalid model output is not final."""
