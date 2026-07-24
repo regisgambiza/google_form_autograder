@@ -304,10 +304,30 @@ def test_settings_exposes_cache_and_history_clear_action(monkeypatch):
     assert "Send every answer through the full AI jury" in source
     assert "Answer Processing:" in source
     assert "raw mode; take every response exactly as read from the form" in source
-    assert "Ollama Answers per Judge Call:" in source
-    assert "OpenRouter Answers per Judge Call:" in source
-    assert "llama.cpp Answers per Judge Call:" in source
-    assert "llama.cpp Model Folder:" in source
+    assert "Global Settings" in source
+    assert "OpenRouter" in source
+    assert "llama.cpp" in source
+    assert "Ollama" in source
+    settings_sections = source[source.index('global_form = make_settings_section'):]
+    assert settings_sections.index('"Global Settings"') < settings_sections.index('"OpenRouter"')
+    assert settings_sections.index('"OpenRouter"') < settings_sections.index('"llama.cpp"')
+    assert settings_sections.index('"llama.cpp"') < settings_sections.index('"Ollama"')
+    assert "scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)" in source
+    assert 'openrouter_form.addRow("Answers per Judge Call:"' in source
+    assert 'llamacpp_form.addRow("Answers per Judge Call:"' in source
+    assert 'ollama_form.addRow("Answers per Judge Call:"' in source
+    assert 'llamacpp_form.addRow("Model Folder:", llamacpp_model_dir_picker)' in source
+    assert 'llamacpp_form.addRow("Auto-start Server:", llamacpp_auto_start_checkbox)' in source
+    assert 'llamacpp_form.addRow("Server Executable:", llamacpp_server_exe_picker)' in source
+    assert 'QFileDialog.getExistingDirectory' in source
+    assert 'QFileDialog.getOpenFileName' in source
+    assert 'Select llama.cpp Model Folder' in source
+    assert 'Select llama-server.exe' in source
+    assert 'global_form.addRow("Acceptance Diversity:", distinct_models_checkbox)' in source
+    assert 'visible_settings_jury_roles = ("semantic_judge", "factual_judge", "concept_judge", "strict_judge")' in source
+    assert "if role not in visible_settings_jury_roles:" in source
+    assert "Stop llama.cpp server after grading" in source
+    assert "Stop llama.cpp server when app closes" in source
     assert "No llama.cpp GGUF models found" in source
     assert "mmproj files are hidden" in source
     assert "OpenRouter Monitor Model:" in source
@@ -315,10 +335,20 @@ def test_settings_exposes_cache_and_history_clear_action(monkeypatch):
     assert 'config_data["ollama_judge_answer_batch_size"]' in source
     assert 'config_data["openrouter_judge_answer_batch_size"]' in source
     assert 'config_data["llamacpp_judge_answer_batch_size"]' in source
+    assert 'config_data["llamacpp_stop_server_after_grading"]' in source
+    assert 'config_data["llamacpp_stop_server_on_app_close"]' in source
+    assert '_stop_llamacpp_server_if_enabled("llamacpp_stop_server_after_grading"' in source
+    assert '_stop_llamacpp_server_if_enabled("llamacpp_stop_server_on_app_close"' in source
+    assert "llama.cpp-only mode is selected" in source
+    assert "Grading was not started" in source
+    assert "_start_llamacpp_server(preflight_cfg)" in source
+    assert 'QProgressDialog(' in source
+    assert '"Loading llama.cpp"' in source
+    assert "Large GGUF models can take a few minutes to load." in source
 
 
 def test_settings_hides_low_level_expert_controls():
-    source = __import__("pathlib").Path("gui_main.py").read_text(encoding="utf-8")
+    source_lines = __import__("pathlib").Path("gui_main.py").read_text(encoding="utf-8").splitlines()
     for obsolete_row in (
         'form.addRow("Evaluator:"',
         'form.addRow("Leniency:"',
@@ -331,4 +361,4 @@ def test_settings_hides_low_level_expert_controls():
         'form.addRow("Batch Size:"',
         'form.addRow("Execution Mode:"',
     ):
-        assert obsolete_row not in source
+        assert not any(line.strip().startswith(obsolete_row) for line in source_lines)

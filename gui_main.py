@@ -18,6 +18,8 @@ from PyQt5.QtGui import QColor, QBrush, QFont, QIcon, QPalette
 from datetime import datetime, timedelta, timezone, time
 import ctypes
 import atexit
+import time as time_module
+from urllib.parse import urlparse
 
 # Local imports
 from auth import (
@@ -1705,10 +1707,73 @@ class FormManager(QMainWindow):
         scroll_area = QScrollArea(dialog)
         scroll_area.setWidgetResizable(True)
         scroll_area.setFrameShape(QFrame.NoFrame)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
 
         scroll_widget = QWidget()
-        form = QFormLayout(scroll_widget)
-        scroll_widget.setLayout(form)
+        scroll_widget.setMinimumWidth(0)
+        settings_layout = QVBoxLayout(scroll_widget)
+        settings_layout.setContentsMargins(0, 0, 0, 0)
+        settings_layout.setSpacing(12)
+
+        def make_settings_section(title, description=""):
+            section = QFrame(scroll_widget)
+            section.setObjectName("SettingsSection")
+            section.setFrameShape(QFrame.StyledPanel)
+            section.setStyleSheet(
+                "QFrame#SettingsSection {"
+                "background: #ffffff;"
+                "border: 1px solid #d6dde5;"
+                "border-radius: 8px;"
+                "}"
+                "QLabel#SettingsSectionTitle {"
+                "font-weight: 700;"
+                "font-size: 14px;"
+                "color: #111827;"
+                "}"
+                "QLabel#SettingsSectionDescription {"
+                "color: #5f6b7a;"
+                "}"
+            )
+            section_layout = QVBoxLayout(section)
+            section_layout.setContentsMargins(14, 12, 14, 14)
+            section_layout.setSpacing(8)
+            title_label = QLabel(title, section)
+            title_label.setObjectName("SettingsSectionTitle")
+            section_layout.addWidget(title_label)
+            if description:
+                description_label = QLabel(description, section)
+                description_label.setObjectName("SettingsSectionDescription")
+                description_label.setWordWrap(True)
+                section_layout.addWidget(description_label)
+            section_form = QFormLayout()
+            section_form.setContentsMargins(0, 4, 0, 0)
+            section_form.setSpacing(8)
+            section_form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+            section_form.setRowWrapPolicy(QFormLayout.WrapLongRows)
+            section_form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            section_layout.addLayout(section_form)
+            settings_layout.addWidget(section)
+            return section_form
+
+        global_form = make_settings_section(
+            "Global Settings",
+            "General grading behavior, cache policy, application workers, and run safety.",
+        )
+        openrouter_form = make_settings_section(
+            "OpenRouter",
+            "Cloud provider routing, concurrency, cost controls, and answer batching.",
+        )
+        llamacpp_form = make_settings_section(
+            "llama.cpp",
+            "Local GGUF provider settings, server location, cleanup behavior, and judge models.",
+        )
+        ollama_form = make_settings_section(
+            "Ollama",
+            "Local Ollama model choices, monitoring model, provider capacity, and generation limits.",
+        )
+        settings_layout.addStretch()
+        scroll_widget.setLayout(settings_layout)
         scroll_area.setWidget(scroll_widget)
         main_layout.addWidget(scroll_area)
 
@@ -1849,6 +1914,7 @@ class FormManager(QMainWindow):
         jury_combos = {}
         jury_role_labels = {}
         jury_defaults = DEFAULT_CONFIG.get("jury_models", {})
+        visible_settings_jury_roles = ("semantic_judge", "factual_judge", "concept_judge", "strict_judge")
         for role, default_model in jury_defaults.items():
             combo = QComboBox(dialog)
             # Ensure the configured/default model is present in the list
@@ -1861,6 +1927,9 @@ class FormManager(QMainWindow):
                 combo.setCurrentText(role_model)
             jury_combos[role] = combo
             jury_role_labels[role] = QLabel(role.replace('_', ' ').title() + ":", dialog)
+            if role not in visible_settings_jury_roles:
+                combo.hide()
+                jury_role_labels[role].hide()
 
         llamacpp_role_combos = {}
         llamacpp_role_labels = {}
@@ -1887,6 +1956,9 @@ class FormManager(QMainWindow):
             )
             llamacpp_role_combos[role] = combo
             llamacpp_role_labels[role] = QLabel("llama.cpp " + role.replace('_', ' ').title() + ":", dialog)
+            if role not in visible_settings_jury_roles:
+                combo.hide()
+                llamacpp_role_labels[role].hide()
 
         def combo_contains(combo, text):
             target = normalize_model_key(text)
@@ -2002,10 +2074,75 @@ class FormManager(QMainWindow):
         llamacpp_enabled_checkbox.setChecked(bool(cfg.get("llamacpp_enabled", True)))
         llamacpp_require_server_checkbox = QCheckBox("Require running llama.cpp server", dialog)
         llamacpp_require_server_checkbox.setChecked(bool(cfg.get("llamacpp_require_server", True)))
+        llamacpp_auto_start_checkbox = QCheckBox("Start llama.cpp server automatically when needed", dialog)
+        llamacpp_auto_start_checkbox.setChecked(bool(cfg.get("llamacpp_auto_start_server", True)))
+        llamacpp_auto_start_checkbox.setToolTip(
+            "When llama.cpp-only grading is selected and no server is responding, start llama-server.exe using the selected local model."
+        )
+        llamacpp_stop_after_grading_checkbox = QCheckBox("Stop llama.cpp server after grading", dialog)
+        llamacpp_stop_after_grading_checkbox.setChecked(bool(cfg.get("llamacpp_stop_server_after_grading", False)))
+        llamacpp_stop_after_grading_checkbox.setToolTip(
+            "When grading finishes, stop llama-server.exe to release RAM used by local GGUF models. "
+            "Leave off if you use the same llama.cpp server in another app."
+        )
+        llamacpp_stop_on_close_checkbox = QCheckBox("Stop llama.cpp server when app closes", dialog)
+        llamacpp_stop_on_close_checkbox.setChecked(bool(cfg.get("llamacpp_stop_server_on_app_close", False)))
+        llamacpp_stop_on_close_checkbox.setToolTip(
+            "When this app closes, stop llama-server.exe to release RAM used by local GGUF models. "
+            "This does not close LM Studio itself."
+        )
         llamacpp_base_url_edit = QLineEdit(dialog)
         llamacpp_base_url_edit.setText(str(cfg.get("llamacpp_api_base_url", "http://127.0.0.1:8080")))
+        llamacpp_server_exe_edit = QLineEdit(dialog)
+        llamacpp_server_exe_edit.setText(str(cfg.get("llamacpp_server_executable", r"C:\Tools\llama.cpp\llama-server.exe")))
+        llamacpp_server_exe_picker = QWidget(dialog)
+        llamacpp_server_exe_picker_layout = QHBoxLayout(llamacpp_server_exe_picker)
+        llamacpp_server_exe_picker_layout.setContentsMargins(0, 0, 0, 0)
+        llamacpp_server_exe_picker_layout.setSpacing(6)
+        llamacpp_server_exe_browse_btn = QPushButton("Browse...", dialog)
+        llamacpp_server_exe_browse_btn.setToolTip("Choose llama-server.exe.")
+        llamacpp_server_exe_picker_layout.addWidget(llamacpp_server_exe_edit, 1)
+        llamacpp_server_exe_picker_layout.addWidget(llamacpp_server_exe_browse_btn)
+
+        def browse_llamacpp_server_exe():
+            current_exe = os.path.expandvars(os.path.expanduser(llamacpp_server_exe_edit.text().strip()))
+            current_dir = os.path.dirname(current_exe) if current_exe else ""
+            if not current_dir or not os.path.isdir(current_dir):
+                current_dir = os.path.expanduser("~")
+            selected_exe, _filter = QFileDialog.getOpenFileName(
+                dialog,
+                "Select llama-server.exe",
+                current_dir,
+                "Executable Files (*.exe);;All Files (*)",
+            )
+            if selected_exe:
+                llamacpp_server_exe_edit.setText(selected_exe)
+
+        llamacpp_server_exe_browse_btn.clicked.connect(browse_llamacpp_server_exe)
         llamacpp_model_dir_edit = QLineEdit(dialog)
         llamacpp_model_dir_edit.setText(str(llamacpp_model_dir))
+        llamacpp_model_dir_picker = QWidget(dialog)
+        llamacpp_model_dir_picker_layout = QHBoxLayout(llamacpp_model_dir_picker)
+        llamacpp_model_dir_picker_layout.setContentsMargins(0, 0, 0, 0)
+        llamacpp_model_dir_picker_layout.setSpacing(6)
+        llamacpp_model_dir_browse_btn = QPushButton("Browse...", dialog)
+        llamacpp_model_dir_browse_btn.setToolTip("Choose the root folder that contains llama.cpp GGUF models.")
+        llamacpp_model_dir_picker_layout.addWidget(llamacpp_model_dir_edit, 1)
+        llamacpp_model_dir_picker_layout.addWidget(llamacpp_model_dir_browse_btn)
+
+        def browse_llamacpp_model_dir():
+            current_dir = os.path.expandvars(os.path.expanduser(llamacpp_model_dir_edit.text().strip()))
+            if not current_dir or not os.path.isdir(current_dir):
+                current_dir = os.path.expanduser("~")
+            selected_dir = QFileDialog.getExistingDirectory(
+                dialog,
+                "Select llama.cpp Model Folder",
+                current_dir,
+            )
+            if selected_dir:
+                llamacpp_model_dir_edit.setText(selected_dir)
+
+        llamacpp_model_dir_browse_btn.clicked.connect(browse_llamacpp_model_dir)
         supervisor_model_combo = QComboBox(dialog)
         supervisor_model_combo.setToolTip(
             "Local Ollama model used to audit OpenRouter judge quality. "
@@ -2044,7 +2181,7 @@ class FormManager(QMainWindow):
             adaptive = preset.get("adaptive_math_jury", cfg.get("adaptive_math_jury", {}))
             primary_roles = list(adaptive.get("primary_roles", [])) if adaptive.get("enabled", False) else []
             adjudicator_role = str(adaptive.get("adjudicator_role", ""))
-            visible_jury_roles = {"semantic_judge", "factual_judge", "concept_judge", "strict_judge"}
+            visible_jury_roles = set(visible_settings_jury_roles)
             status_text = (
                 f"{len(active_roles & visible_jury_roles)} active jury roles."
             )
@@ -2121,6 +2258,17 @@ class FormManager(QMainWindow):
         else:
             batch_size_spin.setValue(int(batch_size) if isinstance(batch_size, int) and batch_size > 0 else 32)
         batch_auto_checkbox.stateChanged.connect(lambda s: batch_size_spin.setEnabled(s != Qt.Checked))
+        for retired_widget in (
+            evaluator_combo,
+            model_combo,
+            embedding_model_combo,
+            reasoning_model_combo,
+            audit_path_edit,
+            benchmark_path_edit,
+            batch_size_spin,
+            batch_auto_checkbox,
+        ):
+            retired_widget.hide()
 
         # Set Grade Mode from config
         grading_mode_combo.setCurrentText(cfg.get("grading_mode", "Whole Form"))
@@ -2128,17 +2276,6 @@ class FormManager(QMainWindow):
             normalize_execution_mode(cfg.get("execution_mode", DEFAULT_EXECUTION_MODE))
         )
 
-        form.addRow("Model Choices:", model_status_label)
-        # Keep every active model assignment together; disabled/internal roles stay hidden.
-        for role in ("semantic_judge", "factual_judge", "concept_judge", "strict_judge"):
-            form.addRow(jury_role_labels[role], jury_combos[role])
-        form.addRow("Jury Roles:", jury_status_label)
-        form.addRow("Grading Strictness:", strictness_combo)
-        form.addRow("Minimum Judge Confidence:", minimum_judge_confidence_spin)
-        form.addRow("Answer-Key Automation:", key_auto_add_checkbox)
-        form.addRow("Slow Model Handling:", patient_ai_checkbox)
-        form.addRow("", report_checkbox)
-        form.addRow("Grade Mode:", grading_mode_combo)
         execution_mode_combo.currentTextChanged.connect(refresh_jury_status)
         refresh_jury_status()
 
@@ -2149,8 +2286,6 @@ class FormManager(QMainWindow):
             "validation data, Recent Only history, and pending Answer Keys reviews. "
             "Caching is still allowed within that run."
         )
-        form.addRow("Cache Reuse:", ignore_cache_checkbox)
-
         truncate_checkbox = QCheckBox(
             "Truncate answer variants before grading (keep only teacher's first answer)", dialog
         )
@@ -2159,7 +2294,6 @@ class FormManager(QMainWindow):
             "DESTRUCTIVE: When enabled, before grading each targeted form the system will remove all answer-key variants\n"
             "leaving only the first teacher-provided answer. Backups are created automatically before changes."
         )
-        form.addRow("Truncate Answers:", truncate_checkbox)
 
         force_ai_checkbox = QCheckBox("Send every answer through the full AI jury", dialog)
         force_ai_checkbox.setChecked(bool(cfg.get("force_ai_jury_for_all_answers", True)))
@@ -2167,25 +2301,52 @@ class FormManager(QMainWindow):
             "Mistral NeMo evaluates meaning, Gemma verifies facts/mathematics, and Phi-4 "
             "challenges completeness. GPT-OSS adjudicates disagreements, ambiguity, invalid output, or low confidence."
         )
-        form.addRow("AI Evaluation:", force_ai_checkbox)
-        form.addRow("Answer Processing:", dedup_checkbox)
-        form.addRow("AI Worker Threads:", ai_worker_count_spin)
-        form.addRow("OpenRouter Provider Workers:", openrouter_worker_count_spin)
-        form.addRow("llama.cpp Provider Workers:", llamacpp_worker_count_spin)
-        form.addRow("Ollama Provider Workers:", ollama_worker_count_spin)
-        form.addRow("Provider Strategy:", provider_strategy_combo)
-        form.addRow("Provider Priority:", provider_priority_edit)
-        form.addRow("OpenRouter Spend Cap ($):", max_openrouter_spend_spin)
-        form.addRow("OpenRouter Monitor Model:", supervisor_model_combo)
-        form.addRow("Ollama Answers per Judge Call:", ollama_judge_answer_batch_size_spin)
-        form.addRow("OpenRouter Answers per Judge Call:", openrouter_judge_answer_batch_size_spin)
-        form.addRow("llama.cpp Answers per Judge Call:", llamacpp_judge_answer_batch_size_spin)
-        form.addRow("llama.cpp:", llamacpp_enabled_checkbox)
-        form.addRow("llama.cpp Server URL:", llamacpp_base_url_edit)
-        form.addRow("llama.cpp Model Folder:", llamacpp_model_dir_edit)
-        form.addRow("llama.cpp Server Check:", llamacpp_require_server_checkbox)
-        for role in ("semantic_judge", "factual_judge", "concept_judge", "strict_judge"):
-            form.addRow(llamacpp_role_labels[role], llamacpp_role_combos[role])
+
+        global_form.addRow("Grade Mode:", grading_mode_combo)
+        global_form.addRow("Execution Mode:", execution_mode_combo)
+        global_form.addRow("Grading Strictness:", strictness_combo)
+        global_form.addRow("Minimum Judge Confidence:", minimum_judge_confidence_spin)
+        global_form.addRow("Acceptance Diversity:", distinct_models_checkbox)
+        global_form.addRow("Answer-Key Automation:", key_auto_add_checkbox)
+        global_form.addRow("Slow Model Handling:", patient_ai_checkbox)
+        global_form.addRow("AI Evaluation:", force_ai_checkbox)
+        global_form.addRow("Answer Processing:", dedup_checkbox)
+        global_form.addRow("Cache Reuse:", ignore_cache_checkbox)
+        global_form.addRow("Truncate Answers:", truncate_checkbox)
+        global_form.addRow("Reports:", report_checkbox)
+        global_form.addRow("AI Worker Threads:", ai_worker_count_spin)
+        global_form.addRow("Heartbeat Timeout:", heartbeat_timeout_spin)
+        global_form.addRow("Heartbeat Interval:", heartbeat_interval_spin)
+        global_form.addRow("Heartbeat Restarts:", heartbeat_max_restarts_spin)
+
+        openrouter_form.addRow("Provider Strategy:", provider_strategy_combo)
+        openrouter_form.addRow("Provider Priority:", provider_priority_edit)
+        openrouter_form.addRow("Provider Workers:", openrouter_worker_count_spin)
+        openrouter_form.addRow("Answers per Judge Call:", openrouter_judge_answer_batch_size_spin)
+        openrouter_form.addRow("Spend Cap ($):", max_openrouter_spend_spin)
+
+        llamacpp_form.addRow("Provider Enabled:", llamacpp_enabled_checkbox)
+        llamacpp_form.addRow("Provider Workers:", llamacpp_worker_count_spin)
+        llamacpp_form.addRow("Answers per Judge Call:", llamacpp_judge_answer_batch_size_spin)
+        llamacpp_form.addRow("Server URL:", llamacpp_base_url_edit)
+        llamacpp_form.addRow("Auto-start Server:", llamacpp_auto_start_checkbox)
+        llamacpp_form.addRow("Server Executable:", llamacpp_server_exe_picker)
+        llamacpp_form.addRow("Model Folder:", llamacpp_model_dir_picker)
+        llamacpp_form.addRow("Server Check:", llamacpp_require_server_checkbox)
+        llamacpp_form.addRow("After Grading:", llamacpp_stop_after_grading_checkbox)
+        llamacpp_form.addRow("On App Close:", llamacpp_stop_on_close_checkbox)
+        for role in visible_settings_jury_roles:
+            llamacpp_form.addRow(llamacpp_role_labels[role], llamacpp_role_combos[role])
+
+        ollama_form.addRow("Model Choices:", model_status_label)
+        for role in visible_settings_jury_roles:
+            ollama_form.addRow(jury_role_labels[role], jury_combos[role])
+        ollama_form.addRow("Jury Roles:", jury_status_label)
+        ollama_form.addRow("Provider Workers:", ollama_worker_count_spin)
+        ollama_form.addRow("Answers per Judge Call:", ollama_judge_answer_batch_size_spin)
+        ollama_form.addRow("OpenRouter Monitor Model:", supervisor_model_combo)
+        ollama_form.addRow("Judge Context:", judge_num_ctx_spin)
+        ollama_form.addRow("Judge Output Tokens:", judge_num_predict_spin)
 
         buttons = QWidget(dialog)
         b = QHBoxLayout(buttons)
@@ -2228,7 +2389,7 @@ class FormManager(QMainWindow):
         b.addStretch()
         b.addWidget(save_btn)
         b.addWidget(cancel_btn)
-        form.addRow("", buttons)
+        main_layout.addWidget(buttons)
 
         if dialog.exec_() == QDialog.Accepted:
             # Read existing config first to preserve other fields
@@ -2328,6 +2489,10 @@ class FormManager(QMainWindow):
             config_data["ollama_worker_count"] = int(ollama_worker_count_spin.value())
             config_data["llamacpp_enabled"] = llamacpp_enabled_checkbox.isChecked()
             config_data["llamacpp_require_server"] = llamacpp_require_server_checkbox.isChecked()
+            config_data["llamacpp_auto_start_server"] = llamacpp_auto_start_checkbox.isChecked()
+            config_data["llamacpp_server_executable"] = llamacpp_server_exe_edit.text().strip() or "llama-server.exe"
+            config_data["llamacpp_stop_server_after_grading"] = llamacpp_stop_after_grading_checkbox.isChecked()
+            config_data["llamacpp_stop_server_on_app_close"] = llamacpp_stop_on_close_checkbox.isChecked()
             config_data["llamacpp_api_base_url"] = llamacpp_base_url_edit.text().strip() or "http://127.0.0.1:8080"
             config_data["llamacpp_model_dir"] = llamacpp_model_dir_edit.text().strip() or r"C:\Users\regis\.lmstudio\models"
             selected_llamacpp = {}
@@ -3434,6 +3599,204 @@ class FormManager(QMainWindow):
         except Exception:
             pass
 
+    def _config_flag(self, key, default=False):
+        try:
+            with open("config.json", "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+            return bool(cfg.get(key, default))
+        except Exception:
+            return bool(default)
+
+    def _stop_llamacpp_server_if_enabled(self, config_key, reason):
+        if not self._config_flag(config_key, False):
+            return
+        stopped = self._stop_llamacpp_server_processes()
+        if stopped > 0:
+            try:
+                self.append_debug(
+                    f"<font color='gray'>[LLAMACPP] Stopped {stopped} llama-server process(es) {reason} to release RAM.</font>"
+                )
+            except Exception:
+                pass
+        else:
+            try:
+                self.append_debug(f"<font color='gray'>[LLAMACPP] No llama-server process found {reason}.</font>")
+            except Exception:
+                pass
+
+    def _stop_llamacpp_server_processes(self):
+        """Stop llama.cpp server processes to release local GGUF model memory."""
+        try:
+            if sys.platform == "win32":
+                ps_script = (
+                    "$procs = @(Get-Process -Name 'llama-server' -ErrorAction SilentlyContinue); "
+                    "$count = $procs.Count; "
+                    "$procs | ForEach-Object { try { Stop-Process -Id $_.Id -Force -ErrorAction Stop } catch {} }; "
+                    "Write-Output $count"
+                )
+                result = subprocess.run(
+                    ["powershell", "-NoProfile", "-Command", ps_script],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=10,
+                )
+                lines = str(result.stdout or "").strip().splitlines()
+                count_text = lines[-1] if lines else "0"
+                return max(0, int(count_text or "0"))
+            result = subprocess.run(
+                ["pkill", "-f", "llama-server"],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=10,
+            )
+            return 1 if result.returncode == 0 else 0
+        except Exception:
+            return 0
+
+    def _llamacpp_selected_model_path(self, cfg):
+        model_dir = os.path.expandvars(os.path.expanduser(str(
+            cfg.get("llamacpp_model_dir", r"C:\Users\regis\.lmstudio\models")
+        )))
+        models_by_role = cfg.get("llamacpp_models", {}) if isinstance(cfg, dict) else {}
+        selected = ""
+        for role in ("semantic_judge", "factual_judge", "concept_judge", "strict_judge"):
+            role_models = models_by_role.get(role, [])
+            if isinstance(role_models, str):
+                role_models = [role_models]
+            for model in role_models or []:
+                text = str(model or "").strip()
+                if text and text != "No llama.cpp GGUF models found":
+                    selected = text
+                    break
+            if selected:
+                break
+        if not selected:
+            return ""
+        expanded = os.path.expandvars(os.path.expanduser(selected))
+        if os.path.isabs(expanded):
+            return expanded
+        return os.path.normpath(os.path.join(model_dir, expanded))
+
+    def _llamacpp_server_executable(self, cfg):
+        configured = os.path.expandvars(os.path.expanduser(str(cfg.get("llamacpp_server_executable", "") or "")))
+        candidates = [
+            configured,
+            shutil.which("llama-server") or "",
+            r"C:\Tools\llama.cpp\llama-server.exe",
+        ]
+        for candidate in candidates:
+            if candidate and os.path.isfile(candidate):
+                return candidate
+        return configured or "llama-server.exe"
+
+    def _llamacpp_host_port(self, cfg):
+        parsed = urlparse(str(cfg.get("llamacpp_api_base_url", "http://127.0.0.1:8081") or ""))
+        host = parsed.hostname or "127.0.0.1"
+        port = parsed.port or 8081
+        return host, int(port)
+
+    def _start_llamacpp_server(self, cfg):
+        try:
+            from providers.llamacpp_provider import LlamaCppProvider
+
+            provider = LlamaCppProvider()
+            if provider.is_configured():
+                return True
+            exe_path = self._llamacpp_server_executable(cfg)
+            model_path = self._llamacpp_selected_model_path(cfg)
+            if not os.path.isfile(exe_path):
+                self.append_debug(f"<font color='red'>[LLAMACPP] llama-server.exe not found: {exe_path}</font>")
+                return False
+            if not os.path.isfile(model_path):
+                self.append_debug(f"<font color='red'>[LLAMACPP] Selected GGUF model not found: {model_path}</font>")
+                return False
+            host, port = self._llamacpp_host_port(cfg)
+            os.makedirs("logs", exist_ok=True)
+            log_path = os.path.abspath(os.path.join("logs", "llamacpp_server.log"))
+            self.append_debug(
+                f"<font color='cyan'>[LLAMACPP] Starting llama-server on {host}:{port} with {os.path.basename(model_path)}...</font>"
+            )
+            command = [
+                exe_path,
+                "-m",
+                model_path,
+                "--host",
+                host,
+                "--port",
+                str(port),
+                "-c",
+                str(int(cfg.get("llamacpp_server_context_size", 4096) or 4096)),
+            ]
+            stdout = open(log_path, "a", encoding="utf-8", errors="replace")
+            creationflags = 0
+            if sys.platform == "win32":
+                creationflags = (
+                    getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                    | getattr(subprocess, "DETACHED_PROCESS", 0)
+                    | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                )
+            server_process = subprocess.Popen(
+                command,
+                cwd=os.path.dirname(exe_path) or None,
+                stdout=stdout,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                creationflags=creationflags,
+            )
+            timeout_s = max(10, int(cfg.get("llamacpp_startup_timeout_seconds", 300) or 300))
+            progress = QProgressDialog(
+                "Starting llama.cpp server...",
+                "Cancel",
+                0,
+                timeout_s,
+                self,
+            )
+            progress.setWindowTitle("Loading llama.cpp")
+            progress.setWindowModality(Qt.WindowModal)
+            progress.setMinimumDuration(0)
+            progress.setAutoClose(False)
+            progress.setAutoReset(False)
+            progress.setValue(0)
+            progress.show()
+            QApplication.processEvents()
+            started_at = time_module.monotonic()
+            deadline = time_module.monotonic() + timeout_s
+            while time_module.monotonic() < deadline:
+                QApplication.processEvents()
+                if provider.is_configured():
+                    progress.setValue(timeout_s)
+                    progress.close()
+                    self.append_debug("<font color='green'>[LLAMACPP] llama.cpp server is ready.</font>")
+                    return True
+                elapsed = max(0, int(time_module.monotonic() - started_at))
+                progress.setValue(min(elapsed, timeout_s))
+                progress.setLabelText(
+                    "Loading llama.cpp server...\n\n"
+                    f"Model: {os.path.basename(model_path)}\n"
+                    f"Server: {host}:{port}\n"
+                    f"Elapsed: {elapsed}s / {timeout_s}s\n\n"
+                    "Large GGUF models can take a few minutes to load."
+                )
+                if progress.wasCanceled():
+                    try:
+                        server_process.terminate()
+                    except Exception:
+                        pass
+                    self._stop_llamacpp_server_processes()
+                    self.append_debug("<font color='orange'>[LLAMACPP] llama.cpp server startup was cancelled.</font>")
+                    return False
+                time_module.sleep(1)
+            progress.close()
+            self.append_debug(
+                f"<font color='red'>[LLAMACPP] llama-server did not become ready within {timeout_s}s. See {log_path}</font>"
+            )
+            return False
+        except Exception as exc:
+            self.append_debug(f"<font color='red'>[LLAMACPP] Could not start llama-server: {exc}</font>")
+            return False
+
     def exit_app(self):
         """Stop grading/search and close application."""
         self._force_exit = True
@@ -3501,6 +3864,34 @@ class FormManager(QMainWindow):
         if self.is_grading or (self.grader_thread and self.grader_thread.isRunning()):
             self.append_debug("<font color='orange'>[GRADER] ⚠️ Grading already in progress</font>")
             return
+
+        try:
+            with open("config.json", "r", encoding="utf-8") as f:
+                preflight_cfg = json.load(f)
+        except Exception:
+            preflight_cfg = {}
+        if is_llamacpp_only(preflight_cfg) and bool(preflight_cfg.get("llamacpp_require_server", True)):
+            try:
+                from providers.llamacpp_provider import LlamaCppProvider
+
+                llamacpp_ready = LlamaCppProvider().is_configured()
+            except Exception:
+                llamacpp_ready = False
+            if not llamacpp_ready and bool(preflight_cfg.get("llamacpp_auto_start_server", True)):
+                llamacpp_ready = self._start_llamacpp_server(preflight_cfg)
+            if not llamacpp_ready:
+                message = (
+                    "llama.cpp-only grading is selected, but no compatible llama.cpp server is responding.\n\n"
+                    "The app tried to start llama-server.exe but it did not become ready. "
+                    "Check Settings > llama.cpp > Server Executable and Model Folder, then run grading again."
+                )
+                self.run_state_label.setText("Waiting")
+                self.append_debug(
+                    "<font color='red'>[LLAMACPP] llama.cpp-only mode is selected, "
+                    "but the local server is offline. Grading was not started.</font>"
+                )
+                QMessageBox.warning(self, "llama.cpp server offline", message)
+                return
 
         self.is_grading = True
         self.run_state_label.setText("Running")
@@ -4257,6 +4648,8 @@ class FormManager(QMainWindow):
             QTimer.singleShot(1000, lambda: self.run_grader(target_urls=queued_urls))
             return
 
+        self._stop_llamacpp_server_if_enabled("llamacpp_stop_server_after_grading", "after grading")
+
         if self.auto_mode:
             # Clear finished forms
             forms_cleared = 0
@@ -4315,6 +4708,7 @@ class FormManager(QMainWindow):
         """Closing the window exits; Minimize remains the explicit tray action."""
         self._force_exit = True
         self._shutdown_owned_work()
+        self._stop_llamacpp_server_if_enabled("llamacpp_stop_server_on_app_close", "on app close")
         event.accept()
 
 

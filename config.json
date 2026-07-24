@@ -51,7 +51,7 @@
     "openrouter_judge_answer_batch_size": 25,
     "judge_batch_num_predict": 8192,
     "provider_manager_enabled": true,
-    "provider_strategy": "openrouter_only",
+    "provider_strategy": "llamacpp_only",
     "provider_priority": [
         "llamacpp"
     ],
@@ -66,23 +66,28 @@
     "llamacpp_worker_count": 1,
     "llamacpp_enabled": true,
     "llamacpp_require_server": true,
+    "llamacpp_auto_start_server": true,
+    "llamacpp_server_executable": "C:\\Tools\\llama.cpp\\llama-server.exe",
+    "llamacpp_startup_timeout_seconds": 300,
     "llamacpp_api_base_url": "http://127.0.0.1:8081",
     "llamacpp_auto_detect_base_url": true,
     "llamacpp_json_min_predict": 256,
     "llamacpp_model_dir": "C:\\Users\\regis\\.lmstudio\\models",
     "llamacpp_judge_answer_batch_size": 1,
+    "llamacpp_stop_server_after_grading": false,
+    "llamacpp_stop_server_on_app_close": true,
     "llamacpp_models": {
         "semantic_judge": [
             "lmstudio-community/Qwen3.6-35B-A3B-GGUF/Qwen3.6-35B-A3B-Q4_K_M.gguf"
         ],
         "factual_judge": [
-            "lmstudio-community/Qwen3.6-35B-A3B-GGUF/Qwen3.6-35B-A3B-Q4_K_M.gguf"
+            "lmstudio-community/gemma-4-26B-A4B-it-QAT-GGUF/gemma-4-26B-A4B-it-QAT-Q4_0.gguf"
         ],
         "concept_judge": [
-            "lmstudio-community/gemma-4-26B-A4B-it-QAT-GGUF/gemma-4-26B-A4B-it-QAT-Q4_0.gguf"
+            "Nemotron-3-Nano-30B-A3B-UD-Q4_K_XL.gguf"
         ],
         "strict_judge": [
-            "lmstudio-community/gemma-4-26B-A4B-it-QAT-GGUF/gemma-4-26B-A4B-it-QAT-Q4_0.gguf"
+            "Phi-3.5-MoE-instruct-Q4_K_M.gguf"
         ],
         "misconception_judge": [
             "lmstudio-community/gemma-4-26B-A4B-it-QAT-GGUF/gemma-4-26B-A4B-it-QAT-Q4_0.gguf"
@@ -242,7 +247,7 @@
     },
     "enable_pipeline_workers": true,
     "deterministic_worker_count": 4,
-    "ai_worker_count": 10,
+    "ai_worker_count": 1,
     "worker_queue_size": 1200,
     "global_prefetch_mode": true,
     "dispatch_mode": "global",
@@ -263,7 +268,7 @@
     "adaptive_target_latency_ms": 15000,
     "adaptive_timeout_rate_threshold": 0.2,
     "adaptive_chunk_size": 12,
-    "max_concurrent_jury_answers": 10,
+    "max_concurrent_jury_answers": 1,
     "jury_semaphore_acquire_timeout_seconds": 21600,
     "enable_async_judges": false,
     "sync_judge_parallelism": 1,
