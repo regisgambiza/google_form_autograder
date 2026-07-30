@@ -99,7 +99,7 @@
             "Qwen_Qwen3.5-9B-Q4_K_M.gguf"
         ],
         "concept_judge": [
-            "Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf"
+            "Qwen_Qwen3.5-9B-Q4_K_M.gguf"
         ],
         "strict_judge": [
             "Qwen_Qwen3.5-9B-Q4_K_M.gguf"
