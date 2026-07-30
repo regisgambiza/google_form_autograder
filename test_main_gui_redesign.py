@@ -360,13 +360,12 @@ def test_settings_exposes_cache_and_history_clear_action(monkeypatch):
     assert 'config_data["llamacpp_stop_server_on_app_close"]' in source
     assert '_stop_llamacpp_server_if_enabled("llamacpp_stop_server_after_grading"' in source
     assert '_stop_llamacpp_server_if_enabled("llamacpp_stop_server_on_app_close"' in source
-    assert "class LlamaCppStartupThread(QThread)" in source
-    assert "self._begin_llamacpp_startup(preflight_cfg, force_recent_only, target_urls)" in source
-    assert "_llamacpp_preflight_complete=True" in source
-    assert "progress.setWindowModality(Qt.NonModal)" in source
+    assert "llama.cpp-only mode is selected" in source
+    assert "Grading was not started" in source
+    assert "_start_llamacpp_server(preflight_cfg)" in source
     assert 'QProgressDialog(' in source
     assert '"Loading llama.cpp"' in source
-    assert "The main app remains available while the model loads." in source
+    assert "Large GGUF models can take a few minutes to load." in source
 
 
 def test_llamacpp_server_command_uses_configurable_performance_defaults():

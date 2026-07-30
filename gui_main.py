@@ -4,7 +4,6 @@ import os
 import json
 import subprocess
 import shutil
-import threading
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLineEdit, QListWidget, QListWidgetItem, QMessageBox,
@@ -186,87 +185,6 @@ class SettingsModelDiscoveryThread(QThread):
                 path = os.path.join(dirpath, filename)
                 found.append(os.path.relpath(path, root).replace("\\", "/"))
         return sorted(found, key=str.casefold)
-
-
-class LlamaCppStartupThread(QThread):
-    progress = pyqtSignal(int, str)
-    completed = pyqtSignal(bool, str)
-
-    def __init__(self, command, base_url, timeout_s, log_path, allow_start=True):
-        super().__init__()
-        self.command = list(command)
-        self.base_url = str(base_url).rstrip("/")
-        self.timeout_s = max(10, int(timeout_s))
-        self.log_path = str(log_path)
-        self.allow_start = bool(allow_start)
-        self._cancel_event = threading.Event()
-        self._process = None
-
-    def cancel(self):
-        self._cancel_event.set()
-        process = self._process
-        if process is not None:
-            try:
-                process.terminate()
-            except Exception:
-                pass
-
-    def _is_ready(self):
-        try:
-            from providers.llamacpp_provider import LlamaCppProvider
-
-            return LlamaCppProvider().is_configured()
-        except Exception:
-            return False
-
-    def run(self):
-        try:
-            if self._is_ready():
-                self.completed.emit(True, "")
-                return
-            if not self.allow_start:
-                self.completed.emit(False, "No compatible llama.cpp server is responding and auto-start is disabled.")
-                return
-            os.makedirs(os.path.dirname(self.log_path) or ".", exist_ok=True)
-            with open(self.log_path, "a", encoding="utf-8", errors="replace") as stdout:
-                creationflags = 0
-                if sys.platform == "win32":
-                    creationflags = (
-                        getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-                        | getattr(subprocess, "DETACHED_PROCESS", 0)
-                        | getattr(subprocess, "CREATE_NO_WINDOW", 0)
-                    )
-                self._process = subprocess.Popen(
-                    self.command,
-                    cwd=os.path.dirname(self.command[0]) or None,
-                    stdout=stdout,
-                    stderr=subprocess.STDOUT,
-                    stdin=subprocess.DEVNULL,
-                    creationflags=creationflags,
-                )
-                started_at = time_module.monotonic()
-                while time_module.monotonic() - started_at < self.timeout_s:
-                    if self._cancel_event.is_set():
-                        self.completed.emit(False, "llama.cpp server startup was cancelled.")
-                        return
-                    if self._process.poll() is not None:
-                        self.completed.emit(
-                            False,
-                            f"llama-server exited with code {self._process.returncode}. See {self.log_path}",
-                        )
-                        return
-                    if self._is_ready():
-                        self.completed.emit(True, "")
-                        return
-                    elapsed = max(0, int(time_module.monotonic() - started_at))
-                    self.progress.emit(elapsed, f"Waiting for llama-server ({elapsed}s / {self.timeout_s}s)")
-                    self._cancel_event.wait(1)
-            self.completed.emit(
-                False,
-                f"llama-server did not become ready within {self.timeout_s}s. See {self.log_path}",
-            )
-        except Exception as exc:
-            self.completed.emit(False, f"Could not start llama-server: {exc}")
 
 AI_WORKER_DISPLAY_NAMES = [
     "Optimus Prime",
@@ -517,8 +435,6 @@ class FormManager(QMainWindow):
         self.grading_mode = "Whole Form"
 
         self.grader_thread = None
-        self.llamacpp_startup_thread = None
-        self.llamacpp_startup_progress = None
         self.auto_search_thread = None
         self.forms_data = {}
         self.service = None
@@ -3989,136 +3905,6 @@ class FormManager(QMainWindow):
             self.append_debug(f"<font color='red'>[LLAMACPP] Could not start llama-server: {exc}</font>")
             return False
 
-    def _begin_llamacpp_startup(self, cfg, force_recent_only=False, target_urls=None):
-        if self.llamacpp_startup_thread and self.llamacpp_startup_thread.isRunning():
-            if self.llamacpp_startup_progress:
-                self.llamacpp_startup_progress.show()
-                self.llamacpp_startup_progress.raise_()
-                self.llamacpp_startup_progress.activateWindow()
-            return
-
-        timeout_s = max(10, int(cfg.get("llamacpp_startup_timeout_seconds", 300) or 300))
-        model_path = self._llamacpp_selected_model_path(cfg)
-        host, port = self._llamacpp_host_port(cfg)
-        progress = QProgressDialog(
-            "Preparing llama.cpp server...",
-            "Cancel",
-            0,
-            timeout_s,
-            self,
-        )
-        progress.setWindowTitle("Loading llama.cpp")
-        progress.setWindowModality(Qt.NonModal)
-        progress.setMinimumDuration(0)
-        progress.setAutoClose(False)
-        progress.setAutoReset(False)
-        progress.setValue(0)
-        progress.setLabelText(
-            "Loading llama.cpp server...\n\n"
-            f"Model: {os.path.basename(model_path) or 'not selected'}\n"
-            f"Server: {host}:{port}\n"
-            f"Elapsed: 0s / {timeout_s}s"
-        )
-        self.llamacpp_startup_progress = progress
-        self.run_button.setEnabled(False)
-        self.run_state_label.setText("Loading llama.cpp")
-        progress.show()
-        progress.raise_()
-        progress.activateWindow()
-        QApplication.processEvents()
-
-        exe_path = self._llamacpp_server_executable(cfg)
-        if not os.path.isfile(exe_path) or not os.path.isfile(model_path):
-            missing = (
-                f"llama-server.exe not found: {exe_path}"
-                if not os.path.isfile(exe_path)
-                else f"Selected GGUF model not found: {model_path}"
-            )
-            self._on_llamacpp_startup_completed(
-                False,
-                missing,
-                force_recent_only,
-                target_urls,
-            )
-            return
-
-        command = self._llamacpp_server_command(cfg, exe_path, model_path, host, port)
-        log_path = os.path.abspath(os.path.join("logs", "llamacpp_server.log"))
-        thread = LlamaCppStartupThread(
-            command,
-            f"http://{host}:{port}",
-            timeout_s,
-            log_path,
-            allow_start=bool(cfg.get("llamacpp_auto_start_server", True)),
-        )
-        self.llamacpp_startup_thread = thread
-        thread.progress.connect(
-            lambda elapsed, _message: self._update_llamacpp_startup_progress(
-                elapsed, timeout_s, model_path, host, port
-            )
-        )
-        thread.completed.connect(
-            lambda success, error: self._on_llamacpp_startup_completed(
-                success, error, force_recent_only, target_urls
-            )
-        )
-        progress.canceled.connect(thread.cancel)
-        thread.finished.connect(lambda: self._clear_llamacpp_startup_thread(thread))
-        thread.finished.connect(thread.deleteLater)
-        thread.start()
-
-    def _clear_llamacpp_startup_thread(self, thread):
-        if self.llamacpp_startup_thread is thread:
-            self.llamacpp_startup_thread = None
-
-    def _update_llamacpp_startup_progress(self, elapsed, timeout_s, model_path, host, port):
-        progress = self.llamacpp_startup_progress
-        if not progress:
-            return
-        progress.setValue(min(int(elapsed), int(timeout_s)))
-        progress.setLabelText(
-            "Loading llama.cpp server...\n\n"
-            f"Model: {os.path.basename(model_path)}\n"
-            f"Server: {host}:{port}\n"
-            f"Elapsed: {int(elapsed)}s / {int(timeout_s)}s\n\n"
-            "The main app remains available while the model loads."
-        )
-
-    def _on_llamacpp_startup_completed(
-        self,
-        success,
-        error,
-        force_recent_only=False,
-        target_urls=None,
-    ):
-        progress = self.llamacpp_startup_progress
-        self.llamacpp_startup_progress = None
-        if progress:
-            progress.close()
-            progress.deleteLater()
-        self.run_button.setEnabled(True)
-        if success:
-            self.run_state_label.setText("Starting grading")
-            self.append_debug("<font color='green'>[LLAMACPP] llama.cpp server is ready.</font>")
-            QTimer.singleShot(
-                0,
-                lambda: self.run_grader(
-                    force_recent_only=force_recent_only,
-                    target_urls=target_urls,
-                    _llamacpp_preflight_complete=True,
-                ),
-            )
-            return
-        self.run_state_label.setText("Waiting")
-        self.append_debug(f"<font color='red'>[LLAMACPP] {error}</font>")
-        QMessageBox.warning(
-            self,
-            "llama.cpp server offline",
-            "llama.cpp-only grading is selected, but the server could not be prepared.\n\n"
-            f"{error}\n\n"
-            "Check Settings > llama.cpp, then run grading again.",
-        )
-
     def exit_app(self):
         """Stop grading/search and close application."""
         self._force_exit = True
@@ -4137,10 +3923,6 @@ class FormManager(QMainWindow):
             self.auto_timer.deleteLater()
             self.auto_timer = None
         auto_scheduler.stop()
-
-        if self.llamacpp_startup_thread and self.llamacpp_startup_thread.isRunning():
-            self.llamacpp_startup_thread.cancel()
-            self.llamacpp_startup_thread.wait(5000)
 
         # QThread.quit() cannot stop GraderThread.run() while it is blocked reading
         # child stdout. Terminate the owned child tree first, then join the thread.
@@ -4178,7 +3960,7 @@ class FormManager(QMainWindow):
         else:
             self.showMinimized()
 
-    def run_grader(self, force_recent_only=False, target_urls=None, _llamacpp_preflight_complete=False):
+    def run_grader(self, force_recent_only=False, target_urls=None):
         """Start the grading process"""
         if not self.forms_data:
             if self.auto_mode:
@@ -4196,13 +3978,28 @@ class FormManager(QMainWindow):
                 preflight_cfg = json.load(f)
         except Exception:
             preflight_cfg = {}
-        if (
-            not _llamacpp_preflight_complete
-            and is_llamacpp_only(preflight_cfg)
-            and bool(preflight_cfg.get("llamacpp_require_server", True))
-        ):
-            self._begin_llamacpp_startup(preflight_cfg, force_recent_only, target_urls)
-            return
+        if is_llamacpp_only(preflight_cfg) and bool(preflight_cfg.get("llamacpp_require_server", True)):
+            try:
+                from providers.llamacpp_provider import LlamaCppProvider
+
+                llamacpp_ready = LlamaCppProvider().is_configured()
+            except Exception:
+                llamacpp_ready = False
+            if not llamacpp_ready and bool(preflight_cfg.get("llamacpp_auto_start_server", True)):
+                llamacpp_ready = self._start_llamacpp_server(preflight_cfg)
+            if not llamacpp_ready:
+                message = (
+                    "llama.cpp-only grading is selected, but no compatible llama.cpp server is responding.\n\n"
+                    "The app tried to start llama-server.exe but it did not become ready. "
+                    "Check Settings > llama.cpp > Server Executable and Model Folder, then run grading again."
+                )
+                self.run_state_label.setText("Waiting")
+                self.append_debug(
+                    "<font color='red'>[LLAMACPP] llama.cpp-only mode is selected, "
+                    "but the local server is offline. Grading was not started.</font>"
+                )
+                QMessageBox.warning(self, "llama.cpp server offline", message)
+                return
 
         self.is_grading = True
         self.run_state_label.setText("Running")
