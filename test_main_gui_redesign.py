@@ -324,6 +324,20 @@ def test_settings_exposes_cache_and_history_clear_action(monkeypatch):
     assert 'config_data["llamacpp_ai_worker_count"]' in source
     assert 'config_data["ollama_ai_worker_count"]' in source
     assert 'llamacpp_form.addRow("Model Folder:", llamacpp_model_dir_picker)' in source
+    assert 'llamacpp_form.addRow("Context Size:", llamacpp_context_size_spin)' in source
+    assert 'llamacpp_form.addRow("GPU Layers:", llamacpp_gpu_layers_combo)' in source
+    assert 'llamacpp_form.addRow("Generation Threads:", llamacpp_threads_spin)' in source
+    assert 'llamacpp_form.addRow("Batch Threads:", llamacpp_threads_batch_spin)' in source
+    assert 'llamacpp_form.addRow("Server Batch Size:", llamacpp_server_batch_size_spin)' in source
+    assert 'llamacpp_form.addRow("Server Micro-batch:", llamacpp_server_ubatch_size_spin)' in source
+    assert 'llamacpp_form.addRow("Flash Attention:", llamacpp_flash_attn_combo)' in source
+    assert 'llamacpp_form.addRow("K Cache Type:", llamacpp_cache_type_k_combo)' in source
+    assert 'llamacpp_form.addRow("V Cache Type:", llamacpp_cache_type_v_combo)' in source
+    assert 'llamacpp_form.addRow("Parallel Slots:", llamacpp_parallel_spin)' in source
+    assert 'config_data["llamacpp_server_context_size"]' in source
+    assert 'config_data["llamacpp_server_gpu_layers"]' in source
+    assert 'config_data["llamacpp_server_mmap"]' in source
+    assert 'config_data["llamacpp_server_jinja"]' in source
     assert 'llamacpp_form.addRow("Auto-start Server:", llamacpp_auto_start_checkbox)' in source
     assert 'llamacpp_form.addRow("Server Executable:", llamacpp_server_exe_picker)' in source
     assert 'QFileDialog.getExistingDirectory' in source
@@ -352,6 +366,46 @@ def test_settings_exposes_cache_and_history_clear_action(monkeypatch):
     assert 'QProgressDialog(' in source
     assert '"Loading llama.cpp"' in source
     assert "Large GGUF models can take a few minutes to load." in source
+
+
+def test_llamacpp_server_command_uses_configurable_performance_defaults():
+    command = FormManager._llamacpp_server_command(
+        None,
+        {},
+        r"C:\Tools\llama.cpp\llama-server.exe",
+        r"C:\models\Qwen3.5-9B-Q4_K_M.gguf",
+        "127.0.0.1",
+        8081,
+    )
+    expected_pairs = {
+        "--ctx-size": "32768",
+        "--gpu-layers": "auto",
+        "--threads": "8",
+        "--threads-batch": "8",
+        "--batch-size": "1024",
+        "--ubatch-size": "512",
+        "--flash-attn": "auto",
+        "--cache-type-k": "q8_0",
+        "--cache-type-v": "q8_0",
+        "--parallel": "1",
+    }
+    for option, value in expected_pairs.items():
+        assert command[command.index(option) + 1] == value
+    assert "--mmap" in command
+    assert "--jinja" in command
+
+
+def test_llamacpp_server_command_emits_disabled_boolean_flags():
+    command = FormManager._llamacpp_server_command(
+        None,
+        {"llamacpp_server_mmap": False, "llamacpp_server_jinja": False},
+        "server.exe",
+        "model.gguf",
+        "127.0.0.1",
+        8081,
+    )
+    assert "--no-mmap" in command
+    assert "--no-jinja" in command
 
 
 def test_settings_hides_low_level_expert_controls():

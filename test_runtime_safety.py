@@ -15,6 +15,22 @@ def test_current_jury_models_use_configured_fast_local_roles():
     assert cfg["reasoning_model"] == "phi4:14b"
 
 
+def test_llamacpp_server_launch_defaults_match_local_9b_profile():
+    cfg = json.loads(Path("config.json").read_text(encoding="utf-8"))
+    assert cfg["llamacpp_server_context_size"] == 32768
+    assert cfg["llamacpp_server_gpu_layers"] == "auto"
+    assert cfg["llamacpp_server_threads"] == 8
+    assert cfg["llamacpp_server_threads_batch"] == 8
+    assert cfg["llamacpp_server_batch_size"] == 1024
+    assert cfg["llamacpp_server_ubatch_size"] == 512
+    assert cfg["llamacpp_server_flash_attn"] == "auto"
+    assert cfg["llamacpp_server_cache_type_k"] == "q8_0"
+    assert cfg["llamacpp_server_cache_type_v"] == "q8_0"
+    assert cfg["llamacpp_server_parallel"] == 1
+    assert cfg["llamacpp_server_mmap"] is True
+    assert cfg["llamacpp_server_jinja"] is True
+
+
 def test_provider_manager_strategy_and_priority_are_consistent():
     cfg = json.loads(Path("config.json").read_text(encoding="utf-8"))
     assert cfg["provider_manager_enabled"] is True

@@ -2109,6 +2109,42 @@ class FormManager(QMainWindow):
         )
         llamacpp_base_url_edit = QLineEdit(dialog)
         llamacpp_base_url_edit.setText(str(cfg.get("llamacpp_api_base_url", "http://127.0.0.1:8080")))
+        llamacpp_context_size_spin = QSpinBox(dialog)
+        llamacpp_context_size_spin.setRange(512, 1048576)
+        llamacpp_context_size_spin.setValue(max(512, int(cfg.get("llamacpp_server_context_size", 32768) or 32768)))
+        llamacpp_gpu_layers_combo = QComboBox(dialog)
+        llamacpp_gpu_layers_combo.setEditable(True)
+        llamacpp_gpu_layers_combo.addItems(["auto", "all", "0"])
+        llamacpp_gpu_layers_combo.setCurrentText(str(cfg.get("llamacpp_server_gpu_layers", "auto")))
+        llamacpp_threads_spin = QSpinBox(dialog)
+        llamacpp_threads_spin.setRange(1, 256)
+        llamacpp_threads_spin.setValue(max(1, int(cfg.get("llamacpp_server_threads", 8) or 8)))
+        llamacpp_threads_batch_spin = QSpinBox(dialog)
+        llamacpp_threads_batch_spin.setRange(1, 256)
+        llamacpp_threads_batch_spin.setValue(max(1, int(cfg.get("llamacpp_server_threads_batch", 8) or 8)))
+        llamacpp_server_batch_size_spin = QSpinBox(dialog)
+        llamacpp_server_batch_size_spin.setRange(1, 8192)
+        llamacpp_server_batch_size_spin.setValue(max(1, int(cfg.get("llamacpp_server_batch_size", 1024) or 1024)))
+        llamacpp_server_ubatch_size_spin = QSpinBox(dialog)
+        llamacpp_server_ubatch_size_spin.setRange(1, 8192)
+        llamacpp_server_ubatch_size_spin.setValue(max(1, int(cfg.get("llamacpp_server_ubatch_size", 512) or 512)))
+        llamacpp_flash_attn_combo = QComboBox(dialog)
+        llamacpp_flash_attn_combo.addItems(["auto", "on", "off"])
+        llamacpp_flash_attn_combo.setCurrentText(str(cfg.get("llamacpp_server_flash_attn", "auto")).lower())
+        llama_cache_types = ["q8_0", "f16", "bf16", "q4_0", "q4_1", "q5_0", "q5_1", "f32", "iq4_nl"]
+        llamacpp_cache_type_k_combo = QComboBox(dialog)
+        llamacpp_cache_type_k_combo.addItems(llama_cache_types)
+        llamacpp_cache_type_k_combo.setCurrentText(str(cfg.get("llamacpp_server_cache_type_k", "q8_0")).lower())
+        llamacpp_cache_type_v_combo = QComboBox(dialog)
+        llamacpp_cache_type_v_combo.addItems(llama_cache_types)
+        llamacpp_cache_type_v_combo.setCurrentText(str(cfg.get("llamacpp_server_cache_type_v", "q8_0")).lower())
+        llamacpp_parallel_spin = QSpinBox(dialog)
+        llamacpp_parallel_spin.setRange(1, 32)
+        llamacpp_parallel_spin.setValue(max(1, int(cfg.get("llamacpp_server_parallel", 1) or 1)))
+        llamacpp_mmap_checkbox = QCheckBox("Enable model memory mapping (--mmap)", dialog)
+        llamacpp_mmap_checkbox.setChecked(bool(cfg.get("llamacpp_server_mmap", True)))
+        llamacpp_jinja_checkbox = QCheckBox("Enable Jinja chat templates (--jinja)", dialog)
+        llamacpp_jinja_checkbox.setChecked(bool(cfg.get("llamacpp_server_jinja", True)))
         llamacpp_server_exe_edit = QLineEdit(dialog)
         llamacpp_server_exe_edit.setText(str(cfg.get("llamacpp_server_executable", r"C:\Tools\llama.cpp\llama-server.exe")))
         llamacpp_server_exe_picker = QWidget(dialog)
@@ -2349,6 +2385,18 @@ class FormManager(QMainWindow):
         llamacpp_form.addRow("Auto-start Server:", llamacpp_auto_start_checkbox)
         llamacpp_form.addRow("Server Executable:", llamacpp_server_exe_picker)
         llamacpp_form.addRow("Model Folder:", llamacpp_model_dir_picker)
+        llamacpp_form.addRow("Context Size:", llamacpp_context_size_spin)
+        llamacpp_form.addRow("GPU Layers:", llamacpp_gpu_layers_combo)
+        llamacpp_form.addRow("Generation Threads:", llamacpp_threads_spin)
+        llamacpp_form.addRow("Batch Threads:", llamacpp_threads_batch_spin)
+        llamacpp_form.addRow("Server Batch Size:", llamacpp_server_batch_size_spin)
+        llamacpp_form.addRow("Server Micro-batch:", llamacpp_server_ubatch_size_spin)
+        llamacpp_form.addRow("Flash Attention:", llamacpp_flash_attn_combo)
+        llamacpp_form.addRow("K Cache Type:", llamacpp_cache_type_k_combo)
+        llamacpp_form.addRow("V Cache Type:", llamacpp_cache_type_v_combo)
+        llamacpp_form.addRow("Parallel Slots:", llamacpp_parallel_spin)
+        llamacpp_form.addRow("Memory Mapping:", llamacpp_mmap_checkbox)
+        llamacpp_form.addRow("Chat Templates:", llamacpp_jinja_checkbox)
         llamacpp_form.addRow("Server Check:", llamacpp_require_server_checkbox)
         llamacpp_form.addRow("After Grading:", llamacpp_stop_after_grading_checkbox)
         llamacpp_form.addRow("On App Close:", llamacpp_stop_on_close_checkbox)
@@ -2515,6 +2563,24 @@ class FormManager(QMainWindow):
             config_data["llamacpp_stop_server_on_app_close"] = llamacpp_stop_on_close_checkbox.isChecked()
             config_data["llamacpp_api_base_url"] = llamacpp_base_url_edit.text().strip() or "http://127.0.0.1:8080"
             config_data["llamacpp_model_dir"] = llamacpp_model_dir_edit.text().strip() or r"C:\Users\regis\.lmstudio\models"
+            gpu_layers_text = llamacpp_gpu_layers_combo.currentText().strip().lower() or "auto"
+            if gpu_layers_text not in {"auto", "all"}:
+                try:
+                    gpu_layers_text = str(max(0, int(gpu_layers_text)))
+                except ValueError:
+                    gpu_layers_text = "auto"
+            config_data["llamacpp_server_context_size"] = int(llamacpp_context_size_spin.value())
+            config_data["llamacpp_server_gpu_layers"] = gpu_layers_text
+            config_data["llamacpp_server_threads"] = int(llamacpp_threads_spin.value())
+            config_data["llamacpp_server_threads_batch"] = int(llamacpp_threads_batch_spin.value())
+            config_data["llamacpp_server_batch_size"] = int(llamacpp_server_batch_size_spin.value())
+            config_data["llamacpp_server_ubatch_size"] = int(llamacpp_server_ubatch_size_spin.value())
+            config_data["llamacpp_server_flash_attn"] = llamacpp_flash_attn_combo.currentText()
+            config_data["llamacpp_server_cache_type_k"] = llamacpp_cache_type_k_combo.currentText()
+            config_data["llamacpp_server_cache_type_v"] = llamacpp_cache_type_v_combo.currentText()
+            config_data["llamacpp_server_parallel"] = int(llamacpp_parallel_spin.value())
+            config_data["llamacpp_server_mmap"] = llamacpp_mmap_checkbox.isChecked()
+            config_data["llamacpp_server_jinja"] = llamacpp_jinja_checkbox.isChecked()
             selected_llamacpp = {}
             for role, combo in llamacpp_role_combos.items():
                 try:
@@ -3719,6 +3785,36 @@ class FormManager(QMainWindow):
         port = parsed.port or 8081
         return host, int(port)
 
+    def _llamacpp_server_command(self, cfg, exe_path, model_path, host, port):
+        gpu_layers = str(cfg.get("llamacpp_server_gpu_layers", "auto") or "auto").strip().lower()
+        if gpu_layers not in {"auto", "all"}:
+            try:
+                gpu_layers = str(max(0, int(gpu_layers)))
+            except ValueError:
+                gpu_layers = "auto"
+        flash_attn = str(cfg.get("llamacpp_server_flash_attn", "auto") or "auto").strip().lower()
+        if flash_attn not in {"auto", "on", "off"}:
+            flash_attn = "auto"
+        command = [
+            exe_path,
+            "--model", model_path,
+            "--host", host,
+            "--port", str(port),
+            "--ctx-size", str(max(512, int(cfg.get("llamacpp_server_context_size", 32768) or 32768))),
+            "--gpu-layers", gpu_layers,
+            "--threads", str(max(1, int(cfg.get("llamacpp_server_threads", 8) or 8))),
+            "--threads-batch", str(max(1, int(cfg.get("llamacpp_server_threads_batch", 8) or 8))),
+            "--batch-size", str(max(1, int(cfg.get("llamacpp_server_batch_size", 1024) or 1024))),
+            "--ubatch-size", str(max(1, int(cfg.get("llamacpp_server_ubatch_size", 512) or 512))),
+            "--flash-attn", flash_attn,
+            "--cache-type-k", str(cfg.get("llamacpp_server_cache_type_k", "q8_0") or "q8_0"),
+            "--cache-type-v", str(cfg.get("llamacpp_server_cache_type_v", "q8_0") or "q8_0"),
+            "--parallel", str(max(1, int(cfg.get("llamacpp_server_parallel", 1) or 1))),
+            "--mmap" if bool(cfg.get("llamacpp_server_mmap", True)) else "--no-mmap",
+            "--jinja" if bool(cfg.get("llamacpp_server_jinja", True)) else "--no-jinja",
+        ]
+        return command
+
     def _start_llamacpp_server(self, cfg):
         try:
             from providers.llamacpp_provider import LlamaCppProvider
@@ -3740,17 +3836,7 @@ class FormManager(QMainWindow):
             self.append_debug(
                 f"<font color='cyan'>[LLAMACPP] Starting llama-server on {host}:{port} with {os.path.basename(model_path)}...</font>"
             )
-            command = [
-                exe_path,
-                "-m",
-                model_path,
-                "--host",
-                host,
-                "--port",
-                str(port),
-                "-c",
-                str(int(cfg.get("llamacpp_server_context_size", 4096) or 4096)),
-            ]
+            command = self._llamacpp_server_command(cfg, exe_path, model_path, host, port)
             stdout = open(log_path, "a", encoding="utf-8", errors="replace")
             creationflags = 0
             if sys.platform == "win32":
