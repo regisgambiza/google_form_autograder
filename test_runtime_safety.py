@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 import grader_thread
-from evaluator_config import effective_ai_worker_count, effective_provider_worker_counts
+from evaluator_config import configured_provider_names, effective_ai_worker_count, effective_provider_worker_counts
 
 
 def test_current_jury_models_use_configured_fast_local_roles():
@@ -19,15 +19,7 @@ def test_provider_manager_strategy_and_priority_are_consistent():
     cfg = json.loads(Path("config.json").read_text(encoding="utf-8"))
     assert cfg["provider_manager_enabled"] is True
     strategy = str(cfg.get("provider_strategy", "")).casefold()
-    priority = cfg.get("provider_priority", [])
-    if strategy == "llamacpp_only":
-        assert priority == ["llamacpp"]
-    elif strategy == "ollama_only":
-        assert priority == ["ollama"]
-    elif strategy == "openrouter_only":
-        assert priority == ["openrouter"]
-    else:
-        assert priority == ["openrouter", "llamacpp", "ollama"]
+    assert cfg.get("provider_priority", []) == configured_provider_names(cfg)
     assert cfg["openrouter_worker_count"] >= 1
     assert cfg["llamacpp_worker_count"] >= 1
     assert cfg["ollama_worker_count"] == 1
@@ -41,6 +33,38 @@ def test_provider_manager_strategy_and_priority_are_consistent():
             "llamacpp": 1,
             "ollama": 0,
         }
+
+
+def test_provider_specific_ai_worker_counts_drive_effective_count():
+    assert effective_ai_worker_count(
+        {
+            "provider_strategy": "openrouter_only",
+            "ai_worker_count": 2,
+            "openrouter_ai_worker_count": 7,
+        }
+    ) == 7
+    assert effective_ai_worker_count(
+        {
+            "provider_strategy": "ollama_only",
+            "ai_worker_count": 9,
+            "ollama_ai_worker_count": 2,
+        }
+    ) == 2
+    assert effective_ai_worker_count(
+        {
+            "provider_strategy": "llamacpp_only",
+            "ai_worker_count": 9,
+            "llamacpp_ai_worker_count": 5,
+        }
+    ) == 1
+    assert effective_ai_worker_count(
+        {
+            "provider_strategy": "openrouter_llamacpp_ollama",
+            "openrouter_ai_worker_count": 6,
+            "ollama_ai_worker_count": 2,
+            "llamacpp_ai_worker_count": 1,
+        }
+    ) == 6
 
 
 def test_patient_ai_mode_avoids_short_timeout_fallbacks():

@@ -51,8 +51,9 @@
     "openrouter_judge_answer_batch_size": 25,
     "judge_batch_num_predict": 8192,
     "provider_manager_enabled": true,
-    "provider_strategy": "llamacpp_only",
+    "provider_strategy": "openrouter_llamacpp",
     "provider_priority": [
+        "openrouter",
         "llamacpp"
     ],
     "provider_retry_count": 2,
@@ -61,6 +62,9 @@
     "provider_circuit_failure_threshold": 3,
     "provider_circuit_recovery_seconds": 60,
     "provider_health_check_interval_seconds": 30,
+    "openrouter_ai_worker_count": 10,
+    "ollama_ai_worker_count": 1,
+    "llamacpp_ai_worker_count": 1,
     "openrouter_worker_count": 10,
     "ollama_worker_count": 1,
     "llamacpp_worker_count": 1,
@@ -74,7 +78,7 @@
     "llamacpp_json_min_predict": 256,
     "llamacpp_model_dir": "C:\\Users\\regis\\.lmstudio\\models",
     "llamacpp_judge_answer_batch_size": 1,
-    "llamacpp_stop_server_after_grading": false,
+    "llamacpp_stop_server_after_grading": true,
     "llamacpp_stop_server_on_app_close": true,
     "llamacpp_models": {
         "semantic_judge": [
@@ -247,7 +251,7 @@
     },
     "enable_pipeline_workers": true,
     "deterministic_worker_count": 4,
-    "ai_worker_count": 1,
+    "ai_worker_count": 10,
     "worker_queue_size": 1200,
     "global_prefetch_mode": true,
     "dispatch_mode": "global",
@@ -268,7 +272,7 @@
     "adaptive_target_latency_ms": 15000,
     "adaptive_timeout_rate_threshold": 0.2,
     "adaptive_chunk_size": 12,
-    "max_concurrent_jury_answers": 1,
+    "max_concurrent_jury_answers": 10,
     "jury_semaphore_acquire_timeout_seconds": 21600,
     "enable_async_judges": false,
     "sync_judge_parallelism": 1,

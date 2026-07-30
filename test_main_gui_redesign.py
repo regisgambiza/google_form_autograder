@@ -316,6 +316,13 @@ def test_settings_exposes_cache_and_history_clear_action(monkeypatch):
     assert 'openrouter_form.addRow("Answers per Judge Call:"' in source
     assert 'llamacpp_form.addRow("Answers per Judge Call:"' in source
     assert 'ollama_form.addRow("Answers per Judge Call:"' in source
+    assert 'global_form.addRow("AI Worker Threads:"' not in source
+    assert 'openrouter_form.addRow("AI Worker Threads:", openrouter_ai_worker_count_spin)' in source
+    assert 'llamacpp_form.addRow("AI Worker Threads:", llamacpp_ai_worker_count_spin)' in source
+    assert 'ollama_form.addRow("AI Worker Threads:", ollama_ai_worker_count_spin)' in source
+    assert 'config_data["openrouter_ai_worker_count"]' in source
+    assert 'config_data["llamacpp_ai_worker_count"]' in source
+    assert 'config_data["ollama_ai_worker_count"]' in source
     assert 'llamacpp_form.addRow("Model Folder:", llamacpp_model_dir_picker)' in source
     assert 'llamacpp_form.addRow("Auto-start Server:", llamacpp_auto_start_checkbox)' in source
     assert 'llamacpp_form.addRow("Server Executable:", llamacpp_server_exe_picker)' in source

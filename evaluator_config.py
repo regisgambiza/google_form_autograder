@@ -61,6 +61,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "provider_circuit_failure_threshold": 3,
     "provider_circuit_recovery_seconds": 60,
     "provider_health_check_interval_seconds": 30,
+    "openrouter_ai_worker_count": 10,
+    "ollama_ai_worker_count": 1,
+    "llamacpp_ai_worker_count": 1,
     "openrouter_worker_count": 10,
     "ollama_worker_count": 1,
     "llamacpp_worker_count": 1,
@@ -306,10 +309,19 @@ def is_llamacpp_only(cfg: Dict[str, Any]) -> bool:
 
 
 def effective_ai_worker_count(cfg: Dict[str, Any]) -> int:
-    """Application AI workers after local-provider safety caps."""
+    """Application AI workers for the active provider strategy."""
+    legacy_count = max(1, int(cfg.get("ai_worker_count", 4) or 4))
     if is_llamacpp_only(cfg):
         return 1
-    return max(1, int(cfg.get("ai_worker_count", 4) or 4))
+
+    active = configured_provider_names(cfg)
+    counts = {
+        "openrouter": max(1, int(cfg.get("openrouter_ai_worker_count", legacy_count) or legacy_count)),
+        "llamacpp": 1,
+        "ollama": max(1, int(cfg.get("ollama_ai_worker_count", 1) or 1)),
+    }
+    active_counts = [counts[provider] for provider in active if provider in counts]
+    return max(active_counts) if active_counts else legacy_count
 
 
 def effective_provider_worker_counts(cfg: Dict[str, Any]) -> Dict[str, int]:

@@ -2043,12 +2043,28 @@ class FormManager(QMainWindow):
         llamacpp_judge_answer_batch_size_spin.setToolTip(
             "llama.cpp is capped at 1 answer per judge call to avoid malformed local batch JSON."
         )
-        ai_worker_count_spin = QSpinBox(dialog)
-        ai_worker_count_spin.setRange(1, 12)
-        ai_worker_count_spin.setValue(max(1, int(cfg.get("ai_worker_count", 4) or 4)))
-        ai_worker_count_spin.setToolTip(
-            "Application AI worker threads. Higher values process more questions in parallel. "
+        legacy_ai_worker_count = max(1, int(cfg.get("ai_worker_count", 4) or 4))
+        openrouter_ai_worker_count_spin = QSpinBox(dialog)
+        openrouter_ai_worker_count_spin.setRange(1, 12)
+        openrouter_ai_worker_count_spin.setValue(
+            max(1, int(cfg.get("openrouter_ai_worker_count", legacy_ai_worker_count) or legacy_ai_worker_count))
+        )
+        openrouter_ai_worker_count_spin.setToolTip(
+            "Application AI worker threads when OpenRouter is active. Higher values process more questions in parallel. "
             "Changes apply to the next grading run."
+        )
+        ollama_ai_worker_count_spin = QSpinBox(dialog)
+        ollama_ai_worker_count_spin.setRange(1, 4)
+        ollama_ai_worker_count_spin.setValue(max(1, int(cfg.get("ollama_ai_worker_count", 1) or 1)))
+        ollama_ai_worker_count_spin.setToolTip(
+            "Application AI worker threads when Ollama is active. Keep low unless your local hardware can handle parallel model work. "
+            "Changes apply to the next grading run."
+        )
+        llamacpp_ai_worker_count_spin = QSpinBox(dialog)
+        llamacpp_ai_worker_count_spin.setRange(1, 1)
+        llamacpp_ai_worker_count_spin.setValue(1)
+        llamacpp_ai_worker_count_spin.setToolTip(
+            "llama.cpp is capped at 1 application AI worker so local GGUF grading stays serial and reliable."
         )
         openrouter_worker_count_spin = QSpinBox(dialog)
         openrouter_worker_count_spin.setRange(1, 12)
@@ -2314,18 +2330,19 @@ class FormManager(QMainWindow):
         global_form.addRow("Cache Reuse:", ignore_cache_checkbox)
         global_form.addRow("Truncate Answers:", truncate_checkbox)
         global_form.addRow("Reports:", report_checkbox)
-        global_form.addRow("AI Worker Threads:", ai_worker_count_spin)
         global_form.addRow("Heartbeat Timeout:", heartbeat_timeout_spin)
         global_form.addRow("Heartbeat Interval:", heartbeat_interval_spin)
         global_form.addRow("Heartbeat Restarts:", heartbeat_max_restarts_spin)
 
         openrouter_form.addRow("Provider Strategy:", provider_strategy_combo)
         openrouter_form.addRow("Provider Priority:", provider_priority_edit)
+        openrouter_form.addRow("AI Worker Threads:", openrouter_ai_worker_count_spin)
         openrouter_form.addRow("Provider Workers:", openrouter_worker_count_spin)
         openrouter_form.addRow("Answers per Judge Call:", openrouter_judge_answer_batch_size_spin)
         openrouter_form.addRow("Spend Cap ($):", max_openrouter_spend_spin)
 
         llamacpp_form.addRow("Provider Enabled:", llamacpp_enabled_checkbox)
+        llamacpp_form.addRow("AI Worker Threads:", llamacpp_ai_worker_count_spin)
         llamacpp_form.addRow("Provider Workers:", llamacpp_worker_count_spin)
         llamacpp_form.addRow("Answers per Judge Call:", llamacpp_judge_answer_batch_size_spin)
         llamacpp_form.addRow("Server URL:", llamacpp_base_url_edit)
@@ -2342,6 +2359,7 @@ class FormManager(QMainWindow):
         for role in visible_settings_jury_roles:
             ollama_form.addRow(jury_role_labels[role], jury_combos[role])
         ollama_form.addRow("Jury Roles:", jury_status_label)
+        ollama_form.addRow("AI Worker Threads:", ollama_ai_worker_count_spin)
         ollama_form.addRow("Provider Workers:", ollama_worker_count_spin)
         ollama_form.addRow("Answers per Judge Call:", ollama_judge_answer_batch_size_spin)
         ollama_form.addRow("OpenRouter Monitor Model:", supervisor_model_combo)
@@ -2483,7 +2501,9 @@ class FormManager(QMainWindow):
             preset = EXECUTION_MODE_PRESETS.get(selected_mode, EXECUTION_MODE_PRESETS[DEFAULT_EXECUTION_MODE])
             for key, value in preset.items():
                 config_data[key] = value
-            config_data["ai_worker_count"] = int(ai_worker_count_spin.value())
+            config_data["openrouter_ai_worker_count"] = int(openrouter_ai_worker_count_spin.value())
+            config_data["llamacpp_ai_worker_count"] = 1
+            config_data["ollama_ai_worker_count"] = int(ollama_ai_worker_count_spin.value())
             config_data["openrouter_worker_count"] = int(openrouter_worker_count_spin.value())
             config_data["llamacpp_worker_count"] = 1
             config_data["ollama_worker_count"] = int(ollama_worker_count_spin.value())
@@ -2544,8 +2564,10 @@ class FormManager(QMainWindow):
             config_data["openrouter_judge_answer_batch_size"] = int(openrouter_judge_answer_batch_size_spin.value())
             config_data["llamacpp_judge_answer_batch_size"] = 1
             config_data["judge_answer_batch_size"] = int(openrouter_judge_answer_batch_size_spin.value())
+            config_data["ai_worker_count"] = effective_ai_worker_count(config_data)
             if is_llamacpp_only(config_data):
                 config_data["ai_worker_count"] = 1
+                config_data["llamacpp_ai_worker_count"] = 1
                 config_data["max_concurrent_jury_answers"] = 1
 
             # Save Heartbeat monitor settings
