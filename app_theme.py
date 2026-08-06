@@ -217,6 +217,7 @@ QProgressBar::chunk { background: #1f8a5b; border-radius: 4px; }
 QMenu { background: white; border: 1px solid #c8d2dc; padding: 5px; }
 QMenu::item { padding: 7px 26px 7px 10px; border-radius: 3px; }
 QMenu::item:selected { background: #dcecff; color: #15324b; }
+QMenu::item:disabled { color: #a3b0bc; }
 QToolTip { background: #263747; color: white; border: 0; padding: 5px; }
 QSplitter::handle { background: #d7e0ea; width: 2px; height: 2px; }
 QScrollBar:vertical { background: #eef2f6; width: 12px; margin: 0; }

@@ -2,7 +2,8 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt5.QtWidgets import QApplication, QPushButton, QSplitter, QFrame, QLabel, QScrollArea
+from PyQt5.QtWidgets import (QApplication, QPushButton, QSplitter, QFrame, QLabel,
+                             QScrollArea, QMenu, QMessageBox)
 from PyQt5.QtCore import Qt
 
 from app_theme import apply_application_theme
@@ -423,3 +424,175 @@ def test_settings_hides_low_level_expert_controls():
         'form.addRow("Execution Mode:"',
     ):
         assert not any(line.strip().startswith(obsolete_row) for line in source_lines)
+
+
+def _make_window():
+    window = FormManager()
+    window.save_forms = lambda: None
+    return window
+
+
+def _add_form(window, url, title):
+    item = window._add_form_to_queue(url, title, source="Test")
+    return item
+
+
+def test_queue_list_has_custom_context_menu_policy():
+    window = _make_window()
+    assert window.form_list.contextMenuPolicy() == Qt.CustomContextMenu
+    assert window.form_list.customContextMenuRequested is not None
+
+
+def test_context_menu_builds_expected_actions_and_separators():
+    window = _make_window()
+    window.form_list.clear()
+    window.forms_data.clear()
+    _add_form(window, "https://docs.google.com/forms/d/a/edit", "Algebra")
+    second = _add_form(window, "https://docs.google.com/forms/d/b/edit", "Fractions")
+
+    menu = window._build_form_context_menu(second)
+    assert _menu_item(menu, "Requeue (Reset to Queued)") is not None
+    labels = set()
+    for act in menu.actions():
+        if not act.isSeparator():
+            labels.add(act.text())
+    assert {"Grade Now", "Open Answer Key Dashboard", "Requeue (Reset to Queued)",
+            "Mark as Done", "Mark as Skipped", "Move to Top", "Move Up",
+            "Move Down", "Move to Bottom", "Copy URL", "Open in Browser",
+            "Remove from Queue"}.issubset(labels)
+    seps = [a.isSeparator() for a in menu.actions()]
+    assert seps.count(True) == 4
+
+
+def _menu_item(menu, partial):
+    for act in menu.actions():
+        if partial in act.text() and not act.isSeparator():
+            return act
+    return None
+
+
+def test_context_menu_move_enabled_state_tracks_row_boundaries():
+    window = _make_window()
+    window.form_list.clear()
+    window.forms_data.clear()
+    a = _add_form(window, "https://docs.google.com/forms/d/a/edit", "A")
+    b = _add_form(window, "https://docs.google.com/forms/d/b/edit", "B")
+
+    menu_top = window._build_form_context_menu(a)
+    assert not _menu_item(menu_top, "Move to Top").isEnabled()
+    assert not _menu_item(menu_top, "Move Up").isEnabled()
+    assert _menu_item(menu_top, "Move Down").isEnabled()
+    assert _menu_item(menu_top, "Move to Bottom").isEnabled()
+
+    menu_bottom = window._build_form_context_menu(b)
+    assert _menu_item(menu_bottom, "Move to Top").isEnabled()
+    assert _menu_item(menu_bottom, "Move Up").isEnabled()
+    assert not _menu_item(menu_bottom, "Move Down").isEnabled()
+    assert not _menu_item(menu_bottom, "Move to Bottom").isEnabled()
+
+
+def test_context_requeue_resets_done_status_and_counters():
+    window = _make_window()
+    window.form_list.clear()
+    window.forms_data.clear()
+    item = _add_form(window, "https://docs.google.com/forms/d/a/edit", "Algebra")
+    window._set_form_status(item, "done", "Finished")
+    meta = item.data(Qt.UserRole + 1) or {}
+    meta["completed"] = 42
+    meta["total"] = 50
+    meta["review_questions"] = 7
+    item.setData(Qt.UserRole + 1, meta)
+
+    window._context_set_status(item, "queued")
+
+    meta = item.data(Qt.UserRole + 1) or {}
+    assert meta["status"] == "queued"
+    assert meta.get("completed") is None or meta["completed"] == 0
+    assert meta.get("total") is None or meta["total"] == 0
+    assert meta.get("review_questions") is None or meta["review_questions"] == 0
+
+
+def test_context_mark_status_changes_status():
+    window = _make_window()
+    window.form_list.clear()
+    window.forms_data.clear()
+    item = _add_form(window, "https://docs.google.com/forms/d/a/edit", "Algebra")
+
+    window._context_set_status(item, "done")
+    meta = item.data(Qt.UserRole + 1) or {}
+    assert meta["status"] == "done"
+    assert window.form_list.itemWidget(item)._badge_label.text() == "DONE"
+
+    window._context_set_status(item, "skipped")
+    meta = item.data(Qt.UserRole + 1) or {}
+    assert meta["status"] == "skipped"
+    assert window.form_list.itemWidget(item)._badge_label.text() == "SKIPPED"
+
+
+def test_context_move_to_top_and_bottom_reorders_queue_and_saves():
+    window = _make_window()
+    window.form_list.clear()
+    window.forms_data.clear()
+    urls = ["https://docs.google.com/forms/d/a/edit",
+            "https://docs.google.com/forms/d/b/edit",
+            "https://docs.google.com/forms/d/c/edit"]
+    for url in urls:
+        _add_form(window, url, url.split("/d/")[1].split("/")[0])
+
+    def ordered_urls():
+        return [window.form_list.item(i).data(Qt.UserRole) for i in range(window.form_list.count())]
+
+    last = window.form_list.item(2)
+    window._context_move(last, "top")
+    assert ordered_urls()[0] == urls[2]
+    assert list(window.forms_data.keys())[0] == urls[2]
+
+    first = window.form_list.item(0)
+    window._context_move(first, "bottom")
+    assert ordered_urls()[-1] == urls[2]
+
+
+def test_context_move_keeps_item_widget_attached():
+    window = _make_window()
+    window.form_list.clear()
+    window.forms_data.clear()
+    urls = ["https://docs.google.com/forms/d/a1/edit",
+            "https://docs.google.com/forms/d/b1/edit"]
+    for url in urls:
+        _add_form(window, url, url)
+
+    second = window.form_list.item(1)
+    second_widget = window.form_list.itemWidget(second)
+    window._context_move(second, "top")
+    moved = window.form_list.item(0)
+    assert moved is second
+    assert window.form_list.itemWidget(moved) is second_widget
+
+
+def test_context_remove_single_item_deletes_and_saves(monkeypatch):
+    window = _make_window()
+    window.form_list.clear()
+    window.forms_data.clear()
+    _add_form(window, "https://docs.google.com/forms/d/a/edit", "Algebra")
+    item = _add_form(window, "https://docs.google.com/forms/d/b/edit", "Fractions")
+
+    monkeypatch.setattr(window, "save_forms", lambda: None)
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
+
+    window._context_remove(item, item.data(Qt.UserRole))
+
+    assert window.form_list.count() == 1
+    assert window.form_list.item(0).data(Qt.UserRole) == "https://docs.google.com/forms/d/a/edit"
+
+
+def test_context_remove_cancelled_keeps_item(monkeypatch):
+    window = _make_window()
+    window.form_list.clear()
+    window.forms_data.clear()
+    _add_form(window, "https://docs.google.com/forms/d/a/edit", "Algebra")
+    item = _add_form(window, "https://docs.google.com/forms/d/b/edit", "Fractions")
+
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.No)
+    window._context_remove(item, item.data(Qt.UserRole))
+
+    assert window.form_list.count() == 2

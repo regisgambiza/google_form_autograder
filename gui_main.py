@@ -855,6 +855,8 @@ class FormManager(QMainWindow):
         self.form_list.setTextElideMode(Qt.ElideRight)
         self.form_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.form_list.currentItemChanged.connect(self._on_form_selection_changed)
+        self.form_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.form_list.customContextMenuRequested.connect(self._on_form_list_context_menu)
         queue_layout.addWidget(self.form_list, 1)
         workspace.addWidget(queue_widget)
 
@@ -2992,6 +2994,158 @@ class FormManager(QMainWindow):
             if url in self.forms_data:
                 del self.forms_data[url]
             self.form_list.takeItem(self.form_list.row(item))
+        self.save_forms()
+        self._refresh_queue_positions()
+
+    def _item_at_pos(self, pos):
+        item = self.form_list.itemAt(pos)
+        if item is None:
+            return None
+        self.form_list.setCurrentItem(item)
+        self.form_list.setCurrentRow(self.form_list.row(item))
+        return item
+
+    def _on_form_list_context_menu(self, pos):
+        item = self._item_at_pos(pos)
+        if item is None:
+            return
+        self._show_form_context_menu(item, pos)
+
+    def _build_form_context_menu(self, item):
+        meta = item.data(Qt.UserRole + 1) or {}
+        url = item.data(Qt.UserRole)
+        status = str(meta.get("status", "queued"))
+        row = self.form_list.row(item)
+        count = self.form_list.count()
+        grading_busy = self.is_grading or (self.grader_thread and self.grader_thread.isRunning())
+
+        menu = QMenu(self)
+        act = menu.addAction("Grade Now")
+        act.setEnabled(not grading_busy)
+        act.triggered.connect(lambda: self._context_grade_now(url))
+        act = menu.addAction("Open Answer Key Dashboard")
+        act.triggered.connect(lambda: self._context_open_dashboard(url))
+        menu.addSeparator()
+
+        requeue = menu.addAction("Requeue (Reset to Queued)")
+        requeue.setEnabled(status != "queued" and not grading_busy)
+        requeue.triggered.connect(lambda: self._context_set_status(item, "queued"))
+        done = menu.addAction("Mark as Done")
+        done.setEnabled(status != "done")
+        done.triggered.connect(lambda: self._context_set_status(item, "done"))
+        skipped = menu.addAction("Mark as Skipped")
+        skipped.setEnabled(status != "skipped")
+        skipped.triggered.connect(lambda: self._context_set_status(item, "skipped"))
+        menu.addSeparator()
+
+        for label, where, enabled in (
+            ("Move to Top", "top", row > 0),
+            ("Move Up", "up", row > 0),
+            ("Move Down", "down", row < count - 1),
+            ("Move to Bottom", "bottom", row < count - 1),
+        ):
+            act = menu.addAction(label)
+            act.setEnabled(enabled)
+            act.triggered.connect(lambda _=False, w=where: self._context_move(item, w))
+        menu.addSeparator()
+
+        copy = menu.addAction("Copy URL")
+        copy.triggered.connect(lambda: self._context_copy_url(url))
+        browser = menu.addAction("Open in Browser")
+        browser.triggered.connect(lambda: self._context_open_in_browser(url))
+        menu.addSeparator()
+        remove = menu.addAction("Remove from Queue")
+        remove.triggered.connect(lambda: self._context_remove(item, url))
+        return menu
+
+    def _show_form_context_menu(self, item, widget_pos):
+        menu = self._build_form_context_menu(item)
+        # Keep a reference so the ephemeral menu isn't garbage-collected while open.
+        self._active_context_menu = menu
+        menu.exec_(self.form_list.viewport().mapToGlobal(widget_pos))
+        self._active_context_menu = None
+
+    def _context_grade_now(self, url):
+        if self.is_grading or (self.grader_thread and self.grader_thread.isRunning()):
+            self.append_debug("<font color='orange'>[QUEUE] Grading already in progress.</font>")
+            return
+        self.run_grader(target_urls=[url])
+
+    def _context_open_dashboard(self, url):
+        self.open_answer_key_dashboard(target_url=url)
+
+    def _context_set_status(self, item, status):
+        if status == "queued":
+            meta = item.data(Qt.UserRole + 1) or {}
+            for key in ("started_at", "finished_at", "completed", "total", "accepted", "rejected",
+                        "review_questions", "elapsed", "det_decisions", "ai_decisions",
+                        "avg_latency_ms", "ai_backlog", "current_model"):
+                meta.pop(key, None)
+            meta["detail"] = "Waiting for its turn"
+            item.setData(Qt.UserRole + 1, meta)
+            self._set_form_status(item, "queued", "Waiting for its turn")
+            self.save_forms()
+        else:
+            self._set_form_status(item, status, f"Manually marked as {status}")
+            self.save_forms()
+
+    def _context_move(self, item, where):
+        widget = self.form_list.itemWidget(item)
+        row = self.form_list.row(item)
+        count = self.form_list.count()
+        if where == "top":
+            target = 0
+        elif where == "bottom":
+            target = count - 1
+        elif where == "up":
+            target = row - 1
+        else:
+            target = row + 1
+        if target < 0 or target >= count or target == row:
+            return
+        taken = self.form_list.takeItem(row)
+        self.form_list.insertItem(target, taken)
+        if widget is not None:
+            self.form_list.setItemWidget(taken, widget)
+        self._reorder_forms_data()
+        self.save_forms()
+        self._refresh_queue_positions()
+
+    def _reorder_forms_data(self):
+        ordered = {}
+        for i in range(self.form_list.count()):
+            item = self.form_list.item(i)
+            url = item.data(Qt.UserRole)
+            if url:
+                ordered[url] = self.forms_data.get(url)
+        self.forms_data = {k: v for k, v in ordered.items() if v is not None}
+
+    def _context_copy_url(self, url):
+        from PyQt5.QtWidgets import QApplication
+        QApplication.clipboard().setText(url)
+        self.append_debug(f"<font color='gray'>[QUEUE] Copied URL to clipboard: {self._short_url(url)}</font>")
+
+    def _context_open_in_browser(self, url):
+        from PyQt5.QtCore import QUrl
+        from PyQt5.QtGui import QDesktopServices
+        QDesktopServices.openUrl(QUrl(url))
+        self.append_debug(f"<font color='gray'>[QUEUE] Opening in browser: {self._short_url(url)}</font>")
+
+    def _context_remove(self, item, url):
+        meta = item.data(Qt.UserRole + 1) or {}
+        title = meta.get("title") or item.text() or "this form"
+        reply = QMessageBox.question(
+            self,
+            "Remove from Queue",
+            f"Remove '{title}' from the queue?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        if url in self.forms_data:
+            del self.forms_data[url]
+        self.form_list.takeItem(self.form_list.row(item))
         self.save_forms()
         self._refresh_queue_positions()
 
