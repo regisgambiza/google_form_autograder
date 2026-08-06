@@ -28,3 +28,8 @@ logs/
 # Build/package outputs
 build/
 dist/
+
+# Runtime/data artifacts
+/teacher_answer_memory.json
+/temp_ai_judges_*.txt
+

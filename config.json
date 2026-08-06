@@ -53,7 +53,7 @@
     "provider_manager_enabled": true,
     "provider_strategy": "llamacpp_only",
     "provider_priority": [
-        "llamacpp"
+        "openrouter"
     ],
     "provider_retry_count": 2,
     "provider_timeout_seconds": 60,
@@ -96,13 +96,13 @@
             "Qwen_Qwen3.5-9B-Q4_K_M.gguf"
         ],
         "factual_judge": [
-            "Qwen_Qwen3.5-9B-Q4_K_M.gguf"
+            "bartowski/gemma-2-9b-it-GGUF/gemma-2-9b-it-Q4_K_M.gguf"
         ],
         "concept_judge": [
-            "Qwen_Qwen3.5-9B-Q4_K_M.gguf"
+            "bartowski/nvidia_NVIDIA-Nemotron-Nano-9B-v2-GGUF/nvidia_NVIDIA-Nemotron-Nano-9B-v2-Q4_K_M.gguf"
         ],
         "strict_judge": [
-            "Qwen_Qwen3.5-9B-Q4_K_M.gguf"
+            "bartowski/Qwen_Qwen3-8B-GGUF/Qwen_Qwen3-8B-Q4_K_M.gguf"
         ],
         "misconception_judge": [
             "lmstudio-community/gemma-4-26B-A4B-it-QAT-GGUF/gemma-4-26B-A4B-it-QAT-Q4_0.gguf"
