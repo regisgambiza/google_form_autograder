@@ -195,6 +195,16 @@ class AnswerKeyDashboard(QDialog):
         self.status = QLabel("Ready")
         self.status.setObjectName("Status")
         footer.addWidget(self.status, 1)
+        self.backup_button = QPushButton("Create Backup")
+        self.backup_button.setObjectName("Secondary")
+        self.backup_button.setIcon(self.style().standardIcon(QStyle.SP_DialogSaveButton))
+        self.backup_button.clicked.connect(self.create_backup)
+        footer.addWidget(self.backup_button)
+        self.restore_button = QPushButton("Restore Backup...")
+        self.restore_button.setObjectName("Secondary")
+        self.restore_button.setIcon(self.style().standardIcon(QStyle.SP_ArrowBack))
+        self.restore_button.clicked.connect(self.restore_backup_dialog)
+        footer.addWidget(self.restore_button)
         self.undo_button = QPushButton("Undo Last Change")
         self.undo_button.setObjectName("Secondary")
         self.undo_button.setIcon(self.style().standardIcon(QStyle.SP_ArrowBack))
@@ -624,3 +634,54 @@ class AnswerKeyDashboard(QDialog):
                 self.scan()
         except Exception as exc:
             QMessageBox.critical(self, "Could not undo change", str(exc))
+
+    def create_backup(self):
+        try:
+            self._connect()
+            path = backup_form_grading(self.service, self.form_id, reason="manual")
+            self.status.setText(f"Backup saved: {path.name}")
+        except Exception as exc:
+            QMessageBox.critical(self, "Could not create backup", str(exc))
+
+    def restore_backup_dialog(self):
+        try:
+            self._connect()
+        except Exception as exc:
+            QMessageBox.critical(self, "Could not connect", str(exc))
+            return
+        backups = list_backups(self.form_id)
+        if not backups:
+            self.status.setText("No backups available for this form")
+            return
+        items = []
+        for index, path in enumerate(backups):
+            items.append(f"{index + 1}: {path.stem}")
+        choice, ok = QInputDialog.getItem(
+            self,
+            "Restore Backup",
+            "Choose a backup to restore (newest first):",
+            items,
+            0,
+            False,
+        )
+        if not ok or not choice:
+            return
+        index = int(choice.split(":", 1)[0]) - 1
+        path = backups[index]
+        reply = QMessageBox.question(
+            self,
+            "Restore Backup",
+            f"Restore the answer key backup from {path.stem}?\n\nCurrent keys will be replaced.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        try:
+            backup_form_grading(self.service, self.form_id, reason="before restore")
+            result = restore_backup(self.service, path)
+            self.status.setText(f"Restored {result['request_count']} answer keys")
+            if self.question_list.count():
+                self.scan()
+        except Exception as exc:
+            QMessageBox.critical(self, "Could not restore backup", str(exc))

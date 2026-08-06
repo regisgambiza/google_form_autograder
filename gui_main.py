@@ -10,11 +10,12 @@ from PyQt5.QtWidgets import (
     QTextEdit, QLabel, QComboBox, QCheckBox,
     QProgressDialog, QSplitter, QSpinBox, QDialog, QFormLayout, QTabWidget,
     QSystemTrayIcon, QMenu, QAction, QStyle, QFrame, QProgressBar, QDoubleSpinBox,
-    QScrollArea, QFileDialog, QGridLayout
+    QScrollArea, QFileDialog, QGridLayout, QShortcut, QTableWidget,
+    QTableWidgetItem, QHeaderView
 )
 
 from PyQt5.QtCore import Qt, QDate, QTimer, QSize, QThread, pyqtSignal
-from PyQt5.QtGui import QColor, QBrush, QFont, QIcon, QPalette
+from PyQt5.QtGui import QColor, QBrush, QFont, QIcon, QPalette, QKeySequence
 from datetime import datetime, timedelta, timezone, time
 import ctypes
 import atexit
@@ -49,9 +50,10 @@ from evaluator_config import (
 )
 from scheduler import scheduler as auto_scheduler
 from answer_key_dashboard import AnswerKeyDashboard
-from app_theme import apply_application_theme, apply_widget_theme
+from app_theme import apply_application_theme, apply_widget_theme, set_dark_mode, is_dark_mode, current_stylesheet
 from cache_manager import clear_grading_cache
 from answer_key_manager import load_pending_review_records, keep_teacher_answers_only
+from decision_audit_viewer import DecisionAuditViewer, load_audit_records
 import re
 
 BANGKOK_TZ = timezone(timedelta(hours=7))
@@ -778,6 +780,15 @@ class FormManager(QMainWindow):
         grade_all_action = more_menu.addAction("Grade All Queued Forms")
         grade_all_action.triggered.connect(self.grade_all_forms_in_all_folders)
         more_menu.addSeparator()
+        audit_action = more_menu.addAction("View Decision Audit")
+        audit_action.triggered.connect(self.open_decision_audit_viewer)
+        export_action = more_menu.addAction("Export Results (CSV)")
+        export_action.triggered.connect(self.export_results_csv_dialog)
+        report_action = more_menu.addAction("Generate Run Report")
+        report_action.triggered.connect(self.generate_run_report)
+        self.dark_mode_action = more_menu.addAction("Toggle Dark Mode")
+        self.dark_mode_action.triggered.connect(self.toggle_dark_mode)
+        more_menu.addSeparator()
         remove_action = more_menu.addAction("Remove Selected Form")
         remove_action.triggered.connect(self.remove_form)
         clear_action = more_menu.addAction("Clear Completed Forms")
@@ -1136,6 +1147,8 @@ class FormManager(QMainWindow):
         self._setup_system_tray()
         apply_widget_theme(self)
         self.refresh_auth_status()
+        self._setup_keyboard_shortcuts()
+        self._notified_budget_warning = False
         QTimer.singleShot(500, self.prompt_login_if_needed)
 
     def _filter_form_queue(self, *_args):
@@ -1693,6 +1706,129 @@ class FormManager(QMainWindow):
         self.showNormal()
         self.raise_()
         self.activateWindow()
+
+    def _notify(self, title, message, icon=None, timeout_ms=6000):
+        """Show a system-tray notification when available, otherwise fall back to a status message."""
+        tray = getattr(self, "tray_icon", None)
+        if tray is not None and tray.isVisible():
+            tray.showMessage(title, message, icon or QSystemTrayIcon.Information, timeout_ms)
+            return True
+        self.append_debug(f"<b>{title}</b> {message}")
+        return False
+
+    def _setup_keyboard_shortcuts(self):
+        shortcuts = [
+            ("Ctrl+R", self.run_grader),
+            ("Ctrl+D", self.open_current_form_review),
+            ("Ctrl+Shift+A", self.open_answer_key_dashboard),
+            ("Ctrl+A", self.open_manual_add_dialog),
+            ("Ctrl+K", self._focus_form_search),
+            ("Ctrl+E", self.export_results_csv_dialog),
+            ("Ctrl+Shift+S", self.stop_grading),
+            ("Delete", self.remove_form),
+        ]
+        for key, handler in shortcuts:
+            shortcut = QShortcut(QKeySequence(key), self)
+            shortcut.activated.connect(handler)
+
+    def _notify_pending_reviews(self):
+        total = 0
+        try:
+            from answer_key_manager import load_pending_review_records
+            for i in range(self.form_list.count()):
+                meta = self.form_list.item(i).data(Qt.UserRole + 1) or {}
+                form_id = meta.get("form_id")
+                if form_id:
+                    pending = load_pending_review_records(form_id) or {}
+                    total += sum(len(v) for v in pending.values())
+        except Exception:
+            return
+        if total > 0:
+            self._notify(
+                "Answers Awaiting Review",
+                f"{total} question(s) need review in the Answer Keys dashboard.",
+                QSystemTrayIcon.Warning,
+            )
+
+    def _focus_form_search(self):
+        if hasattr(self, "form_search_input"):
+            self.form_search_input.setFocus()
+            self.form_search_input.selectAll()
+
+    def open_decision_audit_viewer(self):
+        viewer = DecisionAuditViewer(self._get_audit_path(), self)
+        viewer.exec_()
+
+    def _get_audit_path(self):
+        try:
+            with open("config.json", "r", encoding="utf-8") as fh:
+                cfg = json.load(fh)
+            return cfg.get("decision_audit_path", "logs/grading_decisions.jsonl")
+        except Exception:
+            return "logs/grading_decisions.jsonl"
+
+    def export_results_csv_dialog(self):
+        records = load_audit_records(self._get_audit_path())
+        if not records:
+            QMessageBox.information(self, "No Data", "No grading decision audit records were found to export.")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Grading Results", "grading_results.csv", "CSV Files (*.csv)"
+        )
+        if not path:
+            return
+        import csv
+
+        with open(path, "w", encoding="utf-8-sig", newline="") as fh:
+            writer = csv.writer(fh)
+            writer.writerow(["timestamp", "decision", "final_score", "confidence", "latency_ms", "stage_reached", "answer", "expected"])
+            for record in records:
+                writer.writerow([
+                    record.get("timestamp", ""),
+                    record.get("decision", ""),
+                    record.get("final_score", ""),
+                    record.get("confidence", ""),
+                    record.get("latency_ms", ""),
+                    record.get("stage_reached", ""),
+                    record.get("answer", ""),
+                    record.get("expected", ""),
+                ])
+        self.append_debug(f"<font color='green'>[EXPORT] Wrote {len(records)} results to {path}</font>")
+
+    def generate_run_report(self):
+        records = load_audit_records(self._get_audit_path())
+        if not records:
+            QMessageBox.information(self, "No Report Data", "No grading decision records were found to summarize.")
+            return
+        yes = sum(1 for r in records if str(r.get("decision", "")).upper() == "YES")
+        no = sum(1 for r in records if str(r.get("decision", "")).upper() == "NO")
+        review = sum(1 for r in records if str(r.get("decision", "")).upper() in ("REVIEW", "ABSTAIN"))
+        scores = [r.get("final_score") for r in records if isinstance(r.get("final_score"), (int, float))]
+        latencies = [r.get("latency_ms") for r in records if isinstance(r.get("latency_ms"), (int, float))]
+        total = len(records)
+        avg_score = sum(scores) / len(scores) if scores else 0
+        avg_latency = sum(latencies) / len(latencies) if latencies else 0
+
+        os.makedirs("Reports", exist_ok=True)
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+        path = os.path.join("Reports", f"run_summary_{timestamp}.md")
+        lines = [
+            f"# Grading Run Summary — {datetime.now():%Y-%m-%d %H:%M}",
+            "",
+            f"- Answers evaluated: {total}",
+            f"- Accepted (YES): {yes}",
+            f"- Rejected (NO): {no}",
+            f"- Awaiting review / abstained: {review}",
+        ]
+        if avg_score is not None:
+            lines.append(f"- Average final score: {avg_score:.3f}")
+        if avg_latency is not None:
+            lines.append(f"- Average latency: {avg_latency:.0f} ms")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(lines) + "\n")
+        self._notify("Run Report Generated", f"Wrote {total} decisions to Reports/.")
+        if os.path.exists(path):
+            os.startfile(os.path.abspath("Reports")) if sys.platform == "win32" else None
 
     def open_settings_dialog(self):
         dialog = QDialog(self)
@@ -3325,15 +3461,42 @@ class FormManager(QMainWindow):
             if "grading_mode" not in config:
                 config["grading_mode"] = "Whole Form"
                 modified = True
+            if "dark_mode" not in config:
+                config["dark_mode"] = False
+                modified = True
             
             if modified:
                 with open("config.json", "w", encoding="utf-8") as f:
                     json.dump(config, f, indent=4)
                     
             self.grading_mode = config.get("grading_mode", "Whole Form")
+            set_dark_mode(bool(config.get("dark_mode", False)))
+            self._apply_dark_mode_state()
         except Exception as e:
             print(f"Error loading config: {e}")
             self.grading_mode = "Whole Form"
+
+    def toggle_dark_mode(self):
+        set_dark_mode(not is_dark_mode())
+        self._apply_dark_mode_state()
+        try:
+            if os.path.exists("config.json"):
+                with open("config.json", "r", encoding="utf-8") as f:
+                    config = json.load(f)
+            else:
+                config = {}
+            config["dark_mode"] = is_dark_mode()
+            with open("config.json", "w", encoding="utf-8") as f:
+                json.dump(config, f, indent=4)
+        except Exception as e:
+            print(f"Error saving dark mode config: {e}")
+
+    def _apply_dark_mode_state(self):
+        apply_widget_theme(self)
+        self.dark_mode_action.setText("Toggle Light Mode" if is_dark_mode() else "Toggle Dark Mode")
+        app = QApplication.instance()
+        if app is not None:
+            app.setStyleSheet(current_stylesheet())
 
     def _start_source_scan(self, sources, action, mode="all_forms", from_dt=None, to_dt=None):
         if hasattr(self, "source_scan_thread") and self.source_scan_thread and self.source_scan_thread.isRunning():
@@ -3848,6 +4011,22 @@ class FormManager(QMainWindow):
             return bool(cfg.get(key, default))
         except Exception:
             return bool(default)
+
+    def _config_flag_float(self, key, default=0.0):
+        try:
+            with open("config.json", "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+            return float(cfg.get(key, default) or 0.0)
+        except Exception:
+            return float(default)
+
+    def _notify_budget_warning(self, cost_value, budget):
+        self._notified_budget_warning = True
+        self._notify(
+            "OpenRouter Budget Reached",
+            f"Current spend ${cost_value:.4f} has reached the budget of ${budget:.2f}.",
+            QSystemTrayIcon.Warning,
+        )
 
     def _stop_llamacpp_server_if_enabled(self, config_key, reason):
         if not self._config_flag(config_key, False):
@@ -4805,6 +4984,15 @@ class FormManager(QMainWindow):
             "cost",
             f"${cost_value:.4f} so far | est remaining {remaining_cost}",
         )
+        budget = float(self._config_flag_float("max_openrouter_spend_usd_per_run", 0.0))
+        if budget > 0 and cost_value >= budget:
+            self._set_model_health_row(
+                "cost",
+                f"${cost_value:.4f} so far | est remaining {remaining_cost}  ⚠ OVER BUDGET (${budget:.2f})",
+                f"Spending has reached the configured OpenRouter budget of ${budget:.2f}.",
+            )
+            if not getattr(self, "_notified_budget_warning", False):
+                self._notify_budget_warning(cost_value, budget)
         self._set_model_health_row("reason", reason)
 
     def _update_app_worker(self, payload):
@@ -4954,7 +5142,8 @@ class FormManager(QMainWindow):
             self.schedule_next_cycle()
         else:
             if success:
-                QMessageBox.information(self, "Done", "Grading completed!")
+                self._notify("Grading Completed", "All queued forms have been graded.")
+                self._notify_pending_reviews()
 
     def extract_form_id(self, url):
         try:

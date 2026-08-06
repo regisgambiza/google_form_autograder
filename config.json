@@ -51,7 +51,7 @@
     "openrouter_judge_answer_batch_size": 25,
     "judge_batch_num_predict": 8192,
     "provider_manager_enabled": true,
-    "provider_strategy": "llamacpp_only",
+    "provider_strategy": "openrouter_llamacpp",
     "provider_priority": [
         "openrouter"
     ],
@@ -262,7 +262,7 @@
     },
     "enable_pipeline_workers": true,
     "deterministic_worker_count": 4,
-    "ai_worker_count": 1,
+    "ai_worker_count": 10,
     "worker_queue_size": 1200,
     "global_prefetch_mode": true,
     "dispatch_mode": "global",
@@ -283,7 +283,7 @@
     "adaptive_target_latency_ms": 15000,
     "adaptive_timeout_rate_threshold": 0.2,
     "adaptive_chunk_size": 12,
-    "max_concurrent_jury_answers": 1,
+    "max_concurrent_jury_answers": 10,
     "jury_semaphore_acquire_timeout_seconds": 21600,
     "enable_async_judges": false,
     "sync_judge_parallelism": 1,
@@ -340,7 +340,7 @@
         "agreement_confidence": 0.9
     },
     "persist_result_cache": false,
-    "grading_mode": "Whole Form",
+    "grading_mode": "Recent Only",
     "heartbeat_timeout": 7200,
     "heartbeat_interval": 10,
     "heartbeat_max_restarts": 5,
@@ -370,5 +370,6 @@
     ],
     "truncate_answers_before_grading": false,
     "enable_deduplication": true,
+    "dark_mode": false,
     "rubric_timeout_seconds": 3600
 }

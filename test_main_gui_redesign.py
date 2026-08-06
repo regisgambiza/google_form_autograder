@@ -1,5 +1,7 @@
 import os
 
+import json
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt5.QtWidgets import (QApplication, QPushButton, QSplitter, QFrame, QLabel,
@@ -596,3 +598,72 @@ def test_context_remove_cancelled_keeps_item(monkeypatch):
     window._context_remove(item, item.data(Qt.UserRole))
 
     assert window.form_list.count() == 2
+
+
+def test_more_menu_exposes_export_audit_report_and_theme():
+    window = _make_window()
+    labels = []
+    more_button = next(
+        (btn for btn in window.findChildren(QPushButton) if btn.text() == "..."),
+        None,
+    )
+    if more_button is not None and more_button.menu() is not None:
+        labels = [a.text() for a in more_button.menu().actions() if not a.isSeparator()]
+    assert any("Export Results" in label for label in labels)
+    assert any("Decision Audit" in label for label in labels)
+    assert any("Run Report" in label for label in labels)
+    assert any("Dark Mode" in label or "Light Mode" in label for label in labels)
+
+
+def test_keyboard_shortcuts_are_registered():
+    from PyQt5.QtWidgets import QShortcut
+    window = _make_window()
+    shortcuts = window.findChildren(QShortcut)
+    keys = [s.key().toString() for s in shortcuts]
+    for expected in ("Ctrl+R", "Ctrl+D", "Ctrl+Shift+A", "Ctrl+A", "Ctrl+K", "Ctrl+E", "Ctrl+Shift+S", "Del"):
+        assert expected in keys, f"missing shortcut {expected}"
+
+
+def test_dark_mode_toggle_flips_state_and_persists(tmp_path, monkeypatch):
+    from app_theme import set_dark_mode, is_dark_mode
+    window = _make_window()
+    set_dark_mode(False)
+    window.toggle_dark_mode()
+    assert is_dark_mode() is True
+    with open("config.json", "r", encoding="utf-8") as fh:
+        import json
+        cfg = json.load(fh)
+    assert cfg.get("dark_mode") is True
+    window.toggle_dark_mode()
+    assert is_dark_mode() is False
+
+
+def test_audit_records_loader_reads_jsonl(tmp_path):
+    from decision_audit_viewer import load_audit_records
+    target = tmp_path / "grading_decisions.jsonl"
+    target.write_text(
+        json.dumps({"decision": "YES", "final_score": 1.0, "answer": "42"}) + "\n"
+        + json.dumps({"decision": "NO", "final_score": 0.0, "answer": "oops"}) + "\n",
+        encoding="utf-8",
+    )
+    records = load_audit_records(str(target))
+    assert [r["decision"] for r in records] == ["NO", "YES"]
+
+
+def test_audit_viewer_builds_and_filters(tmp_path):
+    from decision_audit_viewer import DecisionAuditViewer
+    target = tmp_path / "grading_decisions.jsonl"
+    target.write_text(
+        json.dumps({"decision": "YES", "final_score": 1.0, "answer": "correct"}) + "\n"
+        + json.dumps({"decision": "NO", "final_score": 0.0, "answer": "wrong"}) + "\n",
+        encoding="utf-8",
+    )
+    viewer = DecisionAuditViewer(str(target))
+    assert viewer.table.rowCount() == 2
+    viewer.filter_combo.setCurrentText("YES (accepted)")
+    assert viewer.table.rowCount() == 1
+    viewer.search_input.setText("wrong")
+    assert viewer.table.rowCount() == 0
+    viewer.search_input.setText("")
+    viewer.filter_combo.setCurrentText("NO (rejected)")
+    assert viewer.table.rowCount() == 1
