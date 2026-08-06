@@ -460,6 +460,8 @@ class FormManager(QMainWindow):
         self.use_time_schedule = False
         self.schedule_time_val = None
         self.selected_days = [True] * 7  # All days by default
+        self.auto_notify_on_new = True
+        self.auto_spend_budget_usd = 0.0
 
         # Thread safety flags
         self.is_searching = False
@@ -3767,10 +3769,12 @@ class FormManager(QMainWindow):
         self.run_button.setEnabled(False)
         self.append_debug("<b><font color='green'>AUTO RUN STARTED</font></b>")
         mode_text = "Recent Only" if self.grading_mode == "Recent Only" else "Whole Form"
+        budget = getattr(self, "auto_spend_budget_usd", 0.0)
+        budget_text = f" Budget set to ${budget:.2f}/run." if budget > 0 else ""
         self._notify(
             "Auto Run Started",
             f"Auto-run is running in {mode_text} mode. "
-            f"{'Only new/recent submissions will be detected and graded.' if mode_text == 'Recent Only' else 'Any form with submissions will be detected and the whole form graded.'}",
+            f"{'Only new/recent submissions will be detected and graded.' if mode_text == 'Recent Only' else 'Any form with submissions will be detected and the whole form graded.'}{budget_text}",
         )
         self.last_check_time = None
 
@@ -3878,11 +3882,12 @@ class FormManager(QMainWindow):
         if found_urls:
             recent_only = (self.grading_mode == "Recent Only")
             if new_added > 0:
-                self._notify(
-                    "New Forms Found",
-                    f"Added {new_added} new form(s). Starting grading "
-                    f"({'recent submissions only' if recent_only else 'the entire form'}).",
-                )
+                if getattr(self, "auto_notify_on_new", True):
+                    self._notify(
+                        "New Forms Found",
+                        f"Added {new_added} new form(s). Starting grading "
+                        f"({'recent submissions only' if recent_only else 'the entire form'}).",
+                    )
                 self.append_debug(f"<font color='green'>[AUTO] ✅ Added {new_added} new form(s) ✅ Starting grading ({'recent submissions only' if recent_only else 'whole form'})...</font>")
             else:
                 self.append_debug(f"<font color='green'>[AUTO] ✅ Found recent submissions in existing queued form(s) ✅ Starting grading ({'recent submissions only' if recent_only else 'whole form'})...</font>")
@@ -3890,10 +3895,11 @@ class FormManager(QMainWindow):
             self.run_grader(force_recent_only=recent_only)
         else:
             self.append_debug(f"<font color='orange'>[AUTO] ⚠️ No new forms with recent submissions found.</font>")
-            self._notify(
-                "No New Submissions",
-                "Auto-run did not detect any new answers with submissions this cycle.",
-            )
+            if getattr(self, "auto_notify_on_new", True):
+                self._notify(
+                    "No New Submissions",
+                    "Auto-run did not detect any new answers with submissions this cycle.",
+                )
             self.schedule_next_cycle()
 
         # Update last check time

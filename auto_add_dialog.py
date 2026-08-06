@@ -1,8 +1,12 @@
 # auto_add_dialog.py - FIXED: Prevent duplicate searches, proper auto-cycle initialization
+import json
+import os
+
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLineEdit,
     QListWidget, QLabel, QDateEdit, QMessageBox, QTextEdit,
-    QProgressDialog, QComboBox, QListWidgetItem, QGroupBox, QCheckBox, QTimeEdit
+    QProgressDialog, QComboBox, QListWidgetItem, QGroupBox, QCheckBox, QTimeEdit,
+    QSpinBox, QDoubleSpinBox, QFormLayout, QFrame,
 )
 from PyQt5.QtCore import Qt, QDate, QTime, QThread, pyqtSignal
 from form_searcher import (
@@ -12,6 +16,38 @@ from form_searcher import (
     split_identifiers,
 )
 from datetime import datetime, timedelta, time, timezone
+
+from app_theme import apply_widget_theme
+
+AUTO_RUN_CONFIG_KEY = "auto_run"
+
+
+def count_identifiers(text):
+    return len(split_identifiers(text))
+
+
+def _load_auto_run_config():
+    """Load persisted auto-run settings from config.json."""
+    try:
+        with open("config.json", "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+        return cfg.get(AUTO_RUN_CONFIG_KEY, {}) or {}
+    except Exception:
+        return {}
+
+
+def _save_auto_run_config(settings):
+    """Persist auto-run settings into config.json under the auto_run key."""
+    try:
+        cfg = {}
+        if os.path.exists("config.json"):
+            with open("config.json", "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+        cfg[AUTO_RUN_CONFIG_KEY] = settings
+        with open("config.json", "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=4)
+    except Exception:
+        pass
 
 
 class SearchThread(QThread):
@@ -35,14 +71,14 @@ class SearchThread(QThread):
             to_dt = to_dt.replace(tzinfo=timezone.utc)
 
         self.progress.emit(f"Starting search in {len(self.folder_identifiers)} source(s)")
-        
+
         forms = find_forms_with_submissions_in_range(
             self.folder_identifiers,
             from_dt,
             to_dt,
             progress_callback=lambda msg: self.progress.emit(f"Search: {msg}")
         )
-        
+
         self.progress.emit(f"Search completed. Found {len(forms)} form(s) with submissions")
         self.finished.emit(forms)
 
@@ -51,117 +87,301 @@ class AutoAddDialog(QDialog):
     def __init__(self, parent=None, mode='manual'):
         super().__init__(parent)
         self.mode = mode
-        self.setWindowTitle("Auto Add Forms")
-        self.setGeometry(200, 200, 600, 400)
+        self.setWindowTitle("Schedule Automatic Runs" if mode == 'auto' else "Add Forms")
+        self.resize(620, 560)
+        self.setMinimumWidth(560)
 
-        layout = QVBoxLayout(self)
+        self.notify_on_new = True
+        self.auto_spend_budget_usd = 0.0
+        self._settings = _load_auto_run_config() if mode == 'auto' else {}
 
-        # Predefined folders/forms
-        predefined_layout = QVBoxLayout()
-        predefined_label = QLabel("Predefined Folders / Forms:")
-        predefined_layout.addWidget(predefined_label)
+        self._build_ui()
+        apply_widget_theme(self)
+
+    def _build_ui(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(18, 16, 18, 16)
+        root.setSpacing(12)
+
+        title = QLabel("Schedule Automatic Runs" if self.mode == 'auto' else "Add Forms")
+        title.setObjectName("Title")
+        root.addWidget(title)
+
+        if self.mode != 'auto':
+            self._build_manual_sections(root)
+        else:
+            self._build_auto_sections(root)
+
+        # Action bar
+        actions = QHBoxLayout()
+        actions.addStretch()
+        if self.mode == 'auto':
+            cancel_btn = QPushButton("Cancel")
+            cancel_btn.setObjectName("Secondary")
+            cancel_btn.clicked.connect(self.reject)
+            actions.addWidget(cancel_btn)
+        self.search_btn = QPushButton(
+            "Start Auto Run" if self.mode == 'auto' else "Search and Add Forms"
+        )
+        self.search_btn.setObjectName("Primary")
+        self.search_btn.setIcon(self.style().standardIcon(self.style().SP_DialogApplyButton))
+        self.search_btn.clicked.connect(self.search_and_add)
+        actions.addWidget(self.search_btn)
+        root.addLayout(actions)
+
+        self.load_predefined()
+        if self.mode == 'auto':
+            self._apply_saved_settings()
+            self._refresh_preview()
+
+    # ------------------------------------------------------------------ #
+    #  Manual mode                                                       #
+    # ------------------------------------------------------------------ #
+    def _build_manual_sections(self, root):
+        sources = self._build_sources_panel()
+        root.addWidget(sources)
+
+        panel = QFrame()
+        panel.setObjectName("Panel")
+        form = QFormLayout(panel)
+        self.from_date = QDateEdit()
+        self.from_date.setCalendarPopup(True)
+        self.from_date.setDate(QDate.currentDate().addDays(-7))
+        self.to_date = QDateEdit()
+        self.to_date.setCalendarPopup(True)
+        self.to_date.setDate(QDate.currentDate())
+
+        range_row = QHBoxLayout()
+        range_row.addWidget(self.from_date)
+        range_row.addWidget(QLabel("to"))
+        range_row.addWidget(self.to_date)
+        form.addRow(QLabel("Submission date range"), range_row)
+        root.addWidget(panel)
+
+    # ------------------------------------------------------------------ #
+    #  Auto mode                                                         #
+    # ------------------------------------------------------------------ #
+    def _build_auto_sections(self, root):
+        # Sources
+        sources = self._build_sources_panel()
+        root.addWidget(sources)
+
+        # Schedule
+        schedule = QGroupBox("Schedule")
+        sform = QFormLayout(schedule)
+
+        # Grade mode determines whether recency applies
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItems(["Whole Form", "Recent Only"])
+        sform.addRow(QLabel("Grading mode"), self.mode_combo)
+
+        recency_row = QHBoxLayout()
+        self.recency_edit = QSpinBox()
+        self.recency_edit.setRange(1, 10000)
+        self.recency_edit.setValue(1)
+        self.recency_unit = QComboBox()
+        self.recency_unit.addItems(["hours", "minutes"])
+        recency_row.addWidget(self.recency_edit)
+        recency_row.addWidget(self.recency_unit)
+        self.recency_label = QLabel("Look for submissions in last")
+        self.recency_label.setObjectName("Muted")
+        sform.addRow(self.recency_label, recency_row)
+
+        interval_row = QHBoxLayout()
+        self.interval_edit = QSpinBox()
+        self.interval_edit.setRange(1, 1000)
+        self.interval_edit.setValue(5)
+        self.interval_unit = QComboBox()
+        self.interval_unit.addItems(["minutes", "hours"])
+        interval_row.addWidget(self.interval_edit)
+        interval_row.addWidget(self.interval_unit)
+        sform.addRow(QLabel("Check every"), interval_row)
+
+        self.notify_check = QCheckBox("Notify when new submissions are found")
+        sform.addRow("", self.notify_check)
+
+        budget_row = QHBoxLayout()
+        self.budget_edit = QDoubleSpinBox()
+        self.budget_edit.setRange(0, 100000)
+        self.budget_edit.setDecimals(2)
+        self.budget_edit.setSuffix(" $/run")
+        self.budget_edit.setValue(0.0)
+        budget_row.addWidget(self.budget_edit)
+        sform.addRow(QLabel("OpenRouter spend budget"), budget_row)
+
+        root.addWidget(schedule)
+
+        # Time-of-day schedule
+        time_group = QGroupBox("Daily schedule (optional)")
+        tlayout = QVBoxLayout(time_group)
+        trow = QHBoxLayout()
+        self.schedule_time_check = QCheckBox("Run at specific time:")
+        trow.addWidget(self.schedule_time_check)
+        trow.addWidget(QLabel("Time:"))
+        self.schedule_time = QTimeEdit()
+        self.schedule_time.setTime(QTime(9, 0))
+        trow.addWidget(self.schedule_time)
+        tlayout.addLayout(trow)
+
+        days_layout = QHBoxLayout()
+        days_layout.addWidget(QLabel("Days:"))
+        self.days_checkboxes = []
+        day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+        for day in day_names:
+            cb = QCheckBox(day)
+            cb.setChecked(True)
+            self.days_checkboxes.append(cb)
+            days_layout.addWidget(cb)
+        tlayout.addLayout(days_layout)
+        root.addWidget(time_group)
+
+        # Live preview
+        preview = QLabel("")
+        preview.setObjectName("Status")
+        preview.setWordWrap(True)
+        self.preview_label = preview
+        root.addWidget(preview)
+
+        # Reconnect field changes to refresh the preview
+        self.mode_combo.currentTextChanged.connect(self._refresh_preview)
+        self.recency_edit.valueChanged.connect(self._refresh_preview)
+        self.recency_unit.currentTextChanged.connect(self._refresh_preview)
+        self.interval_edit.valueChanged.connect(self._refresh_preview)
+        self.interval_unit.currentTextChanged.connect(self._refresh_preview)
+        self.schedule_time_check.toggled.connect(self._refresh_preview)
+        self.schedule_time.timeChanged.connect(self._refresh_preview)
+        for cb in self.days_checkboxes:
+            cb.toggled.connect(self._refresh_preview)
+        self.notify_check.toggled.connect(self._refresh_preview)
+        self.budget_edit.valueChanged.connect(self._refresh_preview)
+
+        self._refresh_recent_state()
+
+    def _build_sources_panel(self):
+        sources = QGroupBox("Sources")
+        slayout = QVBoxLayout(sources)
 
         self.predefined_list = QListWidget()
-        predefined_layout.addWidget(self.predefined_list)
+        slayout.addWidget(self.predefined_list)
 
         btn_layout = QHBoxLayout()
         add_predefined_btn = QPushButton("Add to Predefined")
+        add_predefined_btn.setObjectName("Secondary")
         add_predefined_btn.clicked.connect(self.add_to_predefined)
         remove_predefined_btn = QPushButton("Remove Selected")
+        remove_predefined_btn.setObjectName("Secondary")
         remove_predefined_btn.clicked.connect(self.remove_from_predefined)
         btn_layout.addWidget(add_predefined_btn)
         btn_layout.addWidget(remove_predefined_btn)
+        slayout.addLayout(btn_layout)
 
-        predefined_layout.addLayout(btn_layout)
-        layout.addLayout(predefined_layout)
-
-        # Temporary folders/forms
         self.temp_input = QTextEdit()
         self.temp_input.setPlaceholderText(
             "Paste Google Form URLs or Drive folder URLs, separated by commas or new lines..."
         )
-        self.temp_input.setFixedHeight(72)
-        layout.addWidget(self.temp_input)
+        self.temp_input.setFixedHeight(60)
+        slayout.addWidget(self.temp_input)
+        return sources
 
-        if self.mode != 'auto':
-            # Manual date range
-            date_layout = QHBoxLayout()
+    # ------------------------------------------------------------------ #
+    #  Preview / recent-only state                                       #
+    # ------------------------------------------------------------------ #
+    def _refresh_recent_state(self):
+        recent_only = self.mode_combo.currentText() == "Recent Only"
+        self.recency_label.setEnabled(recent_only)
+        self.recency_edit.setEnabled(recent_only)
+        self.recency_unit.setEnabled(recent_only)
 
-            from_label = QLabel("From:")
-            self.from_date = QDateEdit()
-            self.from_date.setCalendarPopup(True)
-            self.from_date.setDate(QDate.currentDate().addDays(-7))
+    def _refresh_preview(self):
+        if not hasattr(self, "preview_label"):
+            return
+        recent_only = self.mode_combo.currentText() == "Recent Only"
+        interval_val = int(self.interval_edit.value() or 0)
+        interval_unit = self.interval_unit.currentText()
+        interval_seconds = interval_val * 3600 if interval_unit == "hours" else interval_val * 60
+        recency_val = int(self.recency_edit.value() or 0)
+        recency_unit = self.recency_unit.currentText()
+        recency_minutes = recency_val * 60 if recency_unit == "hours" else recency_val
 
-            to_label = QLabel("To:")
-            self.to_date = QDateEdit()
-            self.to_date.setCalendarPopup(True)
-            self.to_date.setDate(QDate.currentDate())
-
-            date_layout.addWidget(from_label)
-            date_layout.addWidget(self.from_date)
-            date_layout.addWidget(to_label)
-            date_layout.addWidget(self.to_date)
-
-            layout.addLayout(date_layout)
+        parts = []
+        sources_count = self.predefined_list.count() + count_identifiers(self.temp_input.toPlainText())
+        parts.append(f"Watching {sources_count} source(s)")
+        parts.append(f"every {self._duration_text(interval_seconds)}")
+        if recent_only:
+            parts.append(f"scanning last {self._recency_text(recency_minutes)}")
         else:
-            # Auto mode recency
-            recency_layout = QHBoxLayout()
-            recency_layout.addWidget(QLabel("Look for submissions in last:"))
-            self.recency_edit = QLineEdit("1")
-            self.recency_unit = QComboBox()
-            self.recency_unit.addItems(["hours", "minutes"])
-            recency_layout.addWidget(self.recency_edit)
-            recency_layout.addWidget(self.recency_unit)
-            layout.addLayout(recency_layout)
+            parts.append("grading entire forms")
 
-            # Auto mode interval
-            interval_layout = QHBoxLayout()
-            interval_layout.addWidget(QLabel("Check every:"))
-            self.interval_edit = QLineEdit("5")
-            self.interval_unit = QComboBox()
-            self.interval_unit.addItems(["minutes", "hours"])
-            interval_layout.addWidget(self.interval_edit)
-            interval_layout.addWidget(self.interval_unit)
-            layout.addLayout(interval_layout)
+        if self.schedule_time_check.isChecked():
+            parts.append("on " + ", ".join(
+                name for name, cb in zip(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"], self.days_checkboxes)
+                if cb.isChecked()
+            ) or "no days")
+            parts.append(f"at {self.schedule_time.time().toString('HH:mm')}")
+        else:
+            parts.append(f"next check in {self._duration_text(interval_seconds)}")
 
-            # Scheduling options
-            schedule_layout = QVBoxLayout()
-            schedule_label = QLabel("Schedule Options:")
-            schedule_layout.addWidget(schedule_label)
+        if self.budget_edit.value() > 0:
+            parts.append(f"budget ${self.budget_edit.value():.2f}/run")
 
-            # Time of day scheduling
-            time_layout = QHBoxLayout()
-            self.schedule_time_check = QCheckBox("Run at specific time(s):")
-            self.schedule_time_check.setChecked(False)
-            time_layout.addWidget(self.schedule_time_check)
+        text = " · ".join(parts)
+        self.preview_label.setText(text)
+        self._refresh_recent_state()
 
-            time_layout.addWidget(QLabel("Time:"))
-            self.schedule_time = QTimeEdit()
-            self.schedule_time.setTime(QTime(9, 0))  # Default 9:00 AM
-            time_layout.addWidget(self.schedule_time)
-            schedule_layout.addLayout(time_layout)
+    def _duration_text(self, seconds):
+        return f"{seconds // 60} min" if seconds < 3600 else f"{seconds / 3600:g} h"
 
-            # Days of week scheduling
-            days_layout = QHBoxLayout()
-            days_layout.addWidget(QLabel("Days:"))
-            self.days_checkboxes = []
-            day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-            for day in day_names:
-                cb = QCheckBox(day)
-                cb.setChecked(True)  # Default to all days
-                self.days_checkboxes.append(cb)
-                days_layout.addWidget(cb)
-            schedule_layout.addLayout(days_layout)
+    def _recency_text(self, minutes):
+        return f"{minutes} min" if minutes < 60 else f"{minutes / 60:g} h"
 
-            layout.addLayout(schedule_layout)
+    def _apply_saved_settings(self):
+        settings = self._settings
+        if not settings:
+            return
+        mode = settings.get("grading_mode", "Whole Form")
+        if mode in ("Whole Form", "Recent Only"):
+            self.mode_combo.setCurrentText(mode)
+        if "recency_value" in settings:
+            self.recency_edit.setValue(int(settings["recency_value"]))
+        if "recency_unit" in settings and settings["recency_unit"] in ("hours", "minutes"):
+            self.recency_unit.setCurrentText(settings["recency_unit"])
+        if "interval_value" in settings:
+            self.interval_edit.setValue(int(settings["interval_value"]))
+        if "interval_unit" in settings and settings["interval_unit"] in ("hours", "minutes"):
+            self.interval_unit.setCurrentText(settings["interval_unit"])
+        if "notify_on_new" in settings:
+            self.notify_check.setChecked(bool(settings["notify_on_new"]))
+        if "spend_budget_usd" in settings:
+            self.budget_edit.setValue(float(settings["spend_budget_usd"]))
+        if settings.get("use_time_schedule"):
+            self.schedule_time_check.setChecked(True)
+        if "schedule_time" in settings:
+            try:
+                hour, minute = settings["schedule_time"].split(":")
+                self.schedule_time.setTime(QTime(int(hour), int(minute)))
+            except Exception:
+                pass
+        saved_days = settings.get("selected_days")
+        if isinstance(saved_days, list) and len(saved_days) == 7:
+            for cb, val in zip(self.days_checkboxes, saved_days):
+                cb.setChecked(bool(val))
+        if "sources" in settings and isinstance(settings["sources"], list):
+            self.temp_input.setPlainText("\n".join(settings["sources"]))
 
-        self.search_btn = QPushButton(
-            "Start Auto Run" if self.mode == 'auto' else "Search and Add Forms"
-        )
-        self.search_btn.clicked.connect(self.search_and_add)
-        layout.addWidget(self.search_btn)
-
-        self.load_predefined()
+    def _collect_settings(self):
+        return {
+            "grading_mode": self.mode_combo.currentText(),
+            "recency_value": int(self.recency_edit.value()),
+            "recency_unit": self.recency_unit.currentText(),
+            "interval_value": int(self.interval_edit.value()),
+            "interval_unit": self.interval_unit.currentText(),
+            "notify_on_new": self.notify_check.isChecked(),
+            "spend_budget_usd": float(self.budget_edit.value()),
+            "use_time_schedule": self.schedule_time_check.isChecked(),
+            "schedule_time": self.schedule_time.time().toString("HH:mm"),
+            "selected_days": [cb.isChecked() for cb in self.days_checkboxes],
+            "sources": split_identifiers(self.temp_input.toPlainText()),
+        }
 
     def load_predefined(self):
         self.predefined_list.clear()
@@ -204,14 +424,14 @@ class AutoAddDialog(QDialog):
             return
 
         if self.mode == 'auto':
-            recency_value = int(self.recency_edit.text() or 0)
+            recency_value = int(self.recency_edit.value() or 0)
             recency_minutes = (
                 recency_value * 60
                 if self.recency_unit.currentText() == "hours"
                 else recency_value
             )
 
-            interval_value = int(self.interval_edit.text() or 0)
+            interval_value = int(self.interval_edit.value() or 0)
             interval_seconds = (
                 interval_value * 3600
                 if self.interval_unit.currentText() == "hours"
@@ -229,6 +449,14 @@ class AutoAddDialog(QDialog):
             self.use_time_schedule = self.schedule_time_check.isChecked()
             self.schedule_time_val = self.schedule_time.time()
             self.selected_days = [cb.isChecked() for cb in self.days_checkboxes]
+
+            # New options: grading mode, notifications, budget
+            self.grading_mode = self.mode_combo.currentText()
+            self.notify_on_new = self.notify_check.isChecked()
+            self.auto_spend_budget_usd = float(self.budget_edit.value())
+
+            # Persist settings so they are restored next time
+            _save_auto_run_config(self._collect_settings())
         else:
             py_from_date = self.from_date.date().toPyDate()
             py_to_date = self.to_date.date().toPyDate()
@@ -304,6 +532,16 @@ class AutoAddDialog(QDialog):
             parent.use_time_schedule = getattr(self, 'use_time_schedule', False)
             parent.schedule_time_val = getattr(self, 'schedule_time_val', None)
             parent.selected_days = getattr(self, 'selected_days', [True]*7)
+
+            # Store new auto-run options
+            parent.grading_mode = getattr(self, 'grading_mode', parent.grading_mode)
+            parent.auto_notify_on_new = getattr(self, 'notify_on_new', True)
+            parent.auto_spend_budget_usd = getattr(self, 'auto_spend_budget_usd', 0.0)
+            if hasattr(parent, "update_config"):
+                parent.update_config(
+                    "max_openrouter_spend_usd_per_run",
+                    float(getattr(self, 'auto_spend_budget_usd', 0.0)),
+                )
 
             # Start auto mode
             parent.start_auto_mode()
