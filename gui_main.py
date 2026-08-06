@@ -3766,6 +3766,12 @@ class FormManager(QMainWindow):
         self.stop_button.show()
         self.run_button.setEnabled(False)
         self.append_debug("<b><font color='green'>AUTO RUN STARTED</font></b>")
+        mode_text = "Recent Only" if self.grading_mode == "Recent Only" else "Whole Form"
+        self._notify(
+            "Auto Run Started",
+            f"Auto-run is running in {mode_text} mode. "
+            f"{'Only new/recent submissions will be detected and graded.' if mode_text == 'Recent Only' else 'Any form with submissions will be detected and the whole form graded.'}",
+        )
         self.last_check_time = None
 
         # Start the APScheduler-based scheduler
@@ -3819,8 +3825,12 @@ class FormManager(QMainWindow):
         now_utc = datetime.now(timezone.utc)
 
         if self.last_check_time is None:
-            from_dt = now_utc - timedelta(minutes=self.recency_minutes)
-            self.append_debug(f"<font color='blue'>[AUTO] 🔍 First auto check: scanning last {self.recency_minutes} minutes</font>")
+            if self.grading_mode == "Recent Only":
+                from_dt = now_utc - timedelta(minutes=self.recency_minutes)
+                self.append_debug(f"<font color='blue'>[AUTO] 🔍 First auto check: scanning last {self.recency_minutes} minutes (Recent Only)</font>")
+            else:
+                from_dt = now_utc - timedelta(days=365 * 20)
+                self.append_debug("<font color='blue'>[AUTO] 🔍 First auto check: scanning entire form history (Whole Form)</font>")
         else:
             from_dt = self.last_check_time
             self.append_debug(f"<font color='blue'>[AUTO] 🔍 Incremental check: since last scan</font>")
@@ -3866,14 +3876,24 @@ class FormManager(QMainWindow):
             new_added += 1
 
         if found_urls:
+            recent_only = (self.grading_mode == "Recent Only")
             if new_added > 0:
-                self.append_debug(f"<font color='green'>[AUTO] ??? Added {new_added} new form(s) ??? Starting grading (recent submissions only)...</font>")
+                self._notify(
+                    "New Forms Found",
+                    f"Added {new_added} new form(s). Starting grading "
+                    f"({'recent submissions only' if recent_only else 'the entire form'}).",
+                )
+                self.append_debug(f"<font color='green'>[AUTO] ✅ Added {new_added} new form(s) ✅ Starting grading ({'recent submissions only' if recent_only else 'whole form'})...</font>")
             else:
-                self.append_debug("<font color='green'>[AUTO] ??? Found recent submissions in existing queued form(s) ??? Starting grading (recent submissions only)...</font>")
+                self.append_debug(f"<font color='green'>[AUTO] ✅ Found recent submissions in existing queued form(s) ✅ Starting grading ({'recent submissions only' if recent_only else 'whole form'})...</font>")
             self.save_forms()
-            self.run_grader(force_recent_only=True)
+            self.run_grader(force_recent_only=recent_only)
         else:
-            self.append_debug(f"<font color='orange'>[AUTO] ???? No new forms with recent submissions found.</font>")
+            self.append_debug(f"<font color='orange'>[AUTO] ⚠️ No new forms with recent submissions found.</font>")
+            self._notify(
+                "No New Submissions",
+                "Auto-run did not detect any new answers with submissions this cycle.",
+            )
             self.schedule_next_cycle()
 
         # Update last check time

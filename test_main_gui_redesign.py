@@ -2,6 +2,8 @@ import os
 
 import json
 
+from datetime import timedelta
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt5.QtWidgets import (QApplication, QPushButton, QSplitter, QFrame, QLabel,
@@ -10,6 +12,7 @@ from PyQt5.QtCore import Qt
 
 from app_theme import apply_application_theme
 from gui_main import FormManager
+import gui_main
 
 
 APP = QApplication.instance() or QApplication([])
@@ -667,3 +670,121 @@ def test_audit_viewer_builds_and_filters(tmp_path):
     viewer.search_input.setText("")
     viewer.filter_combo.setCurrentText("NO (rejected)")
     assert viewer.table.rowCount() == 1
+
+
+def test_auto_cycle_search_window_respects_grading_mode():
+    """Recent Only mode uses the recency window; Whole Form scans full history."""
+    window = _make_window()
+    window.last_check_time = None
+    window.recency_minutes = 5
+    window.is_searching = False
+    window.is_closing = False
+    window.auto_mode = True
+
+    from datetime import datetime, timezone
+
+    captured = {}
+
+    def fake_search_thread(folders, from_dt, to_dt):
+        captured["from_dt"] = from_dt
+        captured["to_dt"] = to_dt
+        return _FakeSearchThread()
+
+    _patch(window, "append_debug", lambda *a, **k: None)
+    original_thread = gui_main.SearchThread
+    try:
+        gui_main.SearchThread = fake_search_thread
+        window.grading_mode = "Whole Form"
+        window.auto_cycle()
+        assert captured["from_dt"] < datetime.now(timezone.utc) - timedelta(days=30), (
+            "Whole Form mode should scan well beyond the recency window"
+        )
+
+        captured.clear()
+        window.is_searching = False
+        window.grading_mode = "Recent Only"
+        window.auto_cycle()
+        delta = (datetime.now(timezone.utc) - captured["from_dt"]).total_seconds() / 60
+        assert delta <= 6, "Recent Only mode should scan only the recency window"
+    finally:
+        gui_main.SearchThread = original_thread
+
+
+def test_on_auto_search_finished_forces_recent_only_by_mode():
+    window = _make_window()
+    window.grading_mode = "Recent Only"
+    window.is_closing = False
+    window.is_searching = False
+    calls = []
+
+    def fake_run_grader(**kwargs):
+        calls.append(kwargs)
+
+    _patch(window, "run_grader", fake_run_grader)
+    _patch(window, "save_forms", lambda: None)
+    _patch(window, "_add_form_to_queue", lambda *a, **k: None)
+    _patch(window, "_notify", lambda *a, **k: None)
+    _patch(window, "append_debug", lambda *a, **k: None)
+    _patch(window, "schedule_next_cycle", lambda: None)
+
+    window.on_auto_search_finished(
+        [{"url": "https://docs.google.com/forms/d/abc/edit", "title": "T", "last_submission": None}]
+    )
+    assert calls and calls[0].get("force_recent_only") is True
+
+    calls.clear()
+    window.grading_mode = "Whole Form"
+    window.forms_data.clear()
+    window.on_auto_search_finished(
+        [{"url": "https://docs.google.com/forms/d/def/edit", "title": "T2", "last_submission": None}]
+    )
+    assert calls and calls[0].get("force_recent_only") is False
+
+
+def test_on_auto_search_finished_notifies_when_nothing_found():
+    window = _make_window()
+    window.grading_mode = "Whole Form"
+    window.is_closing = False
+    window.is_searching = False
+    window.form_list.clear()
+    window.forms_data.clear()
+    notified = []
+
+    _patch(window, "run_grader", lambda **k: None)
+    _patch(window, "save_forms", lambda: None)
+    _patch(window, "_add_form_to_queue", lambda *a, **k: None)
+    _patch(window, "_notify", lambda *a, **k: notified.append(a))
+    _patch(window, "append_debug", lambda *a, **k: None)
+    _patch(window, "schedule_next_cycle", lambda: None)
+
+    window.on_auto_search_finished([])
+    assert notified, "Expected a notification when no submissions are found"
+
+
+def _patch(obj, name, value):
+    original = getattr(obj, name)
+    setattr(obj, name, value)
+    return original
+
+
+def _restore(obj, name):
+    try:
+        if hasattr(obj, "__dict__") and name in obj.__dict__:
+            del obj.__dict__[name]
+        elif hasattr(obj, name):
+            delattr(obj, name)
+    except Exception:
+        pass
+
+
+class _FakeSignal:
+    def connect(self, *_args):
+        return self
+
+
+class _FakeSearchThread:
+    progress = _FakeSignal()
+    finished = _FakeSignal()
+
+    def start(self):
+        pass

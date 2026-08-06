@@ -39,7 +39,8 @@ class AutoGraderScheduler:
                 trigger=IntervalTrigger(minutes=interval_minutes),
                 kwargs={
                     'folders': folders,
-                    'recency_minutes': recency_minutes
+                    'recency_minutes': recency_minutes,
+                    'grade_recent_only': grade_recent_only,
                 },
                 next_run_time=datetime.now(timezone.utc) + timedelta(seconds=10)  # First run in 10 seconds
             )
@@ -71,7 +72,7 @@ class AutoGraderScheduler:
         self.running = False
         log("INFO", "Scheduler stopped")
         
-    def _run_cycle(self, folders, recency_minutes):
+    def _run_cycle(self, folders, recency_minutes, grade_recent_only=True):
         """Execute one auto-cycle"""
         log("INFO", f"[AUTO CYCLE] Searching folders: {folders}")
 
@@ -80,13 +81,17 @@ class AutoGraderScheduler:
 
             now_utc = datetime.now(timezone.utc)
 
-            # Use last_run_time if available, otherwise use recency_minutes
+            # Use last_run_time if available, otherwise use recency window.
+            # In Whole Form mode, scan the full history so older submissions are detected.
             if self.last_run_time:
                 from_dt = self.last_run_time
                 log("INFO", f"[AUTO CYCLE] Incremental scan from last run: {from_dt}")
-            else:
+            elif grade_recent_only:
                 from_dt = now_utc - timedelta(minutes=recency_minutes)
                 log("INFO", f"[AUTO CYCLE] Initial scan: last {recency_minutes} minutes")
+            else:
+                from_dt = now_utc - timedelta(days=365 * 20)
+                log("INFO", "[AUTO CYCLE] Initial scan: entire form history (Whole Form)")
 
             log("INFO", f"[AUTO CYCLE] Search range: {from_dt} → {now_utc}")
 
