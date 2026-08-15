@@ -1499,7 +1499,7 @@ def run_judges(
     """Public API - run all judges with asyncio support.
     
     This function safely handles both asyncio and non-asyncio contexts.
-    In GUI applications (PyQt5) or other contexts with existing event loops,
+    In GUI applications (PySide6) or other contexts with existing event loops,
     it uses the existing loop instead of creating a new one.
     """
     import asyncio

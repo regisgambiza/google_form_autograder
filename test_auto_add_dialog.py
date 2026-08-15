@@ -3,7 +3,7 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt5.QtWidgets import QApplication, QSpinBox, QDoubleSpinBox, QCheckBox, QPushButton
+from PySide6.QtWidgets import QApplication, QSpinBox, QDoubleSpinBox, QCheckBox, QPushButton
 
 from app_theme import apply_application_theme
 from auto_add_dialog import (
@@ -134,7 +134,7 @@ class _FakeThread:
 
 
 def _make_fake_parent():
-    from PyQt5.QtWidgets import QWidget
+    from PySide6.QtWidgets import QWidget
 
     class FakeParent(QWidget):
         def __init__(self):

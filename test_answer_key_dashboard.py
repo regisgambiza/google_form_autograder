@@ -3,8 +3,8 @@ from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QApplication, QListWidgetItem
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QApplication, QListWidgetItem
 
 import answer_key_dashboard as dashboard
 

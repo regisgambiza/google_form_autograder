@@ -1,7 +1,7 @@
 from typing import Dict, List, Optional
 
-from PyQt5.QtCore import Qt, QThread, pyqtSignal
-from PyQt5.QtWidgets import (
+from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QFrame,
@@ -41,8 +41,8 @@ from evaluator_config import load_config
 
 
 class _AnswerKeySaveWorker(QThread):
-    finished = pyqtSignal(object)
-    failed = pyqtSignal(str)
+    finished = Signal(object)
+    failed = Signal(str)
 
     def __init__(self, service, form_id, item_id, answers, index, canonical, parent=None):
         super().__init__(parent)

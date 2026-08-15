@@ -2,13 +2,13 @@
 import json
 import os
 
-from PyQt5.QtWidgets import (
+from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLineEdit,
     QListWidget, QLabel, QDateEdit, QMessageBox, QTextEdit,
     QProgressDialog, QComboBox, QListWidgetItem, QGroupBox, QCheckBox, QTimeEdit,
-    QSpinBox, QDoubleSpinBox, QFormLayout, QFrame,
+    QSpinBox, QDoubleSpinBox, QFormLayout, QFrame, QStyle,
 )
-from PyQt5.QtCore import Qt, QDate, QTime, QThread, pyqtSignal
+from PySide6.QtCore import Qt, QDate, QTime, QThread, Signal
 from form_searcher import (
     load_predefined_folders,
     save_predefined_folders,
@@ -51,8 +51,8 @@ def _save_auto_run_config(settings):
 
 
 class SearchThread(QThread):
-    progress = pyqtSignal(str)
-    finished = pyqtSignal(list)
+    progress = Signal(str)
+    finished = Signal(list)
 
     def __init__(self, folder_identifiers, from_dt, to_dt):
         super().__init__()
@@ -124,7 +124,7 @@ class AutoAddDialog(QDialog):
             "Start Auto Run" if self.mode == 'auto' else "Search and Add Forms"
         )
         self.search_btn.setObjectName("Primary")
-        self.search_btn.setIcon(self.style().standardIcon(self.style().SP_DialogApplyButton))
+        self.search_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton))
         self.search_btn.clicked.connect(self.search_and_add)
         actions.addWidget(self.search_btn)
         root.addLayout(actions)
@@ -544,7 +544,7 @@ class AutoAddDialog(QDialog):
                 parent.forms_data[url] = title
                 item = QListWidgetItem(text)
                 item.setData(Qt.UserRole, url)
-                from PyQt5.QtGui import QColor
+                from PySide6.QtGui import QColor
                 item.setForeground(QColor("#0d6efd"))
                 parent.form_list.addItem(item)
                 added = True

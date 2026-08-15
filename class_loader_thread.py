@@ -1,10 +1,10 @@
 # class_loader_thread.py (New file for modularization)
-from PyQt5.QtCore import QThread, pyqtSignal
+from PySide6.QtCore import QThread, Signal
 from auth import get_classroom_service
 
 class ClassLoaderThread(QThread):
-    courses_loaded = pyqtSignal(list)
-    error = pyqtSignal(str)
+    courses_loaded = Signal(list)
+    error = Signal(str)
 
     def run(self):
         try:

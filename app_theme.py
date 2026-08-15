@@ -1,7 +1,7 @@
 import re
 
-from PyQt5.QtCore import QEvent, QObject
-from PyQt5.QtWidgets import QApplication, QPushButton, QStyle, QWidget
+from PySide6.QtCore import QEvent, QObject
+from PySide6.QtWidgets import QApplication, QPushButton, QStyle, QWidget
 
 
 APP_STYLESHEET = """

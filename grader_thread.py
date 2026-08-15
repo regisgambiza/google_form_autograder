@@ -6,18 +6,18 @@ import json
 import html
 import re
 from datetime import datetime, timezone
-from PyQt5.QtCore import QThread, pyqtSignal
+from PySide6.QtCore import QThread, Signal
 
 
 class GraderThread(QThread):
-    finished = pyqtSignal(bool, str)
-    progress = pyqtSignal(int, int)
-    overall_progress = pyqtSignal(int, int)
-    form_metrics = pyqtSignal(int, int, int, int, int, int, int, int, float)
-    debug_message = pyqtSignal(str)
-    current_form = pyqtSignal(str)
-    finished_form = pyqtSignal(str)
-    skipped_form = pyqtSignal(str, str, str, str)
+    finished = Signal(bool, str)
+    progress = Signal(int, int)
+    overall_progress = Signal(int, int)
+    form_metrics = Signal(int, int, int, int, int, int, int, int, float)
+    debug_message = Signal(str)
+    current_form = Signal(str)
+    finished_form = Signal(str)
+    skipped_form = Signal(str, str, str, str)
 
     def __init__(self, grade_recent_only=False, form_urls=None):
         super().__init__()

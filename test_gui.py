@@ -1,11 +1,11 @@
 import sys
-from PyQt5.QtWidgets import (
+from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QComboBox, QCheckBox, QLabel, QProgressBar,
     QTextEdit, QListWidget, QListWidgetItem, QSplitter
 )
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QColor, QPalette, QFont
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QPalette, QFont
 
 
 class MockFormManager(QMainWindow):
@@ -239,4 +239,4 @@ if __name__ == "__main__":
 
     window = MockFormManager()
     window.show()
-    sys.exit(app.exec_())
+    sys.exit(app.exec())

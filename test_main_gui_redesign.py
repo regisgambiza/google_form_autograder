@@ -6,9 +6,9 @@ from datetime import timedelta
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt5.QtWidgets import (QApplication, QPushButton, QSplitter, QFrame, QLabel,
+from PySide6.QtWidgets import (QApplication, QPushButton, QSplitter, QFrame, QLabel,
                              QScrollArea, QMenu, QMessageBox)
-from PyQt5.QtCore import Qt
+from PySide6.QtCore import Qt
 
 from app_theme import apply_application_theme
 from gui_main import FormManager
@@ -619,7 +619,7 @@ def test_more_menu_exposes_export_audit_report_and_theme():
 
 
 def test_keyboard_shortcuts_are_registered():
-    from PyQt5.QtWidgets import QShortcut
+    from PySide6.QtGui import QShortcut
     window = _make_window()
     shortcuts = window.findChildren(QShortcut)
     keys = [s.key().toString() for s in shortcuts]

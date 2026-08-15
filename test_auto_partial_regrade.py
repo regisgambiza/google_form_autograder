@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt5.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication
 
 from app_theme import apply_application_theme
 from gui_main import FormManager

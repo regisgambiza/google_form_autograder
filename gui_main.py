@@ -4,18 +4,18 @@ import os
 import json
 import subprocess
 import shutil
-from PyQt5.QtWidgets import (
+from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLineEdit, QListWidget, QListWidgetItem, QMessageBox,
     QTextEdit, QLabel, QComboBox, QCheckBox,
     QProgressDialog, QSplitter, QSpinBox, QDialog, QFormLayout, QTabWidget,
-    QSystemTrayIcon, QMenu, QAction, QStyle, QFrame, QProgressBar, QDoubleSpinBox,
-    QScrollArea, QFileDialog, QGridLayout, QShortcut, QTableWidget,
+    QSystemTrayIcon, QMenu, QStyle, QFrame, QProgressBar, QDoubleSpinBox,
+    QScrollArea, QFileDialog, QGridLayout, QTableWidget,
     QTableWidgetItem, QHeaderView, QSizePolicy
 )
 
-from PyQt5.QtCore import Qt, QDate, QTimer, QSize, QThread, pyqtSignal, QEvent
-from PyQt5.QtGui import QColor, QBrush, QFont, QIcon, QPalette, QKeySequence
+from PySide6.QtCore import Qt, QDate, QTimer, QSize, QThread, Signal, QEvent
+from PySide6.QtGui import QColor, QBrush, QFont, QIcon, QPalette, QKeySequence, QAction, QShortcut
 from datetime import datetime, timedelta, timezone, time
 import ctypes
 import atexit
@@ -108,9 +108,9 @@ def ensure_runtime_environment():
 
 
 class SourceScanThread(QThread):
-    progress = pyqtSignal(str)
-    finished = pyqtSignal(object)
-    failed = pyqtSignal(str)
+    progress = Signal(str)
+    finished = Signal(object)
+    failed = Signal(str)
 
     def __init__(self, sources, mode="all_forms", from_dt=None, to_dt=None):
         super().__init__()
@@ -141,7 +141,7 @@ class SourceScanThread(QThread):
 
 
 class SettingsModelDiscoveryThread(QThread):
-    finished = pyqtSignal(object, object, str)
+    finished = Signal(object, object, str)
 
     def __init__(self, llamacpp_model_dir):
         super().__init__()
@@ -1814,7 +1814,7 @@ class FormManager(QMainWindow):
 
     def open_decision_audit_viewer(self):
         viewer = DecisionAuditViewer(self._get_audit_path(), self)
-        viewer.exec_()
+        viewer.exec()
 
     def _get_audit_path(self):
         try:
@@ -2652,7 +2652,7 @@ class FormManager(QMainWindow):
         b.addWidget(cancel_btn)
         main_layout.addWidget(buttons)
 
-        if dialog.exec_() == QDialog.Accepted:
+        if dialog.exec() == QDialog.Accepted:
             # Read existing config first to preserve other fields
             config_data = {}
             if os.path.exists("config.json"):
@@ -3290,7 +3290,7 @@ class FormManager(QMainWindow):
         menu = self._build_form_context_menu(item)
         # Keep a reference so the ephemeral menu isn't garbage-collected while open.
         self._active_context_menu = menu
-        menu.exec_(self.form_list.viewport().mapToGlobal(widget_pos))
+        menu.exec(self.form_list.viewport().mapToGlobal(widget_pos))
         self._active_context_menu = None
 
     def _context_grade_now(self, url):
@@ -3349,13 +3349,13 @@ class FormManager(QMainWindow):
         self.forms_data = {k: v for k, v in ordered.items() if v is not None}
 
     def _context_copy_url(self, url):
-        from PyQt5.QtWidgets import QApplication
+        from PySide6.QtWidgets import QApplication
         QApplication.clipboard().setText(url)
         self.append_debug(f"<font color='gray'>[QUEUE] Copied URL to clipboard: {self._short_url(url)}</font>")
 
     def _context_open_in_browser(self, url):
-        from PyQt5.QtCore import QUrl
-        from PyQt5.QtGui import QDesktopServices
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
         QDesktopServices.openUrl(QUrl(url))
         self.append_debug(f"<font color='gray'>[QUEUE] Opening in browser: {self._short_url(url)}</font>")
 
@@ -3405,7 +3405,7 @@ class FormManager(QMainWindow):
 
     def open_manual_add_dialog(self):
         dialog = AutoAddDialog(self, mode='manual')
-        dialog.exec_()
+        dialog.exec()
 
     def open_answer_key_dashboard(self, target_url=None, auto_scan=False):
         if isinstance(target_url, bool):
@@ -3417,7 +3417,7 @@ class FormManager(QMainWindow):
                 dialog.form_combo.setCurrentIndex(index)
         if auto_scan:
             QTimer.singleShot(0, dialog.scan)
-        dialog.exec_()
+        dialog.exec()
 
         if self.form_list.currentItem():
             self._on_form_selection_changed(self.form_list.currentItem())
@@ -3430,11 +3430,11 @@ class FormManager(QMainWindow):
 
     def open_auto_run_dialog(self):
         dialog = AutoAddDialog(self, mode='auto')
-        dialog.exec_()
+        dialog.exec()
 
     def open_quick_grade_dialog(self):
         """Open a dialog to add folder/form URLs and grade immediately without checking submissions."""
-        from PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel
+        from PySide6.QtWidgets import QDialog, QVBoxLayout, QLabel
 
         dialog = QDialog(self)
         dialog.setWindowTitle("Scan Source")
@@ -3476,7 +3476,7 @@ class FormManager(QMainWindow):
         grade_button.clicked.connect(on_grade)
         cancel_button.clicked.connect(dialog.reject)
 
-        if dialog.exec_() == QDialog.Accepted:
+        if dialog.exec() == QDialog.Accepted:
             sources_text = input_field.toPlainText().strip()
             if not sources_text:
                 QMessageBox.warning(self, "Empty Input", "Please enter at least one URL")
@@ -5589,7 +5589,7 @@ if __name__ == "__main__":
     window = FormManager()
     app.aboutToQuit.connect(window._shutdown_owned_work)
     window.show()
-    sys.exit(app.exec_())
+    sys.exit(app.exec())
 
 
 
