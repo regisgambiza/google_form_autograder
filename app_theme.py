@@ -37,6 +37,25 @@ QLabel#RunStateDot {
     background: #16845b;
     border-radius: 4px;
 }
+QLabel#ActivityDot, QLabel#AutoStatusDot {
+    border-radius: 4px;
+    background: #b6c1cc;
+}
+QLabel#ActivityDot[state="idle"], QLabel#AutoStatusDot[state="off"] { background: #b6c1cc; }
+QLabel#ActivityDot[state="busy"], QLabel#AutoStatusDot[state="searching"] { background: #e0a03c; }
+QLabel#ActivityDot[state="grading"], QLabel#AutoStatusDot[state="grading"] { background: #1f7cc4; }
+QLabel#ActivityDot[state="waiting"], QLabel#AutoStatusDot[state="active"] { background: #16845b; }
+QLabel#ActivityDot[state="error"] { background: #d0342c; }
+QLabel#ActivityStatus, QLabel#AutoStatus {
+    color: #405466;
+    font-size: 11px;
+    font-weight: 600;
+}
+QLabel#ActivityStatus[state="idle"] { color: #637485; }
+QLabel#ActivityStatus[state="busy"], QLabel#AutoStatus[state="searching"] { color: #8a5200; }
+QLabel#ActivityStatus[state="grading"], QLabel#AutoStatus[state="grading"] { color: #1769aa; }
+QLabel#ActivityStatus[state="waiting"], QLabel#AutoStatus[state="active"] { color: #16845b; }
+QLabel#ActivityStatus[state="error"] { color: #b42318; }
 QFrame#CommandBar {
     background: #f5f8fa;
     border-bottom: 1px solid #cbd6df;
@@ -186,6 +205,23 @@ QListWidget::item:selected, QTreeWidget::item:selected {
     background: #dcecff;
     color: #15324b;
 }
+QListWidget#SourceList {
+    background: #ffffff;
+    border: 1px solid #d7e0ea;
+    border-radius: 8px;
+    padding: 4px;
+}
+QListWidget#SourceList::item {
+    margin: 1px;
+    border-radius: 6px;
+    padding: 6px 8px;
+    color: #1a2c3e;
+    font-size: 12px;
+}
+QListWidget#SourceList::item:hover { background: #f0f6fd; }
+QListWidget#SourceList::item:selected { background: #dcecff; color: #15324b; }
+QListWidget#SourceList::item:alternate { background: #f7fafc; }
+QPushButton[danger="true"] { color: #b42318; }
 QHeaderView::section {
     background: #e8eef4;
     color: #263747;
@@ -237,52 +273,53 @@ QLabel#QueueColumnHeader {
 }
 QListWidget#FormQueueList {
     background: #ffffff;
-    border: 1px solid #c8d2dc;
+    border: 0;
     border-radius: 0;
-    padding: 0;
+    padding: 4px;
 }
-QListWidget#FormQueueList::item { border: 0; margin: 0; padding: 0; }
-QListWidget#FormQueueList::item:selected { background: #dcecff; }
+QListWidget#FormQueueList::item { border: 0; margin: 0 0 4px 0; padding: 0; border-radius: 8px; }
+QListWidget#FormQueueList::item:selected { background: transparent; }
 QFrame#FormCard {
     background: #ffffff;
-    border: 0;
-    border-bottom: 1px solid #e1e7ed;
-    border-left: 3px solid transparent;
+    border: 1px solid #e4e9ef;
+    border-radius: 8px;
+    border-left: 3px solid #c9d4df;
 }
-QFrame#FormCard[rowParity="odd"] { background: #f7f9fb; }
-QFrame#FormCard[status="queued"] { border-left-color: #1769aa; }
-QFrame#FormCard[status="running"] { border-left-color: #cc7a00; background: #fff9e8; }
+QFrame#FormCard[rowParity="odd"] { background: #fafbfd; }
+QFrame#FormCard[rowParity="odd"]:hover, QFrame#FormCard:hover { background: #f2f7ff; border-color: #cfe0f4; }
+QFrame#FormCard[status="queued"] { border-left-color: #1f7cc4; }
+QFrame#FormCard[status="running"] { border-left-color: #e0a03c; background: #fffaf0; }
 QFrame#FormCard[status="done"] { border-left-color: #1f8a5b; }
-QFrame#FormCard[status="failed"] { border-left-color: #b42318; background: #fff4f2; }
-QLabel#FormTitle { font-size: 12px; font-weight: 600; color: #1769aa; }
-QLabel#FormMeta { font-size: 10px; color: #637485; }
+QFrame#FormCard[status="failed"] { border-left-color: #d0342c; background: #fef3f2; }
+QLabel#FormTitle { font-size: 12px; font-weight: 600; color: #1a2c3e; }
+QLabel#FormMeta { font-size: 10px; color: #74859a; }
 QLabel#FormUrl { font-size: 10px; color: #637485; }
 QLabel#StatusBadge {
     color: #405466;
-    background: transparent;
-    border-radius: 0;
-    padding: 0;
-    font-size: 11px;
+    background: #eef2f6;
+    border: 1px solid #dce3ea;
+    border-radius: 11px;
+    padding: 2px 6px;
+    font-size: 10px;
     font-weight: 600;
 }
-QLabel#StatusBadge[status="queued"] { color: #1769aa; }
-QLabel#StatusBadge[status="running"] { color: #8a5200; }
-QLabel#StatusBadge[status="done"] { color: #1f8a5b; }
-QLabel#StatusBadge[status="failed"] { color: #b42318; }
-QLabel#QueueEta { color: #405466; font-size: 11px; }
-QLabel#QueueGlyph { color: #5b8fd6; font-size: 14px; font-weight: 700; }
+QLabel#StatusBadge[status="queued"] { color: #1769aa; background: #e7f1fb; border-color: #c9e0f5; }
+QLabel#StatusBadge[status="running"] { color: #8a5200; background: #fff3da; border-color: #f5dfae; }
+QLabel#StatusBadge[status="done"] { color: #1f8a5b; background: #e5f5ec; border-color: #c3e6d2; }
+QLabel#StatusBadge[status="failed"] { color: #b42318; background: #fdebe8; border-color: #f6cdc7; }
+QLabel#QueueEta { color: #5a6b7d; font-size: 10px; font-weight: 500; }
+QLabel#QueueGlyph { color: #5b8fd6; font-size: 13px; font-weight: 700; }
 QProgressBar#QueueProgress {
-    background: #e7edf3;
-    border: 1px solid #c5d0db;
-    border-radius: 3px;
-    min-height: 16px;
-    max-height: 16px;
+    background: #eef2f6;
+    border: 0;
+    border-radius: 4px;
+    min-height: 8px;
+    max-height: 8px;
     text-align: center;
-    color: #1f2937;
-    font-size: 10px;
-    font-weight: 700;
+    color: transparent;
+    font-size: 1px;
 }
-QProgressBar#QueueProgress::chunk { background: #1f8a5b; border-radius: 2px; }
+QProgressBar#QueueProgress::chunk { background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #1f8a5b, stop:1 #2ea875); border-radius: 4px; }
 """
 
 
@@ -336,6 +373,25 @@ QLabel#RunStateDot {
     background: #2fa878;
     border-radius: 4px;
 }
+QLabel#ActivityDot, QLabel#AutoStatusDot {
+    border-radius: 4px;
+    background: #46536a;
+}
+QLabel#ActivityDot[state="idle"], QLabel#AutoStatusDot[state="off"] { background: #46536a; }
+QLabel#ActivityDot[state="busy"], QLabel#AutoStatusDot[state="searching"] { background: #e0a03c; }
+QLabel#ActivityDot[state="grading"], QLabel#AutoStatusDot[state="grading"] { background: #1f7cc4; }
+QLabel#ActivityDot[state="waiting"], QLabel#AutoStatusDot[state="active"] { background: #2fa878; }
+QLabel#ActivityDot[state="error"] { background: #e5484d; }
+QLabel#ActivityStatus, QLabel#AutoStatus {
+    color: #aab6c4;
+    font-size: 11px;
+    font-weight: 600;
+}
+QLabel#ActivityStatus[state="idle"] { color: #7d8b9d; }
+QLabel#ActivityStatus[state="busy"], QLabel#AutoStatus[state="searching"] { color: #f0c674; }
+QLabel#ActivityStatus[state="grading"], QLabel#AutoStatus[state="grading"] { color: #7db4ea; }
+QLabel#ActivityStatus[state="waiting"], QLabel#AutoStatus[state="active"] { color: #52c49a; }
+QLabel#ActivityStatus[state="error"] { color: #f1767a; }
 QFrame#CommandBar {
     background: #1a212c;
     border-bottom: 1px solid #384454;
@@ -485,6 +541,23 @@ QListWidget::item:selected, QTreeWidget::item:selected {
     background: #1f7cc4;
     color: #ffffff;
 }
+QListWidget#SourceList {
+    background: #202836;
+    border: 1px solid #3a4656;
+    border-radius: 8px;
+    padding: 4px;
+}
+QListWidget#SourceList::item {
+    margin: 1px;
+    border-radius: 6px;
+    padding: 6px 8px;
+    color: #cfe0ef;
+    font-size: 12px;
+}
+QListWidget#SourceList::item:hover { background: #2a3648; }
+QListWidget#SourceList::item:selected { background: #1f7cc4; color: #ffffff; }
+QListWidget#SourceList::item:alternate { background: #242d3a; }
+QPushButton[danger="true"] { color: #f1767a; }
 QHeaderView::section {
     background: #2e3a4c;
     color: #d8e0ea;
@@ -536,52 +609,53 @@ QLabel#QueueColumnHeader {
 }
 QListWidget#FormQueueList {
     background: #202836;
-    border: 1px solid #3a4656;
+    border: 0;
     border-radius: 0;
-    padding: 0;
+    padding: 4px;
 }
-QListWidget#FormQueueList::item { border: 0; margin: 0; padding: 0; }
-QListWidget#FormQueueList::item:selected { background: #1f7cc4; }
+QListWidget#FormQueueList::item { border: 0; margin: 0 0 4px 0; padding: 0; border-radius: 8px; }
+QListWidget#FormQueueList::item:selected { background: transparent; }
 QFrame#FormCard {
     background: #232c3a;
-    border: 0;
-    border-bottom: 1px solid #303b4b;
-    border-left: 3px solid transparent;
+    border: 1px solid #384454;
+    border-radius: 8px;
+    border-left: 3px solid #4a5a6e;
 }
 QFrame#FormCard[rowParity="odd"] { background: #1e2530; }
+QFrame#FormCard[rowParity="odd"]:hover, QFrame#FormCard:hover { background: #283648; border-color: #3f5a7a; }
 QFrame#FormCard[status="queued"] { border-left-color: #1f7cc4; }
 QFrame#FormCard[status="running"] { border-left-color: #e0a03c; background: #2c2a20; }
 QFrame#FormCard[status="done"] { border-left-color: #2fa878; }
 QFrame#FormCard[status="failed"] { border-left-color: #e5484d; background: #33211f; }
-QLabel#FormTitle { font-size: 12px; font-weight: 600; color: #5f9fd6; }
+QLabel#FormTitle { font-size: 12px; font-weight: 600; color: #cfe0ef; }
 QLabel#FormMeta { font-size: 10px; color: #8b98a8; }
 QLabel#FormUrl { font-size: 10px; color: #8b98a8; }
 QLabel#StatusBadge {
     color: #c2ccd8;
-    background: transparent;
-    border-radius: 0;
-    padding: 0;
-    font-size: 11px;
+    background: #2e3a4c;
+    border: 1px solid #3f4c5e;
+    border-radius: 11px;
+    padding: 2px 6px;
+    font-size: 10px;
     font-weight: 600;
 }
-QLabel#StatusBadge[status="queued"] { color: #5f9fd6; }
-QLabel#StatusBadge[status="running"] { color: #e0a03c; }
-QLabel#StatusBadge[status="done"] { color: #2fa878; }
-QLabel#StatusBadge[status="failed"] { color: #e5484d; }
-QLabel#QueueEta { color: #aab6c4; font-size: 11px; }
-QLabel#QueueGlyph { color: #6aa3d9; font-size: 14px; font-weight: 700; }
+QLabel#StatusBadge[status="queued"] { color: #7db4ea; background: #23344d; border-color: #2e4a6b; }
+QLabel#StatusBadge[status="running"] { color: #f0c674; background: #3a331f; border-color: #55492a; }
+QLabel#StatusBadge[status="done"] { color: #52c49a; background: #1d3f33; border-color: #2a5d47; }
+QLabel#StatusBadge[status="failed"] { color: #f1767a; background: #402224; border-color: #5d2a28; }
+QLabel#QueueEta { color: #aab6c4; font-size: 10px; font-weight: 500; }
+QLabel#QueueGlyph { color: #6aa3d9; font-size: 13px; font-weight: 700; }
 QProgressBar#QueueProgress {
     background: #2e3a4c;
-    border: 1px solid #3a4656;
-    border-radius: 3px;
-    min-height: 16px;
-    max-height: 16px;
+    border: 0;
+    border-radius: 4px;
+    min-height: 8px;
+    max-height: 8px;
     text-align: center;
-    color: #d8e0ea;
-    font-size: 10px;
-    font-weight: 700;
+    color: transparent;
+    font-size: 1px;
 }
-QProgressBar#QueueProgress::chunk { background: #2fa878; border-radius: 2px; }
+QProgressBar#QueueProgress::chunk { background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #2fa878, stop:1 #3ec98d); border-radius: 4px; }
 """
 
 

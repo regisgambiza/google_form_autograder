@@ -88,8 +88,8 @@ class AutoAddDialog(QDialog):
         super().__init__(parent)
         self.mode = mode
         self.setWindowTitle("Schedule Automatic Runs" if mode == 'auto' else "Add Forms")
-        self.resize(620, 560)
-        self.setMinimumWidth(560)
+        self.resize(720, 680)
+        self.setMinimumSize(640, 600)
 
         self.notify_on_new = True
         self.auto_spend_budget_usd = 0.0
@@ -260,28 +260,56 @@ class AutoAddDialog(QDialog):
     def _build_sources_panel(self):
         sources = QGroupBox("Sources")
         slayout = QVBoxLayout(sources)
+        slayout.setContentsMargins(12, 16, 12, 12)
+        slayout.setSpacing(8)
+
+        header = QHBoxLayout()
+        self.sources_count_label = QLabel("0 sources")
+        self.sources_count_label.setObjectName("Muted")
+        hint = QLabel("Google Form or Drive folder URLs")
+        hint.setObjectName("Muted")
+        hint.setStyleSheet("font-size: 10px;")
+        header.addWidget(hint)
+        header.addStretch()
+        header.addWidget(self.sources_count_label)
+        slayout.addLayout(header)
 
         self.predefined_list = QListWidget()
-        slayout.addWidget(self.predefined_list)
+        self.predefined_list.setObjectName("SourceList")
+        self.predefined_list.setAlternatingRowColors(True)
+        self.predefined_list.setMinimumHeight(180)
+        slayout.addWidget(self.predefined_list, 1)
 
         btn_layout = QHBoxLayout()
-        add_predefined_btn = QPushButton("Add to Predefined")
+        add_predefined_btn = QPushButton("+  Add Source")
         add_predefined_btn.setObjectName("Secondary")
         add_predefined_btn.clicked.connect(self.add_to_predefined)
         remove_predefined_btn = QPushButton("Remove Selected")
         remove_predefined_btn.setObjectName("Secondary")
+        remove_predefined_btn.setProperty("danger", True)
         remove_predefined_btn.clicked.connect(self.remove_from_predefined)
         btn_layout.addWidget(add_predefined_btn)
         btn_layout.addWidget(remove_predefined_btn)
+        btn_layout.addStretch()
         slayout.addLayout(btn_layout)
 
         self.temp_input = QTextEdit()
         self.temp_input.setPlaceholderText(
             "Paste Google Form URLs or Drive folder URLs, separated by commas or new lines..."
         )
-        self.temp_input.setFixedHeight(60)
+        self.temp_input.setFixedHeight(92)
         slayout.addWidget(self.temp_input)
+
+        self.temp_input.textChanged.connect(self._refresh_source_count)
+        self.predefined_list.model().rowsInserted.connect(self._refresh_source_count)
+        self.predefined_list.model().rowsRemoved.connect(self._refresh_source_count)
         return sources
+
+    def _refresh_source_count(self):
+        count = self.predefined_list.count() + count_identifiers(self.temp_input.toPlainText())
+        if hasattr(self, "sources_count_label"):
+            self.sources_count_label.setText(f"{count} source{'s' if count != 1 else ''}")
+        self._refresh_preview()
 
     # ------------------------------------------------------------------ #
     #  Preview / recent-only state                                       #
@@ -386,7 +414,10 @@ class AutoAddDialog(QDialog):
     def load_predefined(self):
         self.predefined_list.clear()
         for folder in load_predefined_folders():
-            self.predefined_list.addItem(folder)
+            item = QListWidgetItem(folder)
+            item.setToolTip(folder)
+            self.predefined_list.addItem(item)
+        self._refresh_source_count()
 
     def add_to_predefined(self):
         text = self.temp_input.toPlainText().strip()

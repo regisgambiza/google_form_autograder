@@ -11,10 +11,10 @@ from PyQt5.QtWidgets import (
     QProgressDialog, QSplitter, QSpinBox, QDialog, QFormLayout, QTabWidget,
     QSystemTrayIcon, QMenu, QAction, QStyle, QFrame, QProgressBar, QDoubleSpinBox,
     QScrollArea, QFileDialog, QGridLayout, QShortcut, QTableWidget,
-    QTableWidgetItem, QHeaderView
+    QTableWidgetItem, QHeaderView, QSizePolicy
 )
 
-from PyQt5.QtCore import Qt, QDate, QTimer, QSize, QThread, pyqtSignal
+from PyQt5.QtCore import Qt, QDate, QTimer, QSize, QThread, pyqtSignal, QEvent
 from PyQt5.QtGui import QColor, QBrush, QFont, QIcon, QPalette, QKeySequence
 from datetime import datetime, timedelta, timezone, time
 import ctypes
@@ -432,8 +432,8 @@ class FormManager(QMainWindow):
         super().__init__()
         self.setWindowIcon(app_icon())
         self.setWindowTitle("Google Form Autograder")
-        self.setGeometry(100, 100, 1250, 820)
-        self.setMinimumSize(1000, 700)
+        self.setGeometry(100, 100, 1500, 900)
+        self.setMinimumSize(1200, 780)
         self.grading_mode = "Whole Form"
 
         self.grader_thread = None
@@ -446,6 +446,12 @@ class FormManager(QMainWindow):
         self.overall_forms_total = 0
         self.auto_mode = False
         self.auto_timer = None  # Track the QTimer for auto-cycle
+        self._metrics_last_elapsed = 0.0
+        self._metrics_last_ts = None
+        self._metrics_cache = None
+        self._elapsed_ticker = QTimer(self)
+        self._elapsed_ticker.setInterval(1000)
+        self._elapsed_ticker.timeout.connect(self._tick_elapsed)
         self.max_gui_log_lines = 2500
         self.max_gui_visible_blocks = 1200
         self.debug_lines = []
@@ -455,6 +461,12 @@ class FormManager(QMainWindow):
         self.interval_seconds = 300
         self.folders = []
         self.last_check_time = None
+
+        # Partial-form watcher: forms with learner submissions but no teacher
+        # answers. Kept in the queue and re-graded whole-form once keys appear.
+        self.auto_partial_forms = {}  # form_id -> {url, title, missing_question_ids, detected_at, last_check}
+        self.auto_partial_forms_path = "auto_partial_forms.json"
+        self._partial_regrade_pending = set()  # form_ids scheduled for whole-form re-grade
 
         # Scheduler Settings
         self.use_time_schedule = False
@@ -704,6 +716,16 @@ class FormManager(QMainWindow):
         self.auth_status_label.setObjectName("Muted")
         header_layout.addWidget(self.auth_status_label)
 
+        self.auto_status_dot = QLabel()
+        self.auto_status_dot.setObjectName("AutoStatusDot")
+        self.auto_status_dot.setFixedSize(9, 9)
+        self.auto_status_dot.setProperty("state", "off")
+        self.auto_status_label = QLabel("Auto Run: Off")
+        self.auto_status_label.setObjectName("AutoStatus")
+        self.auto_status_label.setProperty("state", "off")
+        header_layout.addWidget(self.auto_status_dot)
+        header_layout.addWidget(self.auto_status_label)
+
         terminal_top_button = QPushButton(">_")
         terminal_top_button.setObjectName("IconButton")
         terminal_top_button.setToolTip("Show terminal")
@@ -763,6 +785,15 @@ class FormManager(QMainWindow):
         answer_keys_button.clicked.connect(self.open_answer_key_dashboard)
         command_layout.addWidget(answer_keys_button)
         command_layout.addStretch()
+        self.activity_dot = QLabel()
+        self.activity_dot.setObjectName("ActivityDot")
+        self.activity_dot.setFixedSize(9, 9)
+        self.activity_dot.setProperty("state", "idle")
+        self.activity_label = QLabel("Idle")
+        self.activity_label.setObjectName("ActivityStatus")
+        self.activity_label.setProperty("state", "idle")
+        command_layout.addWidget(self.activity_dot)
+        command_layout.addWidget(self.activity_label)
         self.command_summary = QLabel("0 forms")
         self.command_summary.setObjectName("Muted")
         command_layout.addWidget(self.command_summary)
@@ -863,7 +894,7 @@ class FormManager(QMainWindow):
         self.form_list = QListWidget()
         self.form_list.setObjectName("FormQueueList")
         self.form_list.setSpacing(4)
-        self.form_list.setUniformItemSizes(False)
+        self.form_list.setUniformItemSizes(True)
         self.form_list.setWordWrap(True)
         self.form_list.setTextElideMode(Qt.ElideRight)
         self.form_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -1075,9 +1106,10 @@ class FormManager(QMainWindow):
         detail_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         detail_scroll.setWidget(detail_widget)
         workspace.addWidget(detail_scroll)
-        workspace.setSizes([340, 900])
-        workspace.setStretchFactor(0, 0)
+        workspace.setSizes([800, 800])
+        workspace.setStretchFactor(0, 1)
         workspace.setStretchFactor(1, 1)
+        queue_widget.setMinimumWidth(360)
         main_layout.addWidget(workspace, 1)
 
         self.terminal_frame = QFrame()
@@ -1709,6 +1741,29 @@ class FormManager(QMainWindow):
         self.raise_()
         self.activateWindow()
 
+    def changeEvent(self, event):
+        """Send the window to the system tray (instead of the taskbar) when minimized."""
+        super().changeEvent(event)
+        if (
+            event.type() == QEvent.WindowStateChange
+            and self.isMinimized()
+            and self.tray_icon is not None
+            and self.tray_icon.isVisible()
+        ):
+            QTimer.singleShot(0, self.hide_to_tray)
+
+    def hide_to_tray(self):
+        if self.isMinimized() and (self.tray_icon is None or not self.tray_icon.isVisible()):
+            return
+        self.showMinimized()
+        self.hide()
+        self.tray_icon.showMessage(
+            "Google Form Autograder",
+            "App minimized to system tray. It will continue running in the background. Double-click the tray icon to restore.",
+            QSystemTrayIcon.Information,
+            2500,
+        )
+
     def _notify(self, title, message, icon=None, timeout_ms=6000):
         """Show a system-tray notification when available, otherwise fall back to a status message."""
         tray = getattr(self, "tray_icon", None)
@@ -1836,8 +1891,8 @@ class FormManager(QMainWindow):
         dialog = QDialog(self)
         dialog.setWindowTitle("Settings")
         dialog.setModal(True)
-        dialog.resize(760, 520)
-        dialog.setMinimumSize(680, 480)
+        dialog.resize(1120, 860)
+        dialog.setMinimumSize(920, 700)
         dialog.setSizeGripEnabled(True)
 
         main_layout = QVBoxLayout(dialog)
@@ -2811,6 +2866,25 @@ class FormManager(QMainWindow):
                     self._add_form_to_queue(url, title, position=position)
         except (FileNotFoundError, json.JSONDecodeError):
             pass
+        self._load_auto_partial_forms()
+
+    def _load_auto_partial_forms(self):
+        """Load persisted partial-form watcher entries (survives app restarts)."""
+        try:
+            with open(self.auto_partial_forms_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                self.auto_partial_forms = {str(k): v for k, v in data.items() if isinstance(v, dict)}
+        except (FileNotFoundError, json.JSONDecodeError):
+            self.auto_partial_forms = {}
+
+    def _save_auto_partial_forms(self):
+        """Persist the partial-form watcher so re-grades survive restarts."""
+        try:
+            with open(self.auto_partial_forms_path, "w", encoding="utf-8") as f:
+                json.dump(self.auto_partial_forms, f, indent=2, ensure_ascii=True)
+        except Exception:
+            pass
 
     def save_forms(self):
         forms = [{"url": url, "title": self.forms_data[url]} for url in self.forms_data]
@@ -2921,34 +2995,47 @@ class FormManager(QMainWindow):
         card.setObjectName("FormCard")
         card.setProperty("status", meta.get("status", "queued"))
         layout = QGridLayout(card)
-        layout.setContentsMargins(8, 4, 10, 4)
+        layout.setContentsMargins(10, 6, 10, 6)
         layout.setHorizontalSpacing(8)
-        layout.setVerticalSpacing(1)
+        layout.setVerticalSpacing(2)
 
         glyph = QLabel(">>")
         glyph.setObjectName("QueueGlyph")
         glyph.setAlignment(Qt.AlignCenter)
         glyph.setFixedWidth(18)
+
         title = QLabel(meta.get("title", "Untitled"))
         title.setObjectName("FormTitle")
         title.setWordWrap(False)
+        title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        title.setMinimumHeight(18)
         title.setToolTip(meta.get("title", "Untitled"))
+
         detail = QLabel(self._queue_detail_text(meta))
         detail.setObjectName("FormMeta")
         detail.setWordWrap(False)
+        detail.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        detail.setMinimumHeight(15)
         detail.setToolTip(self._format_form_meta_line(meta))
+
         progress = QProgressBar()
         progress.setObjectName("QueueProgress")
         progress.setRange(0, 100)
         progress.setValue(self._queue_progress_percent(meta))
         progress.setFormat("%p%")
+        progress.setFixedWidth(74)
+        progress.setAlignment(Qt.AlignCenter)
+
         badge = QLabel(self._status_label(meta.get("status", "queued")))
         badge.setObjectName("StatusBadge")
         badge.setProperty("status", meta.get("status", "queued"))
         badge.setAlignment(Qt.AlignCenter)
+        badge.setFixedWidth(58)
+
         eta = QLabel(self._queue_eta_text(meta))
         eta.setObjectName("QueueEta")
         eta.setAlignment(Qt.AlignCenter)
+        eta.setFixedWidth(46)
 
         layout.addWidget(glyph, 0, 0, 2, 1)
         layout.addWidget(title, 0, 1)
@@ -2956,13 +3043,16 @@ class FormManager(QMainWindow):
         layout.addWidget(progress, 0, 2, 2, 1)
         layout.addWidget(badge, 0, 3, 2, 1)
         layout.addWidget(eta, 0, 4, 2, 1)
-        layout.setColumnStretch(1, 5)
-        layout.setColumnStretch(2, 2)
-        layout.setColumnStretch(3, 2)
-        layout.setColumnStretch(4, 1)
+        layout.setColumnStretch(1, 1)
+        layout.setColumnStretch(2, 0)
+        layout.setColumnStretch(3, 0)
+        layout.setColumnStretch(4, 0)
         layout.setColumnMinimumWidth(2, 74)
-        layout.setColumnMinimumWidth(3, 68)
-        layout.setColumnMinimumWidth(4, 44)
+        layout.setColumnMinimumWidth(3, 58)
+        layout.setColumnMinimumWidth(4, 46)
+        layout.setRowStretch(0, 0)
+        layout.setRowStretch(1, 0)
+        card.setMinimumHeight(52)
         card._title_label = title
         card._badge_label = badge
         card._detail_label = detail
@@ -3009,7 +3099,7 @@ class FormManager(QMainWindow):
         widget._detail_label.setToolTip(self._format_form_meta_line(meta))
         widget._progress_bar.setValue(self._queue_progress_percent(meta))
         widget._eta_label.setText(self._queue_eta_text(meta))
-        item.setSizeHint(QSize(0, max(44, widget.sizeHint().height())))
+        item.setSizeHint(QSize(0, 54))
 
     def _title_from_legacy_item(self, item, url):
         text = (item.text() or "").strip()
@@ -3058,7 +3148,7 @@ class FormManager(QMainWindow):
         item.setData(Qt.UserRole + 1, meta)
         item.setText("")
         widget = self._make_form_row_widget(meta)
-        item.setSizeHint(QSize(0, 104))
+        item.setSizeHint(QSize(0, 54))
         self.form_list.addItem(item)
         self.form_list.setItemWidget(item, widget)
         self._refresh_queue_positions()
@@ -3758,6 +3848,47 @@ class FormManager(QMainWindow):
         # If no specific time set, allow running
         return True
 
+    def _set_auto_status(self, text, state):
+        """Update the persistent auto-run status chip in the header.
+
+        state: 'off' (gray), 'active' (green), 'searching' (amber), 'grading' (blue/orange).
+        """
+        if not hasattr(self, "auto_status_label") or not hasattr(self, "auto_status_dot"):
+            return
+        self.auto_status_label.setText(text)
+        self.auto_status_label.setProperty("state", state)
+        self.auto_status_dot.setProperty("state", state)
+        for w in (self.auto_status_label, self.auto_status_dot):
+            w.style().unpolish(w)
+            w.style().polish(w)
+
+    def _set_activity(self, text, state="busy", tooltip=""):
+        """Update the live 'what is the app doing' indicator in the command bar.
+
+        state: 'idle' (gray), 'busy' (blue), 'grading' (orange), 'waiting' (green), 'error' (red).
+        """
+        if not hasattr(self, "activity_label") or not hasattr(self, "activity_dot"):
+            return
+        self.activity_label.setText(text)
+        self.activity_label.setProperty("state", state)
+        self.activity_dot.setProperty("state", state)
+        if tooltip:
+            self.activity_label.setToolTip(tooltip)
+        for w in (self.activity_label, self.activity_dot):
+            w.style().unpolish(w)
+            w.style().polish(w)
+
+    def _activity_form_title(self):
+        url = self.current_form_url
+        if url:
+            item = self._find_form_item_by_url(url)
+            if item:
+                meta = item.data(Qt.UserRole + 1) or {}
+                title = meta.get("title")
+                if title:
+                    return str(title)
+        return "Current form"
+
     def start_auto_mode(self):
         """Start auto mode - only call this once from dialog"""
         if self.auto_mode:
@@ -3767,6 +3898,7 @@ class FormManager(QMainWindow):
         self.auto_mode = True
         self.stop_button.show()
         self.run_button.setEnabled(False)
+        self._set_auto_status("Auto Run: Active", "active")
         self.append_debug("<b><font color='green'>AUTO RUN STARTED</font></b>")
         mode_text = "Recent Only" if self.grading_mode == "Recent Only" else "Whole Form"
         budget = getattr(self, "auto_spend_budget_usd", 0.0)
@@ -3845,6 +3977,8 @@ class FormManager(QMainWindow):
         self.append_debug(f"<font color='purple'>[AUTO] Search range: {from_str} → {to_str}</font>")
 
         self.is_searching = True
+        self._set_auto_status("Auto Run: Searching", "searching")
+        self._set_activity("Searching sources for new submissions…", "busy")
         self.auto_search_thread = SearchThread(self.folders, from_dt, to_dt)
         self.auto_search_thread.progress.connect(lambda msg: self.append_debug(f"<font color='gray'>[SEARCH] {msg}</font>"))
         self.auto_search_thread.finished.connect(self.on_auto_search_finished)
@@ -3905,6 +4039,128 @@ class FormManager(QMainWindow):
         # Update last check time
         self.last_check_time = datetime.now(timezone.utc)
 
+        # Re-check forms that were graded partial (missing teacher answers).
+        # If keys now exist, they are re-graded whole-form automatically.
+        self._recheck_partial_forms()
+
+    def _recheck_partial_forms(self):
+        """Re-check tracked partial forms for newly added teacher answers.
+
+        Runs after every auto search cycle. If every previously-missing
+        question now has a canonical answer, the form is re-graded in
+        whole-form mode so all submissions (including older ones) are graded.
+        """
+        if not self.auto_mode or self.is_closing:
+            return
+        if not self.auto_partial_forms:
+            return
+        if self.is_grading:
+            return
+
+        now_utc = datetime.now(timezone.utc)
+        partial_forms_current = {}
+        for form_id, info in list(self.auto_partial_forms.items()):
+            url = info.get("url")
+            if not url:
+                continue
+            try:
+                from form_utils import get_form_structure
+
+                service = get_service()
+                structure = get_form_structure(service, form_id)
+            except Exception:
+                continue
+            if not structure:
+                continue
+
+            missing_qids = info.get("missing_question_ids") or []
+            if missing_qids:
+                # Only re-check when enough time has passed since the last check.
+                try:
+                    last_check = datetime.fromisoformat(info["last_check"]) if info.get("last_check") else None
+                except Exception:
+                    last_check = None
+                if last_check and (now_utc - last_check).total_seconds() < 1800:
+                    partial_forms_current[form_id] = info
+                    continue
+
+                still_missing = self._current_missing_qids(service, form_id, structure, missing_qids)
+                info["last_check"] = now_utc.isoformat()
+                if still_missing:
+                    partial_forms_current[form_id] = info
+                    continue
+            else:
+                # No specific missing qids recorded (older format): treat any
+                # question that still lacks a teacher answer as unresolved.
+                from form_context_builder import get_effective_expected
+
+                has_key = False
+                if any(get_effective_expected(q) for q in structure):
+                    has_key = True
+                if not has_key:
+                    info["last_check"] = now_utc.isoformat()
+                    partial_forms_current[form_id] = info
+                    continue
+
+            # All previously-missing questions now have teacher answers.
+            self.auto_partial_forms.pop(form_id, None)
+            self._partial_regrade_pending.add(form_id)
+            self.append_debug(
+                f"<font color='cyan'>[AUTO] ▶ Teacher answers found for previously-partial form "
+                f"{info.get('title') or form_id} — scheduling whole-form re-grade</font>"
+            )
+
+        self.auto_partial_forms = partial_forms_current
+        self._save_auto_partial_forms()
+
+        if self._partial_regrade_pending:
+            urls = []
+            seen = set()
+            for form_id in list(self._partial_regrade_pending):
+                item = self._find_form_item_by_id(form_id)
+                if item and item.data(Qt.UserRole):
+                    url = item.data(Qt.UserRole)
+                elif form_id in self.auto_partial_forms:
+                    url = self.auto_partial_forms.get(form_id, {}).get("url")
+                else:
+                    # Restore from persisted state only if still tracked.
+                    url = None
+                if not url or url in seen:
+                    continue
+                seen.add(url)
+                urls.append(url)
+            if urls:
+                QTimer.singleShot(500, lambda: self.run_grader(target_urls=urls, force_whole_form=True))
+            else:
+                self._partial_regrade_pending.clear()
+
+    def _current_missing_qids(self, service, form_id, structure, missing_qids):
+        """Return the subset of missing_qids that still lack a teacher answer."""
+        from form_context_builder import get_effective_expected
+
+        try:
+            expected_by_item_id = {}
+            form_data = service.forms().get(formId=form_id).execute()
+            for item in form_data.get("items", []):
+                if "questionItem" not in item:
+                    continue
+                item_id = item.get("itemId")
+                grading = item["questionItem"]["question"].get("grading", {})
+                answers = grading.get("correctAnswers", {}).get("answers", [])
+                expected_by_item_id[item_id] = [a["value"] for a in answers if "value" in a]
+        except Exception:
+            return None
+
+        still_missing = []
+        for q in structure:
+            qid = q.get("questionId")
+            if qid not in missing_qids:
+                continue
+            expected = get_effective_expected(q, expected_by_item_id.get(q.get("itemId"), []))
+            if not expected:
+                still_missing.append(qid)
+        return still_missing
+
     def schedule_next_cycle(self):
         """Schedule the next auto-cycle"""
         if not self.auto_mode or self.is_closing:
@@ -3918,6 +4174,7 @@ class FormManager(QMainWindow):
             delay_seconds = max(10, (next_run - datetime.now(timezone.utc)).total_seconds())
             next_str = next_run.strftime("%a %H:%M:%S")
             self.append_debug(f"<font color='gray'>[AUTO] ⏰ Next scheduled run in {delay_seconds:.0f}s at {next_str}</font>")
+            self._set_activity(f"Auto-run waiting · next check {next_str}", "waiting")
             
             # Schedule using QTimer for the delay
             if self.auto_timer:
@@ -3933,6 +4190,7 @@ class FormManager(QMainWindow):
             next_check = datetime.now() + timedelta(seconds=self.interval_seconds)
             next_str = next_check.strftime("%H:%M:%S")
             self.append_debug(f"<font color='gray'>[AUTO] ⏰ Next check in {minutes} minute(s) at {next_str}</font>")
+            self._set_activity(f"Auto-run waiting · next check in {minutes} min", "waiting")
 
             # Cancel any existing timer
             if self.auto_timer:
@@ -3959,6 +4217,8 @@ class FormManager(QMainWindow):
         self.auto_mode = False
         self.stop_button.hide()
         self.run_button.setEnabled(True)
+        self._set_auto_status("Auto Run: Off", "off")
+        self._set_activity("Auto run stopped · app idle", "idle")
         self.append_debug("<b><font color='red'>AUTO RUN STOPPED</font></b>")
 
         # Cancel timer
@@ -4012,6 +4272,9 @@ class FormManager(QMainWindow):
         self.is_searching = False
         self.is_grading = False
         self.run_state_label.setText("Stopped")
+        if not self.auto_mode:
+            self._set_auto_status("Auto Run: Off", "off")
+            self._set_activity("Stopped", "idle")
 
     def _terminate_project_python_processes(self):
         """Terminate python.exe/pythonw.exe instances started from this project path."""
@@ -4319,7 +4582,7 @@ class FormManager(QMainWindow):
         else:
             self.showMinimized()
 
-    def run_grader(self, force_recent_only=False, target_urls=None):
+    def run_grader(self, force_recent_only=False, target_urls=None, force_whole_form=False):
         """Start the grading process"""
         if not self.forms_data:
             if self.auto_mode:
@@ -4364,10 +4627,15 @@ class FormManager(QMainWindow):
         self.run_state_label.setText("Running")
         self.run_button.setEnabled(False)
         self.stop_button.show()
+        if self.auto_mode:
+            self._set_auto_status("Auto Run: Grading", "grading")
         self.debug_output.clear()
         self.debug_lines = []
         self.finished_forms = []
         self.overall_forms_completed = 0
+        self._metrics_last_elapsed = 0.0
+        self._metrics_last_ts = time_module.monotonic()
+        self._elapsed_ticker.start()
         if target_urls is not None:
             self.overall_forms_total = len(set(target_urls))
         else:
@@ -4449,7 +4717,7 @@ class FormManager(QMainWindow):
                     self.append_debug(f"<font color='orange'>[GRADER] Failed to truncate answers for {fid}: {e}</font>")
 
         grading_mode = self.grading_mode
-        grade_recent_only = force_recent_only or (grading_mode == "Recent Only")
+        grade_recent_only = force_recent_only or ((not force_whole_form) and grading_mode == "Recent Only")
 
         self.grader_thread = GraderThread(grade_recent_only=grade_recent_only, form_urls=target_urls)
         self.grader_thread.finished.connect(self.on_grading_finished)
@@ -4466,9 +4734,12 @@ class FormManager(QMainWindow):
         if not tot:
             self.metric_responses.setText("0 / 0")
             self.pipeline_updated.setText("No learner answers")
+            self._set_activity("Evaluating answers…", "grading")
             return
         self.metric_responses.setText(f"{cur} / {tot}")
         self.pipeline_updated.setText("Evaluating answers")
+        title = self._activity_form_title()
+        self._set_activity(f"Grading \"{title}\" · {cur}/{tot} answers", "grading")
 
     def update_overall_progress(self, cur, tot):
         if not tot:
@@ -4492,6 +4763,12 @@ class FormManager(QMainWindow):
         ai_decisions=0,
         avg_latency_ms=0.0,
     ):
+        self._metrics_last_elapsed = float(elapsed_seconds or 0.0)
+        self._metrics_last_ts = time_module.monotonic()
+        self._metrics_cache = (
+            completed, total, accepted, review_questions,
+            rejected, det_decisions, ai_decisions, avg_latency_ms,
+        )
         ai_backlog = 0
         current_model = "Idle"
         item = self._find_form_item_by_url(self.current_form_url)
@@ -4499,6 +4776,8 @@ class FormManager(QMainWindow):
             meta = item.data(Qt.UserRole + 1) or {}
             ai_backlog = meta.get("ai_backlog", 0)
             current_model = meta.get("current_model", "Idle")
+        self._metrics_backlog = ai_backlog
+        self._metrics_model = current_model
         self._update_metric_labels(
             completed,
             total,
@@ -4527,6 +4806,32 @@ class FormManager(QMainWindow):
             item.setData(Qt.UserRole + 1, meta)
             self._refresh_form_row(item)
             self._update_pipeline_rows_for_status(meta.get("status", "running"))
+
+    def _tick_elapsed(self):
+        """Keep the Elapsed / ETA / rate labels live between grader metrics signals."""
+        if not self.is_grading or self._metrics_cache is None:
+            return
+        base_ts = self._metrics_last_ts
+        if base_ts is None:
+            return
+        live_elapsed = self._metrics_last_elapsed + max(
+            0.0, time_module.monotonic() - base_ts
+        )
+        (completed, total, accepted, review_questions,
+         rejected, det_decisions, ai_decisions, avg_latency_ms) = self._metrics_cache
+        self._update_metric_labels(
+            completed,
+            total,
+            accepted,
+            review_questions,
+            live_elapsed,
+            rejected,
+            det_decisions,
+            ai_decisions,
+            avg_latency_ms,
+            getattr(self, "_metrics_backlog", 0),
+            getattr(self, "_metrics_model", "Idle"),
+        )
 
     def refresh_review_counts(self, form_id: str = None):
         """Recompute pending review counts for a form and update GUI metrics.
@@ -4577,6 +4882,7 @@ class FormManager(QMainWindow):
         self.current_label.setText(f"Processing: {title[:48]}")
         self.run_state_label.setText("Running")
         self.pipeline_updated.setText("Preparing form")
+        self._set_activity(f"Grading \"{title}\"", "grading", tooltip=url)
 
     def update_finished_form(self, form_id):
         self.finished_forms.append(form_id)
@@ -4621,6 +4927,31 @@ class FormManager(QMainWindow):
         meta["skipped_questions"] = skipped_questions
         item.setData(Qt.UserRole + 1, meta)
         self._set_form_status(item, "partial", detail)
+
+        # Track forms that were graded partial due to missing teacher answers so
+        # auto mode can re-grade them (whole-form) once the teacher adds keys.
+        if "missing teacher" in str(reason or "").lower():
+            form_id = form_id or (self.extract_form_id(url) if url else None)
+            if form_id:
+                missing_qids = [
+                    str(sq.get("question_id") or "") for sq in skipped_questions
+                    if isinstance(sq, dict) and sq.get("question_id")
+                ]
+                current = self.auto_partial_forms.get(form_id)
+                if current:
+                    current.update({"url": url, "title": meta.get("title") or current.get("title")})
+                    if missing_qids:
+                        current["missing_question_ids"] = missing_qids
+                    current["detected_at"] = datetime.now(timezone.utc).isoformat()
+                else:
+                    self.auto_partial_forms[form_id] = {
+                        "url": url,
+                        "title": meta.get("title") or "Untitled",
+                        "missing_question_ids": missing_qids,
+                        "detected_at": datetime.now(timezone.utc).isoformat(),
+                        "last_check": None,
+                    }
+                self._save_auto_partial_forms()
 
     def _maybe_start_next_after_finish(self):
         # Only start next run if not currently grading and no grader thread running
@@ -5086,8 +5417,19 @@ class FormManager(QMainWindow):
 
     def on_grading_finished(self, success, msg):
         self.is_grading = False
+        self._elapsed_ticker.stop()
         self.run_button.setEnabled(True)
-        self.stop_button.hide()
+        if self.auto_mode:
+            # Keep the stop button visible so the user can end the auto run at any time.
+            self.stop_button.show()
+            self._set_auto_status("Auto Run: Waiting", "active")
+            self._set_activity("Auto-run: cycle complete · preparing next check", "waiting")
+        else:
+            self.stop_button.hide()
+            if success:
+                self._set_activity("Grading completed", "idle")
+            else:
+                self._set_activity("Grading failed", "error")
         now_str = datetime.now().strftime("%H:%M:%S")
         
         if not success:
@@ -5127,7 +5469,37 @@ class FormManager(QMainWindow):
         self._stop_llamacpp_server_if_enabled("llamacpp_stop_server_after_grading", "after grading")
 
         if self.auto_mode:
-            # Clear finished forms
+            # Detect partial-form re-grades that succeeded before clearing, so
+            # the queue entries are still present for status inspection.
+            if success and self._partial_regrade_pending:
+                re_graded = []
+                for form_id in list(self._partial_regrade_pending):
+                    item = self._find_form_item_by_id(form_id)
+                    if not item:
+                        continue
+                    meta = item.data(Qt.UserRole + 1) or {}
+                    if meta.get("status") == "done":
+                        re_graded.append(form_id)
+                if re_graded:
+                    for form_id in re_graded:
+                        self._partial_regrade_pending.discard(form_id)
+                        self.auto_partial_forms.pop(form_id, None)
+                    self._save_auto_partial_forms()
+                    now_str = datetime.now().strftime("%H:%M:%S")
+                    self.append_debug(
+                        f"<font color='green'>[AUTO {now_str}] ✅ Re-graded partial form(s) after teacher "
+                        f"answers: {len(re_graded)} form(s)</font>"
+                    )
+                    if getattr(self, "auto_notify_on_new", True):
+                        self._notify(
+                            "Teacher Answers Added — Re-graded",
+                            f"{len(re_graded)} form(s) that were missing teacher answers "
+                            f"have now been fully graded.",
+                        )
+
+            # Clear finished forms, but never drop forms that are still waiting
+            # on teacher answers (partial). They stay queued and are re-graded
+            # whole-form once keys are added.
             forms_cleared = 0
             finished_ids = set(self.finished_forms)
             i = 0
@@ -5135,7 +5507,12 @@ class FormManager(QMainWindow):
                 item = self.form_list.item(i)
                 url = item.data(Qt.UserRole)
                 form_id = self.extract_form_id(url) if url else None
-                if form_id in finished_ids:
+                meta = item.data(Qt.UserRole + 1) or {}
+                keep_partial = (
+                    meta.get("status") == "partial"
+                    or (form_id and form_id in self.auto_partial_forms)
+                )
+                if form_id in finished_ids and not keep_partial:
                     self.form_list.takeItem(i)
                     if url in self.forms_data:
                         del self.forms_data[url]
@@ -5159,7 +5536,7 @@ class FormManager(QMainWindow):
                 self.append_debug(f"<font color='gray'>[AUTO] 🗑️ Cleared {forms_cleared} finished forms from queue</font>")
                 self.save_forms()
                 self._refresh_queue_positions()
-            
+
             remaining_forms = self.form_list.count()
             finished_count = len(self.finished_forms)
             self.append_debug(f"<font color='blue'>[AUTO] 📊 Session Stats: Finished: {finished_count}, In queue: {remaining_forms}</font>")

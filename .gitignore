@@ -33,3 +33,7 @@ dist/
 /teacher_answer_memory.json
 /temp_ai_judges_*.txt
 
+
+# Auto partial-form watcher state
+/auto_partial_forms.json
+

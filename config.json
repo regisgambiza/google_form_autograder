@@ -53,7 +53,8 @@
     "provider_manager_enabled": true,
     "provider_strategy": "openrouter_llamacpp",
     "provider_priority": [
-        "openrouter"
+        "openrouter",
+        "llamacpp"
     ],
     "provider_retry_count": 2,
     "provider_timeout_seconds": 60,
@@ -180,7 +181,7 @@
             "completion": 0.1
         }
     },
-    "max_openrouter_spend_usd_per_run": 0.0,
+    "max_openrouter_spend_usd_per_run": 80000.0,
     "openrouter_dynamic_model_pool_enabled": true,
     "openrouter_model_catalog_refresh_enabled": true,
     "openrouter_model_catalog_refresh_seconds": 3600,
@@ -371,5 +372,26 @@
     "truncate_answers_before_grading": false,
     "enable_deduplication": true,
     "dark_mode": false,
-    "rubric_timeout_seconds": 3600
+    "rubric_timeout_seconds": 3600,
+    "auto_run": {
+        "grading_mode": "Recent Only",
+        "recency_value": 5000,
+        "recency_unit": "hours",
+        "interval_value": 5,
+        "interval_unit": "minutes",
+        "notify_on_new": true,
+        "spend_budget_usd": 80000.0,
+        "use_time_schedule": false,
+        "schedule_time": "09:00",
+        "selected_days": [
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true
+        ],
+        "sources": []
+    }
 }
