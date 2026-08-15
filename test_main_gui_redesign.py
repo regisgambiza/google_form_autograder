@@ -306,7 +306,9 @@ def test_review_metric_deep_links_to_current_form(monkeypatch):
 def test_settings_exposes_cache_and_history_clear_action(monkeypatch):
     window = FormManager()
     # Inspecting the source avoids entering the modal settings event loop.
-    source = __import__("pathlib").Path("gui_main.py").read_text(encoding="utf-8")
+    from pathlib import Path
+    source = Path("settings_dialog.py").read_text(encoding="utf-8")
+    source += "\n" + Path("gui_main.py").read_text(encoding="utf-8")
     assert "Clear Cache & Grading History" in source
     assert "clear_grading_cache(reset_history=True)" in source
     assert "Always grade from fresh data (ignore previous-run cache)" in source
