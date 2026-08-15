@@ -11,7 +11,8 @@ from PySide6.QtWidgets import (
     QProgressDialog, QSplitter, QSpinBox, QDialog, QFormLayout, QTabWidget,
     QSystemTrayIcon, QMenu, QStyle, QFrame, QProgressBar, QDoubleSpinBox,
     QScrollArea, QFileDialog, QGridLayout, QTableWidget,
-    QTableWidgetItem, QHeaderView, QSizePolicy
+    QTableWidgetItem, QHeaderView, QSizePolicy, QToolButton,
+    QTreeWidget, QTreeWidgetItem, QStackedWidget,
 )
 
 from PySide6.QtCore import Qt, QDate, QTimer, QSize, QThread, Signal, QEvent
@@ -50,7 +51,20 @@ from evaluator_config import (
 )
 from scheduler import scheduler as auto_scheduler
 from answer_key_dashboard import AnswerKeyDashboard
-from app_theme import apply_application_theme, apply_widget_theme, set_dark_mode, is_dark_mode, current_stylesheet
+from app_theme import (
+    apply_application_theme,
+    apply_widget_theme,
+    current_stylesheet,
+    pictograph_icon,
+    small_icon,
+    ACCENT_GREEN,
+    ACCENT_BLUE,
+    ACCENT_ORANGE,
+    ACCENT_PURPLE,
+    ACCENT_RED,
+    ACCENT_TEAL,
+    ACCENT_SLATE,
+)
 from cache_manager import clear_grading_cache
 from answer_key_manager import load_pending_review_records, keep_teacher_answers_only
 from decision_audit_viewer import DecisionAuditViewer, load_audit_records
@@ -501,181 +515,7 @@ class FormManager(QMainWindow):
 
         print("Sleep prevention active. App is running.")
 
-        # Modern stylesheet
-        self.setStyleSheet("""
-            QMainWindow {
-                background-color: #f4f6f8;
-            }
-            QLabel {
-                font-size: 14px;
-                color: #333;
-            }
-            QLabel#Header {
-                font-size: 16px;
-                font-weight: bold;
-            }
-            QPushButton {
-                background-color: #007bff;
-                color: white;
-                border: none;
-                padding: 8px 16px;
-                border-radius: 6px;
-                font-size: 14px;
-            }
-            QFrame#CommandBar QPushButton#CommandButton {
-                min-height: 42px;
-                max-height: 42px;
-                padding: 0 14px;
-            }
-            QFrame#CommandBar QPushButton#CommandButton[variant="secondary"] {
-                background-color: #6c757d;
-            }
-            QFrame#CommandBar QPushButton#CommandButton[variant="secondary"]:hover {
-                background-color: #545b62;
-            }
-            QFrame#CommandBar QPushButton#CommandButton[variant="danger"] {
-                background-color: #dc3545;
-            }
-            QFrame#CommandBar QPushButton#CommandButton[variant="danger"]:hover {
-                background-color: #b02a37;
-            }
-            QPushButton:hover {
-                background-color: #0056b3;
-            }
-            QPushButton#Secondary {
-                background-color: #6c757d;
-            }
-            QPushButton#Secondary:hover {
-                background-color: #545b62;
-            }
-            QPushButton#Danger {
-                background-color: #dc3545;
-            }
-            QPushButton#Danger:hover {
-                background-color: #b02a37;
-            }
-            QPushButton#Danger[compactControl="true"] {
-                min-height: 42px;
-                max-height: 42px;
-                padding: 0 13px;
-            }
-            QComboBox, QTextEdit, QListWidget {
-                background-color: white;
-                border: 1px solid #ccc;
-                border-radius: 6px;
-                padding: 6px;
-            }
-            QListWidget#FormQueueList {
-                background-color: #ffffff;
-                border: 1px solid #c8d2dc;
-                border-radius: 0;
-                padding: 0;
-            }
-            QListWidget#FormQueueList::item {
-                border: none;
-                margin: 0;
-                padding: 0;
-            }
-            QFrame#FormQueueHeader {
-                background-color: #e8eef4;
-                border: 1px solid #c8d2dc;
-                border-bottom: 0;
-            }
-            QLabel#QueueColumnHeader {
-                color: #263747;
-                font-size: 11px;
-                font-weight: 700;
-            }
-            QFrame#FormCard {
-                background-color: #ffffff;
-                border: 0;
-                border-bottom: 1px solid #e1e7ed;
-                border-left: 3px solid transparent;
-            }
-            QFrame#FormCard[rowParity="odd"] {
-                background-color: #f7f9fb;
-            }
-            QFrame#FormCard[status="queued"] {
-                border-left-color: #0d6efd;
-            }
-            QFrame#FormCard[status="running"] {
-                border-left-color: #f59f00;
-                background-color: #fff9e8;
-            }
-            QFrame#FormCard[status="done"] {
-                border-left-color: #198754;
-            }
-            QFrame#FormCard[status="failed"] {
-                border-left-color: #dc3545;
-                background-color: #fff3f3;
-            }
-            QLabel#FormTitle {
-                font-size: 12px;
-                font-weight: 600;
-                color: #0d6efd;
-            }
-            QLabel#FormMeta {
-                font-size: 10px;
-                color: #5b6775;
-            }
-            QLabel#FormUrl {
-                font-size: 10px;
-                color: #5b6775;
-            }
-            QLabel#StatusBadge {
-                font-size: 11px;
-                font-weight: 600;
-                color: #405466;
-                background-color: transparent;
-                border-radius: 0;
-                padding: 0;
-            }
-            QLabel#StatusBadge[status="queued"] {
-                color: #0d6efd;
-            }
-            QLabel#StatusBadge[status="running"] {
-                color: #7b4b00;
-            }
-            QLabel#StatusBadge[status="done"] {
-                color: #198754;
-            }
-            QLabel#StatusBadge[status="failed"] {
-                color: #dc3545;
-            }
-            QLabel#StatusBadge[status="skipped"] {
-                color: #9a3412;
-            }
-            QLabel#StatusBadge[status="partial"] {
-                color: #b45309;
-            }
-            QLabel#QueueEta {
-                color: #405466;
-                font-size: 11px;
-            }
-            QLabel#QueueGlyph {
-                color: #5b8fd6;
-                font-size: 14px;
-                font-weight: 700;
-            }
-            QProgressBar#QueueProgress {
-                background-color: #e7edf3;
-                border: 1px solid #c5d0db;
-                border-radius: 3px;
-                min-height: 16px;
-                max-height: 16px;
-                text-align: center;
-                color: #1f2937;
-                font-size: 10px;
-                font-weight: 700;
-            }
-            QProgressBar#QueueProgress::chunk {
-                background-color: #198754;
-                border-radius: 2px;
-            }
-            QSplitter::handle {
-                background-color: #d0d0d0;
-            }
-        """)
+        # Styling is provided by app_theme.py (Classic Desktop Utility theme).
 
         central_widget = QWidget()
         central_widget.setObjectName("AppShell")
@@ -741,50 +581,63 @@ class FormManager(QMainWindow):
         settings_button.setFixedSize(36, 36)
         settings_button.clicked.connect(self.open_settings_dialog)
         header_layout.addWidget(settings_button)
+
+        # Native menu bar: File / Tasks / View / Help
+        self._build_menu_bar()
+
+        # Slim status header (brand + live status)
         main_layout.addWidget(header)
 
-        command_bar = QFrame()
-        command_bar.setObjectName("CommandBar")
-        command_layout = QHBoxLayout(command_bar)
-        command_layout.setContentsMargins(14, 7, 14, 7)
-        command_layout.setSpacing(8)
-        command_button_height = 42
-        add_sources_button = QPushButton("Add Sources")
-        add_sources_button.setObjectName("CommandButton")
-        add_sources_button.setProperty("variant", "secondary")
-        add_sources_button.setFixedHeight(command_button_height)
-        add_sources_button.clicked.connect(self.open_manual_add_dialog)
-        command_layout.addWidget(add_sources_button)
-        scan_source_button = QPushButton("Scan Source")
-        scan_source_button.setObjectName("CommandButton")
-        scan_source_button.setProperty("variant", "secondary")
-        scan_source_button.setFixedHeight(command_button_height)
-        scan_source_button.setIcon(self.style().standardIcon(QStyle.SP_FileDialogContentsView))
-        scan_source_button.setProperty("noAutoIcon", True)
-        scan_source_button.clicked.connect(self.open_quick_grade_dialog)
-        command_layout.addWidget(scan_source_button)
-        self.run_button = QPushButton("Run Grading")
-        self.run_button.setObjectName("CommandButton")
-        self.run_button.setProperty("variant", "secondary")
-        self.run_button.setFixedHeight(command_button_height)
-        self.run_button.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
-        self.run_button.setProperty("noAutoIcon", True)
-        self.run_button.clicked.connect(self.run_grader)
-        command_layout.addWidget(self.run_button)
-        self.stop_button = QPushButton("Stop Grading")
-        self.stop_button.setObjectName("CommandButton")
-        self.stop_button.setProperty("variant", "danger")
-        self.stop_button.setFixedHeight(command_button_height)
-        self.stop_button.clicked.connect(self.stop_grading)
+        # Icon toolbar: large square icon-above-label tool buttons grouped by
+        # function with thin vertical dividers (Classic Desktop Utility style).
+        toolbar = QFrame()
+        toolbar.setObjectName("IconToolbar")
+        toolbar_layout = QHBoxLayout(toolbar)
+        toolbar_layout.setContentsMargins(10, 6, 10, 6)
+        toolbar_layout.setSpacing(2)
+        tool_height = 64
+
+        def make_tool(text, slot):
+            btn = QToolButton()
+            btn.setObjectName("ToolButton")
+            btn.setText(text)
+            btn.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+            btn.setToolTip(text)
+            btn.setIconSize(QSize(36, 36))
+            btn.setFixedSize(64, tool_height)
+            btn.clicked.connect(slot)
+            return btn
+
+        def tool_divider():
+            div = QFrame()
+            div.setFrameShape(QFrame.VLine)
+            div.setFixedHeight(tool_height - 12)
+            return div
+
+        self.add_sources_button = make_tool("Add Sources", self.open_manual_add_dialog)
+        self.scan_source_button = make_tool("Scan Source", self.open_quick_grade_dialog)
+        toolbar_layout.addWidget(self.add_sources_button)
+        toolbar_layout.addWidget(self.scan_source_button)
+        toolbar_layout.addWidget(tool_divider())
+        self.run_button = make_tool("Run Grading", self.run_grader)
+        self.stop_button = make_tool("Stop Grading", self.stop_grading)
         self.stop_button.hide()
-        command_layout.addWidget(self.stop_button)
-        answer_keys_button = QPushButton("Answer Keys")
-        answer_keys_button.setObjectName("CommandButton")
-        answer_keys_button.setProperty("variant", "secondary")
-        answer_keys_button.setFixedHeight(command_button_height)
-        answer_keys_button.clicked.connect(self.open_answer_key_dashboard)
-        command_layout.addWidget(answer_keys_button)
-        command_layout.addStretch()
+        toolbar_layout.addWidget(self.run_button)
+        toolbar_layout.addWidget(self.stop_button)
+        toolbar_layout.addWidget(tool_divider())
+        self.answer_keys_button = make_tool("Answer Keys", self.open_answer_key_dashboard)
+        self.audit_button = make_tool("Decision Audit", self.open_decision_audit_viewer)
+        self.export_button = make_tool("Export CSV", self.export_results_csv_dialog)
+        toolbar_layout.addWidget(self.answer_keys_button)
+        toolbar_layout.addWidget(self.audit_button)
+        toolbar_layout.addWidget(self.export_button)
+        toolbar_layout.addWidget(tool_divider())
+        self.report_button = make_tool("Run Report", self.generate_run_report)
+        self.settings_button = make_tool("Settings", self.open_settings_dialog)
+        toolbar_layout.addWidget(self.report_button)
+        toolbar_layout.addWidget(self.settings_button)
+        toolbar_layout.addStretch()
+
         self.activity_dot = QLabel()
         self.activity_dot.setObjectName("ActivityDot")
         self.activity_dot.setFixedSize(9, 9)
@@ -792,50 +645,31 @@ class FormManager(QMainWindow):
         self.activity_label = QLabel("Idle")
         self.activity_label.setObjectName("ActivityStatus")
         self.activity_label.setProperty("state", "idle")
-        command_layout.addWidget(self.activity_dot)
-        command_layout.addWidget(self.activity_label)
+        toolbar_layout.addWidget(self.activity_dot)
+        toolbar_layout.addWidget(self.activity_label)
         self.command_summary = QLabel("0 forms")
         self.command_summary.setObjectName("Muted")
-        command_layout.addWidget(self.command_summary)
+        toolbar_layout.addWidget(self.command_summary)
 
-        more_button = QPushButton("...")
-        more_button.setObjectName("IconButton")
-        more_button.setFixedSize(36, 36)
-        more_button.setToolTip("More actions")
-        more_menu = QMenu(more_button)
-        login_action = more_menu.addAction("Login to Google")
-        login_action.triggered.connect(self.login_google)
-        logout_action = more_menu.addAction("Logout Google Account")
-        logout_action.triggered.connect(self.logout_google)
-        more_menu.addSeparator()
-        auto_run_action = more_menu.addAction("Schedule Automatic Runs")
-        auto_run_action.triggered.connect(self.open_auto_run_dialog)
-        grade_all_action = more_menu.addAction("Grade All Queued Forms")
-        grade_all_action.triggered.connect(self.grade_all_forms_in_all_folders)
-        more_menu.addSeparator()
-        audit_action = more_menu.addAction("View Decision Audit")
-        audit_action.triggered.connect(self.open_decision_audit_viewer)
-        export_action = more_menu.addAction("Export Results (CSV)")
-        export_action.triggered.connect(self.export_results_csv_dialog)
-        report_action = more_menu.addAction("Generate Run Report")
-        report_action.triggered.connect(self.generate_run_report)
-        self.dark_mode_action = more_menu.addAction("Toggle Dark Mode")
-        self.dark_mode_action.triggered.connect(self.toggle_dark_mode)
-        more_menu.addSeparator()
-        remove_action = more_menu.addAction("Remove Selected Form")
-        remove_action.triggered.connect(self.remove_form)
-        clear_action = more_menu.addAction("Clear Completed Forms")
-        clear_action.triggered.connect(self.clear_finished_forms_silently)
-        clear_all_action = more_menu.addAction("Clear All Forms")
-        clear_all_action.triggered.connect(lambda: self.clear_all_forms(confirm=True))
-        more_menu.addSeparator()
-        exit_action = more_menu.addAction("Exit")
-        exit_action.triggered.connect(self.exit_app)
-        more_button.setMenu(more_menu)
-        self.login_action = login_action
-        self.logout_action = logout_action
-        command_layout.addWidget(more_button)
-        main_layout.addWidget(command_bar)
+        main_layout.addWidget(toolbar)
+
+        # Apply themed pictograph icons to all toolbar tool buttons.
+        toolbar_icons = {
+            "Add Sources": ("plus", ACCENT_GREEN),
+            "Scan Source": ("search", ACCENT_ORANGE),
+            "Run Grading": ("play", ACCENT_GREEN),
+            "Stop Grading": ("stop", ACCENT_RED),
+            "Answer Keys": ("key", ACCENT_PURPLE),
+            "Decision Audit": ("doc", ACCENT_BLUE),
+            "Export CSV": ("tray", ACCENT_PURPLE),
+            "Run Report": ("chart", ACCENT_ORANGE),
+            "Settings": ("gear", ACCENT_SLATE),
+        }
+        for button in toolbar.findChildren(QToolButton):
+            icon_spec = toolbar_icons.get(button.text())
+            if icon_spec:
+                button.setIcon(pictograph_icon(icon_spec[0], size=40, accent=icon_spec[1]))
+        self._apply_toolbar_responsive_state = True
 
         workspace = QSplitter(Qt.Horizontal)
         workspace.setObjectName("WorkspaceSplitter")
@@ -1110,7 +944,63 @@ class FormManager(QMainWindow):
         workspace.setStretchFactor(0, 1)
         workspace.setStretchFactor(1, 1)
         queue_widget.setMinimumWidth(360)
-        main_layout.addWidget(workspace, 1)
+
+        # Left navigation sidebar (QTreeWidget#NavTree) + workspace.
+        body_wrap = QWidget()
+        body_wrap.setObjectName("BodyWrap")
+        body_layout = QHBoxLayout(body_wrap)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(0)
+        nav_sidebar = QFrame()
+        nav_sidebar.setObjectName("NavSidebar")
+        nav_layout = QVBoxLayout(nav_sidebar)
+        nav_layout.setContentsMargins(0, 4, 0, 4)
+        nav_layout.setSpacing(0)
+        self.nav_tree = QTreeWidget()
+        self.nav_tree.setObjectName("NavTree")
+        self.nav_tree.setHeaderHidden(True)
+        self.nav_tree.setIndentation(8)
+        self.nav_tree.setAnimated(True)
+        self.nav_tree.setFocusPolicy(Qt.NoFocus)
+        self.nav_tree.setMinimumWidth(170)
+        self.nav_tree.setMaximumWidth(240)
+        self.nav_tree.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+        nav_items = [
+            ("Forms", ["Add Sources", "Scan Source", "Grade All"]),
+            ("Answer Keys", ["Open Answer Keys"]),
+            ("Audit & Reports", ["Decision Audit", "Run Report"]),
+            ("Output", ["Export CSV", "Terminal"]),
+            ("Settings", ["Open Settings"]),
+        ]
+        nav_action_map = {
+            "Add Sources": self.open_manual_add_dialog,
+            "Scan Source": self.open_quick_grade_dialog,
+            "Grade All": self.grade_all_forms_in_all_folders,
+            "Open Answer Keys": self.open_answer_key_dashboard,
+            "Decision Audit": self.open_decision_audit_viewer,
+            "Run Report": self.generate_run_report,
+            "Export CSV": self.export_results_csv_dialog,
+            "Terminal": lambda: self.set_terminal_state("open"),
+            "Open Settings": self.open_settings_dialog,
+        }
+        top_items = []
+        for top_label, children in nav_items:
+            top = QTreeWidgetItem([top_label])
+            top.setFlags(top.flags() & ~Qt.ItemIsSelectable)
+            for child_label in children:
+                child = QTreeWidgetItem([child_label])
+                child.setIcon(0, small_icon("gear", 16, ACCENT_SLATE))
+                child.setData(0, Qt.UserRole, child_label)
+                top.addChild(child)
+            self.nav_tree.addTopLevelItem(top)
+            top_items.append(top)
+        self.nav_tree.expandAll()
+        self.nav_tree.currentItemChanged.connect(self._on_nav_selected)
+        nav_layout.addWidget(self.nav_tree)
+        nav_layout.addStretch()
+        body_layout.addWidget(nav_sidebar)
+        body_layout.addWidget(workspace, 1)
+        main_layout.addWidget(body_wrap, 1)
 
         self.terminal_frame = QFrame()
         self.terminal_frame.setObjectName("TerminalFrame")
@@ -1681,6 +1571,89 @@ class FormManager(QMainWindow):
             icon.setStyleSheet("color:#16845b; font-weight:700;")
         else:
             icon.setStyleSheet("color:#637485; font-weight:700;")
+
+    def _build_menu_bar(self):
+        menu_bar = self.menuBar()
+        menu_bar.setObjectName("MainMenuBar")
+
+        file_menu = menu_bar.addMenu("File")
+        self.login_action = file_menu.addAction("Login to Google")
+        self.login_action.triggered.connect(self.login_google)
+        self.logout_action = file_menu.addAction("Logout Google Account")
+        self.logout_action.triggered.connect(self.logout_google)
+        file_menu.addSeparator()
+        export_action = file_menu.addAction("Export Results (CSV)")
+        export_action.triggered.connect(self.export_results_csv_dialog)
+        generate_report_action = file_menu.addAction("Generate Run Report")
+        generate_report_action.triggered.connect(self.generate_run_report)
+        file_menu.addSeparator()
+        exit_action = file_menu.addAction("Exit")
+        exit_action.triggered.connect(self.exit_app)
+
+        tasks_menu = menu_bar.addMenu("Tasks")
+        add_sources_action = tasks_menu.addAction("Add Sources")
+        add_sources_action.triggered.connect(self.open_manual_add_dialog)
+        scan_source_action = tasks_menu.addAction("Scan Source")
+        scan_source_action.triggered.connect(self.open_quick_grade_dialog)
+        tasks_menu.addSeparator()
+        run_action = tasks_menu.addAction("Run Grading")
+        run_action.triggered.connect(self.run_grader)
+        stop_action = tasks_menu.addAction("Stop Grading")
+        stop_action.triggered.connect(self.stop_grading)
+        tasks_menu.addSeparator()
+        schedule_action = tasks_menu.addAction("Schedule Automatic Runs")
+        schedule_action.triggered.connect(self.open_auto_run_dialog)
+        grade_all_action = tasks_menu.addAction("Grade All Queued Forms")
+        grade_all_action.triggered.connect(self.grade_all_forms_in_all_folders)
+        answer_keys_action = tasks_menu.addAction("Answer Keys")
+        answer_keys_action.triggered.connect(self.open_answer_key_dashboard)
+        tasks_menu.addSeparator()
+        remove_action = tasks_menu.addAction("Remove Selected Form")
+        remove_action.triggered.connect(self.remove_form)
+        clear_done_action = tasks_menu.addAction("Clear Completed Forms")
+        clear_done_action.triggered.connect(self.clear_finished_forms_silently)
+        clear_all_action = tasks_menu.addAction("Clear All Forms")
+        clear_all_action.triggered.connect(lambda: self.clear_all_forms(confirm=True))
+
+        view_menu = menu_bar.addMenu("View")
+        audit_action = view_menu.addAction("Decision Audit")
+        audit_action.triggered.connect(self.open_decision_audit_viewer)
+        reports_action = view_menu.addAction("Reports")
+        reports_action.triggered.connect(self.generate_run_report)
+        terminal_action = view_menu.addAction("Terminal")
+        terminal_action.triggered.connect(lambda: self.set_terminal_state("open"))
+
+        help_menu = menu_bar.addMenu("Help")
+        about_action = help_menu.addAction("About")
+        about_action.triggered.connect(self._show_about_dialog)
+
+    def _show_about_dialog(self):
+        QMessageBox.about(
+            self,
+            "About Classic Form Grader",
+            "Google Form Autograder\n\nClassic Desktop Utility UI",
+        )
+
+    def _on_nav_selected(self, current, previous):
+        if current is None or not (current.flags() & Qt.ItemIsSelectable):
+            return
+        label = current.data(0, Qt.UserRole)
+        if label:
+            nav_action_map = {
+                "Add Sources": self.open_manual_add_dialog,
+                "Scan Source": self.open_quick_grade_dialog,
+                "Grade All": self.grade_all_forms_in_all_folders,
+                "Open Answer Keys": self.open_answer_key_dashboard,
+                "Decision Audit": self.open_decision_audit_viewer,
+                "Run Report": self.generate_run_report,
+                "Export CSV": self.export_results_csv_dialog,
+                "Terminal": lambda: self.set_terminal_state("open"),
+                "Open Settings": self.open_settings_dialog,
+            }
+            handler = nav_action_map.get(label)
+            if handler:
+                handler()
+                self.nav_tree.setCurrentItem(previous if previous else None)
 
     def set_terminal_state(self, state):
         self.terminal_state = state
@@ -3553,42 +3526,15 @@ class FormManager(QMainWindow):
             if "grading_mode" not in config:
                 config["grading_mode"] = "Whole Form"
                 modified = True
-            if "dark_mode" not in config:
-                config["dark_mode"] = False
-                modified = True
             
             if modified:
                 with open("config.json", "w", encoding="utf-8") as f:
                     json.dump(config, f, indent=4)
                     
             self.grading_mode = config.get("grading_mode", "Whole Form")
-            set_dark_mode(bool(config.get("dark_mode", False)))
-            self._apply_dark_mode_state()
         except Exception as e:
             print(f"Error loading config: {e}")
             self.grading_mode = "Whole Form"
-
-    def toggle_dark_mode(self):
-        set_dark_mode(not is_dark_mode())
-        self._apply_dark_mode_state()
-        try:
-            if os.path.exists("config.json"):
-                with open("config.json", "r", encoding="utf-8") as f:
-                    config = json.load(f)
-            else:
-                config = {}
-            config["dark_mode"] = is_dark_mode()
-            with open("config.json", "w", encoding="utf-8") as f:
-                json.dump(config, f, indent=4)
-        except Exception as e:
-            print(f"Error saving dark mode config: {e}")
-
-    def _apply_dark_mode_state(self):
-        apply_widget_theme(self)
-        self.dark_mode_action.setText("Toggle Light Mode" if is_dark_mode() else "Toggle Dark Mode")
-        app = QApplication.instance()
-        if app is not None:
-            app.setStyleSheet(current_stylesheet())
 
     def _start_source_scan(self, sources, action, mode="all_forms", from_dt=None, to_dt=None):
         if hasattr(self, "source_scan_thread") and self.source_scan_thread and self.source_scan_thread.isRunning():

@@ -7,7 +7,7 @@ from datetime import timedelta
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import (QApplication, QPushButton, QSplitter, QFrame, QLabel,
-                             QScrollArea, QMenu, QMessageBox)
+                             QScrollArea, QMenu, QMessageBox, QToolButton, QTreeWidget)
 from PySide6.QtCore import Qt
 
 from app_theme import apply_application_theme
@@ -22,12 +22,12 @@ apply_application_theme(APP)
 def test_main_window_uses_approved_workspace_layout():
     window = FormManager()
     buttons = {button.text(): button for button in window.findChildren(QPushButton)}
-    assert {"Add Sources", "Scan Source", "Run Grading", "Answer Keys"}.issubset(buttons)
-    assert {buttons[name].height() for name in ("Add Sources", "Scan Source", "Run Grading", "Answer Keys")} == {42}
-    assert not buttons["Scan Source"].icon().isNull()
-    assert buttons["Run Grading"].objectName() == "CommandButton"
-    assert buttons["Run Grading"].property("variant") == "secondary"
-    assert not buttons["Run Grading"].icon().isNull()
+    tools = {button.text(): button for button in window.findChildren(QToolButton)}
+    assert {"Add Sources", "Scan Source", "Run Grading", "Answer Keys"}.issubset(tools)
+    assert {tools[name].height() for name in ("Add Sources", "Scan Source", "Run Grading", "Answer Keys")} == {64}
+    assert not tools["Scan Source"].icon().isNull()
+    assert tools["Run Grading"].objectName() == "ToolButton"
+    assert not tools["Run Grading"].icon().isNull()
     splitter = window.findChild(QSplitter, "WorkspaceSplitter")
     assert splitter is not None
     assert splitter.count() == 2
@@ -37,6 +37,9 @@ def test_main_window_uses_approved_workspace_layout():
     assert detail_scroll.verticalScrollBarPolicy() == Qt.ScrollBarAsNeeded
     assert window.form_list is not None
     assert window.detail_title is not None
+    nav_tree = window.findChild(QTreeWidget, "NavTree")
+    assert nav_tree is not None
+    assert nav_tree.topLevelItemCount() >= 5
 
 
 def test_terminal_drawer_collapses_opens_and_expands():
@@ -603,19 +606,20 @@ def test_context_remove_cancelled_keeps_item(monkeypatch):
     assert window.form_list.count() == 2
 
 
-def test_more_menu_exposes_export_audit_report_and_theme():
+def test_menu_bar_exposes_export_audit_report_and_login():
     window = _make_window()
+    menu_bar = window.menuBar()
+    actions = [a.text() for a in menu_bar.actions() if not a.isSeparator()]
+    assert actions == ["File", "Tasks", "View", "Help"]
     labels = []
-    more_button = next(
-        (btn for btn in window.findChildren(QPushButton) if btn.text() == "..."),
-        None,
-    )
-    if more_button is not None and more_button.menu() is not None:
-        labels = [a.text() for a in more_button.menu().actions() if not a.isSeparator()]
+    for menu in menu_bar.findChildren(QMenu):
+        labels.extend(a.text() for a in menu.actions() if not a.isSeparator() and a.text())
     assert any("Export Results" in label for label in labels)
     assert any("Decision Audit" in label for label in labels)
-    assert any("Run Report" in label for label in labels)
-    assert any("Dark Mode" in label or "Light Mode" in label for label in labels)
+    assert any("Generate Run Report" in label for label in labels)
+    assert any("Login to Google" in label for label in labels)
+    assert any("Logout Google Account" in label for label in labels)
+    assert not any("Dark Mode" in label or "Light Mode" in label for label in labels)
 
 
 def test_keyboard_shortcuts_are_registered():
@@ -627,18 +631,11 @@ def test_keyboard_shortcuts_are_registered():
         assert expected in keys, f"missing shortcut {expected}"
 
 
-def test_dark_mode_toggle_flips_state_and_persists(tmp_path, monkeypatch):
-    from app_theme import set_dark_mode, is_dark_mode
+def test_light_theme_only_no_dark_mode_toggle():
+    from app_theme import is_dark_mode
     window = _make_window()
-    set_dark_mode(False)
-    window.toggle_dark_mode()
-    assert is_dark_mode() is True
-    with open("config.json", "r", encoding="utf-8") as fh:
-        import json
-        cfg = json.load(fh)
-    assert cfg.get("dark_mode") is True
-    window.toggle_dark_mode()
     assert is_dark_mode() is False
+    assert not hasattr(window, "toggle_dark_mode")
 
 
 def test_audit_records_loader_reads_jsonl(tmp_path):
