@@ -16,7 +16,16 @@ def run_scan_source_dialog(owner):
     """Open the Scan Source dialog and dispatch the selected action to the owner."""
     dialog = QDialog(owner)
     dialog.setWindowTitle("Scan Source")
-    dialog.setGeometry(100, 100, 620, 260)
+    dialog.resize(620, 260)
+    # Center on the owner window (hard-coded screen coords would place the
+    # dialog on the primary monitor, far away from the main window).
+    parent = owner.window() if owner is not None else None
+    if parent is not None:
+        parent_frame = parent.frameGeometry()
+        dialog.move(
+            parent_frame.center().x() - dialog.width() // 2,
+            parent_frame.center().y() - dialog.height() // 2,
+        )
 
     layout = QVBoxLayout()
 

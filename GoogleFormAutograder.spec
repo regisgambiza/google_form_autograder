@@ -11,6 +11,7 @@ a = Analysis(
         ('predefined_folders.json', '.'),
         ('client_secrets.json', '.'),
         ('assets/app_icon.ico', 'assets'),
+        ('gui_studio/theme.qss', 'gui_studio'),
     ],
     hiddenimports=[],
     hookspath=[],

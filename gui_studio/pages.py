@@ -1,0 +1,829 @@
+# gui_studio/pages.py - Content pages for the Studio shell. Pages are pure
+# widgets; the main window owns all orchestration and drives them through
+# the small public APIs defined here.
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import (
+    QComboBox,
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QProgressBar,
+    QPushButton,
+    QScrollArea,
+    QSizePolicy,
+    QStackedWidget,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
+
+from gui_studio import theme as T
+from gui_studio.widgets import (
+    FeedRow,
+    OutcomeBar,
+    Pill,
+    RingProgress,
+    SegmentedControl,
+    StageStepper,
+    StatCard,
+    legend_chip,
+    repolish,
+)
+
+HEALTH_MAP = {
+    "HEALTHY": ("online", "Online"),
+    "DEGRADED": ("degraded", "Degraded"),
+    "RATE_LIMITED": ("degraded", "Rate limited"),
+    "RECOVERING": ("degraded", "Recovering"),
+    "OUT_OF_CREDITS": ("offline", "Out of credits"),
+    "OFFLINE": ("offline", "Offline"),
+    "DISABLED": ("offline", "Disabled"),
+}
+
+MAX_FEED_ROWS = 400
+
+
+def _card(margins=(16, 14, 16, 14), spacing=8):
+    frame = QFrame()
+    frame.setObjectName("Card")
+    layout = QVBoxLayout(frame)
+    layout.setContentsMargins(*margins)
+    layout.setSpacing(spacing)
+    return frame, layout
+
+
+def _caption(text):
+    label = QLabel(str(text).upper())
+    label.setObjectName("CardCaption")
+    return label
+
+
+# ---------------------------------------------------------------------------
+# Dashboard
+# ---------------------------------------------------------------------------
+class DashboardPage(QWidget):
+    review_clicked = Signal()
+    run_clicked = Signal()
+    stop_clicked = Signal()
+    add_sources_clicked = Signal()
+    scan_clicked = Signal()
+    schedule_clicked = Signal()
+    open_activity_clicked = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(18, 16, 18, 16)
+        root.setSpacing(14)
+
+        hero = QHBoxLayout()
+        hero.setSpacing(14)
+        hero.addWidget(self._build_run_card(), 3)
+        hero.addLayout(self._build_side_column(), 2)
+        root.addLayout(hero, 0)
+
+        root.addWidget(self._build_console_card(), 1)
+
+    # -- run card ----------------------------------------------------------
+    def _build_run_card(self):
+        card, layout = _card((20, 16, 20, 16), 10)
+        self.run_card = card
+
+        header = QHBoxLayout()
+        header.addWidget(_caption("Grading run"))
+        header.addStretch()
+        self.run_pill = QFrame()
+        self.run_pill.setObjectName("RunPill")
+        self.run_pill.setProperty("state", "ready")
+        pill_layout = QHBoxLayout(self.run_pill)
+        pill_layout.setContentsMargins(10, 3, 12, 3)
+        pill_layout.setSpacing(6)
+        self.run_pill_dot = QLabel()
+        self.run_pill_dot.setObjectName("StateDot")
+        self.run_pill_dot.setProperty("state", "ready")
+        self.run_pill_dot.setFixedSize(8, 8)
+        self.run_pill_text = QLabel("Ready")
+        self.run_pill_text.setObjectName("RunPillText")
+        self.run_pill_text.setProperty("state", "ready")
+        pill_layout.addWidget(self.run_pill_dot)
+        pill_layout.addWidget(self.run_pill_text)
+        header.addWidget(self.run_pill)
+        layout.addLayout(header)
+
+        body = QHBoxLayout()
+        body.setSpacing(18)
+        self.ring = RingProgress(diameter=150)
+        self.ring.set_labels("0%", "ANSWERS")
+        body.addWidget(self.ring, 0, Qt.AlignTop | Qt.AlignHCenter)
+
+        info = QVBoxLayout()
+        info.setSpacing(6)
+        self.headline = QLabel("Ready to grade")
+        self.headline.setObjectName("Headline")
+        self.subline = QLabel("Add forms to the queue, then press Start grading.")
+        self.subline.setObjectName("Subline")
+        self.subline.setWordWrap(True)
+        info.addWidget(self.headline)
+        info.addWidget(self.subline)
+
+        chips = QHBoxLayout()
+        chips.setSpacing(8)
+        self.mode_chip = QFrame()
+        self.mode_chip.setObjectName("ModeChip")
+        mode_layout = QHBoxLayout(self.mode_chip)
+        mode_layout.setContentsMargins(10, 2, 10, 2)
+        self.mode_chip_text = QLabel("Whole Form")
+        self.mode_chip_text.setObjectName("ModeChipText")
+        mode_layout.addWidget(self.mode_chip_text)
+        self.model_label = QLabel("Model: idle")
+        self.model_label.setObjectName("Subline")
+        chips.addWidget(self.mode_chip)
+        chips.addWidget(self.model_label)
+        chips.addStretch()
+        info.addLayout(chips)
+
+        forms_row = QVBoxLayout()
+        forms_row.setSpacing(2)
+        self.forms_progress_label = QLabel("Forms 0 of 0 · 0%")
+        self.forms_progress_label.setObjectName("Subline")
+        self.forms_progress = QProgressBar()
+        self.forms_progress.setRange(0, 100)
+        self.forms_progress.setTextVisible(False)
+        forms_row.addWidget(self.forms_progress_label)
+        forms_row.addWidget(self.forms_progress)
+        info.addLayout(forms_row)
+
+        eta_row = QHBoxLayout()
+        eta_row.setSpacing(16)
+        self.eta_label = QLabel("ETA --:--")
+        self.elapsed_label = QLabel("Elapsed 00:00")
+        for label in (self.eta_label, self.elapsed_label):
+            label.setObjectName("Subline")
+            eta_row.addWidget(label)
+        eta_row.addStretch()
+        info.addLayout(eta_row)
+        info.addStretch()
+        body.addLayout(info, 1)
+        layout.addLayout(body)
+
+        self.stepper = StageStepper()
+        layout.addSpacing(4)
+        layout.addWidget(self.stepper)
+
+        controls = QHBoxLayout()
+        controls.setSpacing(8)
+        self.run_button = QPushButton("Start grading")
+        self.run_button.setObjectName("Primary")
+        self.stop_button = QPushButton("Stop")
+        self.stop_button.setObjectName("Danger")
+        self.stop_button.hide()
+        self.add_button = QPushButton("Add sources")
+        self.scan_button = QPushButton("Scan source")
+        self.schedule_button = QPushButton("Schedule runs")
+        controls.addWidget(self.run_button)
+        controls.addWidget(self.stop_button)
+        controls.addWidget(self.add_button)
+        controls.addWidget(self.scan_button)
+        controls.addWidget(self.schedule_button)
+        controls.addStretch()
+        layout.addLayout(controls)
+
+        self.run_button.clicked.connect(self.run_clicked)
+        self.stop_button.clicked.connect(self.stop_clicked)
+        self.add_button.clicked.connect(self.add_sources_clicked)
+        self.scan_button.clicked.connect(self.scan_clicked)
+        self.schedule_button.clicked.connect(self.schedule_clicked)
+        return card
+
+    # -- side column ---------------------------------------------------------
+    def _build_side_column(self):
+        column = QVBoxLayout()
+        column.setSpacing(14)
+
+        outcome, outcome_layout = _card((18, 14, 18, 14), 8)
+        head = QHBoxLayout()
+        head.addWidget(_caption("Outcome mix"))
+        head.addStretch()
+        self.outcome_legends = QHBoxLayout()
+        self.outcome_legends.setSpacing(12)
+        head.addLayout(self.outcome_legends)
+        outcome_layout.addLayout(head)
+        self.outcome_bar = OutcomeBar()
+        outcome_layout.addWidget(self.outcome_bar)
+        counts = QHBoxLayout()
+        counts.setSpacing(10)
+        self.accepted_card = StatCard("Accepted", "0", accent=T.GREEN)
+        self.rejected_card = StatCard("Rejected", "0", accent=T.RED)
+        self.review_card = StatCard("Needs review", "0", accent=T.ORANGE)
+        self.review_card.setCursor(Qt.PointingHandCursor)
+        self.review_card.setToolTip("Open the answer-key review queue")
+        counts.addWidget(self.accepted_card)
+        counts.addWidget(self.rejected_card)
+        counts.addWidget(self.review_card)
+        outcome_layout.addLayout(counts)
+        self.review_card.mousePressEvent = self._review_pressed
+        column.addWidget(outcome)
+
+        metrics, metrics_layout = _card((18, 14, 18, 14), 10)
+        metrics_layout.addWidget(_caption("Live metrics"))
+        grid = QGridLayout()
+        grid.setSpacing(10)
+        self.rate_card = StatCard("Answers / min", "0.0", accent=T.INDIGO)
+        self.backlog_card = StatCard("AI backlog", "0", accent=T.PURPLE)
+        self.latency_card = StatCard("Avg latency", "–", accent=T.BLUE)
+        self.pipeline_card = StatCard("Pipeline", "Idle", accent=T.TEAL)
+        self.det_card = StatCard("Deterministic", "0", accent=T.SLATE)
+        self.ai_card = StatCard("AI decisions", "0", accent=T.INDIGO)
+        grid.addWidget(self.rate_card, 0, 0)
+        grid.addWidget(self.backlog_card, 0, 1)
+        grid.addWidget(self.latency_card, 1, 0)
+        grid.addWidget(self.pipeline_card, 1, 1)
+        grid.addWidget(self.det_card, 0, 2)
+        grid.addWidget(self.ai_card, 1, 2)
+        metrics_layout.addLayout(grid)
+        column.addWidget(metrics)
+        column.addStretch()
+        return column
+
+    def _review_pressed(self, _event):
+        self.review_clicked.emit()
+
+    # -- console card ---------------------------------------------------------
+    def _build_console_card(self):
+        card, layout = _card((16, 12, 16, 12), 8)
+        self.console_card = card
+        head = QHBoxLayout()
+        head.addWidget(_caption("Live console"))
+        head.addStretch()
+        self.console_badge = QLabel("idle")
+        self.console_badge.setObjectName("CardCaption")
+        head.addWidget(self.console_badge)
+        self.console_open_button = QPushButton("Open activity →")
+        self.console_open_button.setObjectName("Ghost")
+        self.console_open_button.setProperty("noAutoIcon", True)
+        head.addWidget(self.console_open_button)
+        layout.addLayout(head)
+        self.console = QTextEdit()
+        self.console.setObjectName("ConsoleEdit")
+        self.console.setReadOnly(True)
+        self.console.document().setMaximumBlockCount(900)
+        layout.addWidget(self.console, 1)
+        self.console_open_button.clicked.connect(self.open_activity_clicked)
+        return card
+
+    # -- public API -----------------------------------------------------------
+    def set_run_pill(self, text, state):
+        self.run_pill_text.setText(str(text))
+        self.run_pill.setProperty("state", state)
+        self.run_pill_dot.setProperty("state", state)
+        self.run_pill_text.setProperty("state", state)
+        repolish(self.run_pill)
+        repolish(self.run_pill_dot)
+        repolish(self.run_pill_text)
+
+    def set_headline(self, text):
+        self.headline.setText(str(text))
+
+    def set_subline(self, text):
+        self.subline.setText(str(text))
+
+    def set_mode_chip(self, text):
+        self.mode_chip_text.setText(str(text))
+
+    def set_model(self, text, tooltip=""):
+        self.model_label.setText(f"Model: {text}")
+        self.model_label.setToolTip(tooltip or text)
+
+    def set_answer_progress(self, current, total):
+        fraction = (current / total) if total else 0.0
+        self.ring.set_fraction(fraction)
+        self.ring.set_labels(f"{int(round(fraction * 100))}%", "ANSWERS")
+
+    def set_forms_progress(self, done, total):
+        percent = int(round((done / total) * 100)) if total else 0
+        self.forms_progress.setValue(percent)
+        self.forms_progress_label.setText(f"Forms {done} of {total} · {percent}%")
+
+    def set_eta(self, text):
+        self.eta_label.setText(f"ETA {text}")
+
+    def set_elapsed(self, text):
+        self.elapsed_label.setText(f"Elapsed {text}")
+
+    def set_stage_states(self, states):
+        self.stepper.set_states(states)
+
+    def set_stage_counts(self, counts):
+        self.stepper.set_counts(counts)
+
+    def set_outcomes(self, accepted, rejected, review):
+        self.outcome_bar.set_data(accepted, rejected, review)
+        self.accepted_card.set_value(int(accepted))
+        self.rejected_card.set_value(int(rejected))
+        self.review_card.set_value(int(review))
+        while self.outcome_legends.count():
+            item = self.outcome_legends.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        for label, count, color in (
+            ("Accepted", accepted, T.GREEN),
+            ("Rejected", rejected, T.RED),
+            ("Review", review, T.ORANGE),
+        ):
+            self.outcome_legends.addWidget(legend_chip(color, f"{label} {int(count)}"))
+
+    def set_metrics(self, rate=None, backlog=None, latency=None, pipeline=None,
+                    det=None, ai=None):
+        """Update live-metric cards. Only the values explicitly passed are
+        changed; None leaves a card untouched (partial updates are frequent)."""
+        if rate is not None:
+            self.rate_card.set_value(rate)
+        if backlog is not None:
+            self.backlog_card.set_value(backlog)
+        if latency is not None:
+            self.latency_card.set_value(latency)
+        if pipeline is not None:
+            self.pipeline_card.set_value(pipeline)
+        if det is not None:
+            self.det_card.set_value(det)
+        if ai is not None:
+            self.ai_card.set_value(ai)
+
+    def set_running(self, running):
+        self.run_button.setVisible(not running)
+        self.stop_button.setVisible(running)
+
+    def append_console(self, html):
+        self.console.append(html)
+
+    def clear_console(self):
+        self.console.clear()
+
+    def set_console_badge(self, text):
+        self.console_badge.setText(str(text))
+
+
+# ---------------------------------------------------------------------------
+# Queue
+# ---------------------------------------------------------------------------
+class QueuePage(QWidget):
+    add_sources_clicked = Signal()
+    scan_clicked = Signal()
+    clear_all_clicked = Signal()
+    clear_done_clicked = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(10)
+
+        toolbar = QHBoxLayout()
+        toolbar.setSpacing(8)
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("Search forms…  (Ctrl+K)")
+        self.search_input.setFixedWidth(260)
+        self.filter_combo = QComboBox()
+        self.filter_combo.addItems(["All", "Running", "Queued", "Done", "Partial", "Skipped", "Failed"])
+        self.filter_combo.setFixedWidth(120)
+        self.summary_label = QLabel("0 forms")
+        self.summary_label.setObjectName("Subline")
+        toolbar.addWidget(self.search_input)
+        toolbar.addWidget(self.filter_combo)
+        toolbar.addWidget(self.summary_label)
+        toolbar.addStretch()
+        add_button = QPushButton("Add sources")
+        add_button.clicked.connect(self.add_sources_clicked)
+        scan_button = QPushButton("Scan source")
+        scan_button.clicked.connect(self.scan_clicked)
+        clear_done_button = QPushButton("Clear completed")
+        clear_done_button.clicked.connect(self.clear_done_clicked)
+        clear_all_button = QPushButton("Clear all")
+        clear_all_button.setObjectName("Danger")
+        clear_all_button.clicked.connect(self.clear_all_clicked)
+        for button in (add_button, scan_button, clear_done_button, clear_all_button):
+            toolbar.addWidget(button)
+        layout.addLayout(toolbar)
+
+        self.list = QListWidget()
+        self.list.setObjectName("QueueList")
+        self.list.setSpacing(4)
+        self.list.setSelectionMode(QListWidget.ExtendedSelection)
+        self.list.setContextMenuPolicy(Qt.CustomContextMenu)
+        layout.addWidget(self.list, 1)
+
+    def set_summary(self, text, tooltip=""):
+        self.summary_label.setText(str(text))
+        self.summary_label.setToolTip(tooltip)
+
+
+# ---------------------------------------------------------------------------
+# Providers
+# ---------------------------------------------------------------------------
+class ProviderCard(QFrame):
+    def __init__(self, name, parent=None):
+        super().__init__(parent)
+        self.setObjectName("ProviderCard")
+        self.setProperty("health", "unknown")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(6)
+        head = QHBoxLayout()
+        title = QLabel(name)
+        title.setObjectName("ProviderName")
+        head.addWidget(title)
+        head.addStretch()
+        self.tag = QLabel("Unknown")
+        self.tag.setObjectName("HealthTag")
+        self.tag.setProperty("state", "unknown")
+        head.addWidget(self.tag)
+        layout.addLayout(head)
+        self.rows = {}
+        for key in ("Health", "Circuit", "Queue", "Done / failed",
+                    "Last model", "Last latency", "Last error"):
+            row = QHBoxLayout()
+            key_label = QLabel(key)
+            key_label.setObjectName("ModelKey")
+            value = QLabel("–")
+            value.setObjectName("ModelVal")
+            value.setWordWrap(False)
+            row.addWidget(key_label, 0)
+            row.addStretch()
+            row.addWidget(value, 1)
+            value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            layout.addLayout(row)
+            self.rows[key] = value
+
+    def set_info(self, info):
+        health_raw = str(info.get("health", "-"))
+        state, label = HEALTH_MAP.get(health_raw, ("unknown", health_raw.title()))
+        self.tag.setText(label)
+        self.tag.setProperty("state", state)
+        repolish(self.tag)
+        self.setProperty("health", state)
+        repolish(self)
+        self.rows["Health"].setText(health_raw.title() if health_raw != "-" else "–")
+        self.rows["Circuit"].setText(str(info.get("circuit", "–")))
+        self.rows["Queue"].setText(str(info.get("queue", "–")))
+        done = info.get("done", 0)
+        failed = info.get("failed", 0)
+        self.rows["Done / failed"].setText(f"{done} / {failed}")
+        model = str(info.get("last_model", "–"))
+        self.rows["Last model"].setText(model if model != "-" else "–")
+        self.rows["Last model"].setToolTip(model)
+        self.rows["Last latency"].setText(f"{info.get('last_ms', 0)} ms")
+        error = str(info.get("last_error", "–"))
+        self.rows["Last error"].setText(error if error != "-" else "–")
+        self.rows["Last error"].setToolTip(error)
+
+
+class WorkerChip(QFrame):
+    def __init__(self, title, parent=None):
+        super().__init__(parent)
+        self.setObjectName("WorkerChip")
+        self.setProperty("status", "idle")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(2)
+        head = QHBoxLayout()
+        name = QLabel(title)
+        name.setObjectName("WorkerTitle")
+        head.addWidget(name)
+        head.addStretch()
+        self.state = QLabel("Idle")
+        self.state.setObjectName("WorkerState")
+        self.state.setProperty("status", "idle")
+        head.addWidget(self.state)
+        layout.addLayout(head)
+        self.detail = QLabel("Waiting")
+        self.detail.setObjectName("WorkerDetail")
+        self.detail.setWordWrap(False)
+        layout.addWidget(self.detail)
+
+    def set_info(self, status, detail, tooltip=""):
+        status = str(status or "idle").lower()
+        self.state.setText(status.title())
+        self.state.setProperty("status", status)
+        repolish(self.state)
+        self.setProperty("status", status)
+        repolish(self)
+        self.detail.setText(str(detail))
+        self.detail.setToolTip(tooltip or str(detail))
+
+
+class ProvidersPage(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        outer.addWidget(scroll)
+        host = QWidget()
+        scroll.setWidget(host)
+        layout = QVBoxLayout(host)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(14)
+
+        providers_row = QHBoxLayout()
+        providers_row.setSpacing(14)
+        self.provider_cards = {}
+        for name, label in (
+            ("openrouter", "OpenRouter"),
+            ("llamacpp", "llama.cpp"),
+            ("ollama", "Ollama"),
+        ):
+            card = ProviderCard(label)
+            card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+            providers_row.addWidget(card, 1)
+            self.provider_cards[name] = card
+        layout.addLayout(providers_row)
+
+        model_card, model_layout = _card((18, 14, 18, 14), 6)
+        model_layout.addWidget(_caption("Active model"))
+        self.active_model = QLabel("Idle")
+        self.active_model.setObjectName("Headline")
+        self.active_model.setWordWrap(True)
+        model_layout.addWidget(self.active_model)
+        self.model_sub = QLabel("Reported by the grading pipeline heartbeat.")
+        self.model_sub.setObjectName("Subline")
+        model_layout.addWidget(self.model_sub)
+        layout.addWidget(model_card)
+
+        workers_card, workers_layout = _card((18, 14, 18, 14), 10)
+        workers_head = QHBoxLayout()
+        workers_head.addWidget(_caption("Workers"))
+        workers_head.addStretch()
+        self.app_summary = QLabel("App AI workers: –")
+        self.app_summary.setObjectName("Subline")
+        self.provider_summary = QLabel("Providers: –")
+        self.provider_summary.setObjectName("Subline")
+        workers_head.addWidget(self.app_summary)
+        workers_head.addSpacing(14)
+        workers_head.addWidget(self.provider_summary)
+        workers_layout.addLayout(workers_head)
+        self.worker_grid = QGridLayout()
+        self.worker_grid.setSpacing(8)
+        workers_layout.addLayout(self.worker_grid)
+        self._worker_columns = 3
+        self._worker_index = 0
+        self._worker_chips = {}
+        layout.addWidget(workers_card)
+
+        health_card, health_layout = _card((18, 14, 18, 14), 6)
+        health_layout.addWidget(_caption("Model health"))
+        self.model_rows = {}
+        for key, title in (
+            ("current", "Current models"),
+            ("success", "Success / latency"),
+            ("limits", "Rate limits / failures"),
+            ("json", "JSON reliability"),
+            ("quality", "Ollama quality"),
+            ("cooldown", "Cooldown"),
+            ("cost", "Cost"),
+            ("reason", "Why chosen"),
+        ):
+            row = QHBoxLayout()
+            key_label = QLabel(title)
+            key_label.setObjectName("ModelKey")
+            key_label.setMinimumWidth(140)
+            value = QLabel("–")
+            value.setObjectName("ModelVal")
+            value.setWordWrap(True)
+            row.addWidget(key_label)
+            row.addWidget(value, 1)
+            health_layout.addLayout(row)
+            self.model_rows[key] = value
+        layout.addWidget(health_card)
+        layout.addStretch()
+
+    # -- API --------------------------------------------------------------
+    def set_provider(self, name, info):
+        card = self.provider_cards.get(name)
+        if card:
+            card.set_info(info)
+
+    def set_active_model(self, text, tooltip=""):
+        self.active_model.setText(str(text))
+        self.active_model.setToolTip(tooltip or str(text))
+
+    def set_active_model_sub(self, text):
+        self.model_sub.setText(str(text))
+
+    def add_worker_chip(self, worker_id, title):
+        if worker_id in self._worker_chips:
+            return self._worker_chips[worker_id]
+        chip = WorkerChip(title)
+        row = self._worker_index // self._worker_columns
+        col = self._worker_index % self._worker_columns
+        self.worker_grid.addWidget(chip, row, col)
+        self._worker_index += 1
+        self._worker_chips[worker_id] = chip
+        return chip
+
+    def set_worker_chip(self, worker_id, status, detail, tooltip=""):
+        chip = self._worker_chips.get(worker_id)
+        if chip:
+            chip.set_info(status, detail, tooltip)
+
+    def remove_worker_chip(self, worker_id):
+        chip = self._worker_chips.pop(worker_id, None)
+        if not chip:
+            return
+        self.worker_grid.removeWidget(chip)
+        chip.setParent(None)
+        chip.deleteLater()
+        self._rebuild_worker_grid()
+
+    def _rebuild_worker_grid(self):
+        chips = list(self._worker_chips.values())
+        while self.worker_grid.count():
+            item = self.worker_grid.takeAt(0)
+            if item.widget():
+                self.worker_grid.removeWidget(item.widget())
+        self._worker_index = 0
+        for chip in chips:
+            row = self._worker_index // self._worker_columns
+            col = self._worker_index % self._worker_columns
+            self.worker_grid.addWidget(chip, row, col)
+            self._worker_index += 1
+
+    def set_worker_summaries(self, app_text, provider_text):
+        self.app_summary.setText(app_text)
+        self.provider_summary.setText(provider_text)
+
+    def set_model_health(self, key, text, tooltip=None):
+        row = self.model_rows.get(key)
+        if row:
+            row.setText(str(text))
+            row.setToolTip(str(tooltip or text or ""))
+
+
+# ---------------------------------------------------------------------------
+# Activity
+# ---------------------------------------------------------------------------
+class ActivityPage(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(10)
+
+        self.segments = SegmentedControl({
+            "feed": "Answer feed",
+            "console": "AI grading",
+            "pipeline": "Pipeline (–)",
+            "det": "Deterministic (–)",
+            "ai": "AI workers (–)",
+            "providers": "Providers (–)",
+            "agg": "Aggregator (–)",
+        })
+        layout.addWidget(self.segments)
+
+        self.stack = QStackedWidget()
+
+        self.feed_list = QListWidget()
+        self.feed_list.setObjectName("FeedList")
+        self.stack.addWidget(self.feed_list)
+
+        self.console = self._make_console()
+        self.pipeline_output = self._make_console()
+        self.det_output = self._make_console()
+        self.ai_output = self._make_console()
+        self.provider_output = self._make_console()
+        self.agg_output = self._make_console()
+        for widget in (self.console, self.pipeline_output, self.det_output,
+                       self.ai_output, self.provider_output, self.agg_output):
+            self.stack.addWidget(widget)
+
+        layout.addWidget(self.stack, 1)
+
+        order = ["feed", "console", "pipeline", "det", "ai", "providers", "agg"]
+        for index, key in enumerate(order):
+            self.segments.get(key).clicked.connect(
+                lambda _checked=False, idx=index: self.stack.setCurrentIndex(idx)
+            )
+
+    @staticmethod
+    def _make_console():
+        widget = QTextEdit()
+        widget.setObjectName("ConsoleEdit")
+        widget.setReadOnly(True)
+        widget.document().setMaximumBlockCount(1200)
+        return widget
+
+    # -- API --------------------------------------------------------------
+    def append_console(self, html):
+        self.console.append(html)
+
+    def append_pipeline(self, text):
+        self.pipeline_output.append(text)
+
+    def append_det(self, text):
+        self.det_output.append(text)
+
+    def append_ai(self, text):
+        self.ai_output.append(text)
+
+    def append_provider(self, text):
+        self.provider_output.append(text)
+
+    def append_agg(self, text):
+        self.agg_output.append(text)
+
+    def route_raw(self, text):
+        """Route worker-tagged diagnostic lines (same rules as the old tabs)."""
+        if "[Worker: Producer]" in text:
+            self.append_pipeline(text)
+        if "[Worker: Deterministic]" in text:
+            self.append_det(text)
+        if "[Worker: AI]" in text or "[APP WORKER]" in text:
+            self.append_ai(text)
+        if "[PROVIDER " in text or "[PROVIDER]" in text:
+            self.append_provider(text)
+        if "[Worker: Aggregator]" in text:
+            self.append_agg(text)
+        if "[DISPATCH METRICS]" in text or "[DISPATCH]" in text:
+            self.append_pipeline(text)
+            self.append_det(text)
+            self.append_ai(text)
+            self.append_agg(text)
+
+    def clear_all(self):
+        for widget in (self.console, self.pipeline_output, self.det_output,
+                       self.ai_output, self.provider_output, self.agg_output):
+            widget.clear()
+        self.feed_list.clear()
+
+    def set_badge(self, key, text):
+        labels = {
+            "pipeline": "Pipeline",
+            "det": "Deterministic",
+            "ai": "AI workers",
+            "providers": "Providers",
+            "agg": "Aggregator",
+        }
+        if key in labels:
+            self.segments.get(key).setText(f"{labels[key]} ({text})")
+
+    def add_answer_row(self, event):
+        row = FeedRow(event)
+        item = QListWidgetItem(self.feed_list)
+        item.setSizeHint(row.sizeHint())
+        self.feed_list.insertItem(0, item)
+        self.feed_list.setItemWidget(item, row)
+        while self.feed_list.count() > MAX_FEED_ROWS:
+            self.feed_list.takeItem(self.feed_list.count() - 1)
+
+    def add_info_row(self, glyph, title, sub="", tone="neutral"):
+        """Generic feed row for run lifecycle events (start/complete/skipped)."""
+        colors = {
+            "good": (T.GREEN, T.GREEN_TINT, T.GREEN_TEXT),
+            "warn": (T.ORANGE, T.ORANGE_TINT, T.ORANGE_TEXT),
+            "bad": (T.RED, T.RED_TINT, T.RED_TEXT),
+            "neutral": (T.INDIGO, T.INDIGO_TINT, T.INDIGO_DARK),
+        }
+        accent, tint, text_color = colors.get(tone, colors["neutral"])
+        row = QFrame()
+        row.setObjectName("FeedRow")
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(10)
+        badge = QLabel(str(glyph))
+        badge.setAlignment(Qt.AlignCenter)
+        badge.setFixedSize(72, 22)
+        badge.setStyleSheet(
+            f"background: {tint}; color: {text_color}; border-radius: 10px;"
+            "font-size: 8pt; font-weight: 800;"
+        )
+        column = QVBoxLayout()
+        column.setSpacing(1)
+        head = QLabel(title)
+        head.setObjectName("FeedTitle")
+        detail = QLabel(sub)
+        detail.setObjectName("FeedMeta")
+        column.addWidget(head)
+        if sub:
+            column.addWidget(detail)
+        layout.addWidget(badge)
+        layout.addLayout(column, 1)
+        item = QListWidgetItem(self.feed_list)
+        item.setSizeHint(row.sizeHint())
+        self.feed_list.insertItem(0, item)
+        self.feed_list.setItemWidget(item, row)
+        while self.feed_list.count() > MAX_FEED_ROWS:
+            self.feed_list.takeItem(self.feed_list.count() - 1)
+
+    def goto_feed(self):
+        self.segments.set_active("feed")
+        self.stack.setCurrentIndex(0)
+
+    def goto_console(self):
+        self.segments.set_active("console")
+        self.stack.setCurrentIndex(1)
