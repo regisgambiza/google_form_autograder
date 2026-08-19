@@ -23,21 +23,29 @@ from datetime import datetime, time, timedelta, timezone
 from urllib.parse import urlparse
 
 from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QTimer, QThread, Signal
-from PySide6.QtGui import QAction, QCursor, QKeySequence, QShortcut
+from PySide6.QtGui import QAction, QColor, QCursor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
     QFrame,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
-    QListWidgetItem,
+    QMainWindow,
     QMenu,
     QMessageBox,
     QProgressDialog,
     QPushButton,
+    QProgressBar,
+    QSplitter,
     QStackedWidget,
     QSystemTrayIcon,
+    QTableWidget,
+    QTableWidgetItem,
+    QToolBar,
     QToolButton,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -61,8 +69,25 @@ from settings_dialog import show_settings_dialog
 
 from gui_studio import telemetry
 from gui_studio import theme as T
-from gui_studio.pages import ActivityPage, DashboardPage, ProvidersPage, QueuePage
-from gui_studio.widgets import QueueRow, repolish
+from gui_studio.pages import (
+    QUEUE_COLUMNS,
+    ActivityPage,
+    DashboardPage,
+    ProvidersPage,
+    QueueTablePage,
+)
+from gui_studio.widgets import QueueRow, repolish, status_label
+
+# Colorful classic-utility toolbar icons (same painter the dialogs already use).
+from app_theme import (
+    ACCENT_BLUE,
+    ACCENT_GREEN,
+    ACCENT_ORANGE,
+    ACCENT_PURPLE,
+    ACCENT_RED,
+    ACCENT_SLATE,
+    pictograph_icon,
+)
 
 BANGKOK_TZ = timezone(timedelta(hours=7))
 
@@ -71,12 +96,17 @@ AI_WORKER_DISPLAY_NAMES = [
     "Wheeljack", "Mirage", "Prowl", "Sideswipe", "Hot Rod", "Ultra Magnus",
 ]
 
-NAV_ITEMS = [
-    ("dashboard", "Dashboard", "dashboard"),
-    ("queue", "Queue", "queue"),
-    ("providers", "Providers", "providers"),
-    ("activity", "Activity", "pulse"),
-]
+STATUS_TEXT_COLORS = {
+    "queued": QColor("#3a3a90"),
+    "running": QColor("#b54708"),
+    "done": QColor("#067647"),
+    "failed": QColor("#b42318"),
+    "partial": QColor("#b42318"),
+    "skipped": QColor("#585858"),
+}
+
+CATEGORY_KEYS = ["all", "queued", "running", "done", "partial", "failed", "skipped"]
+PANEL_KEYS = ["dashboard", "providers", "activity"]
 
 
 def resource_path(*parts):
@@ -125,16 +155,100 @@ class SourceScanThread(QThread):
             self.failed.emit(str(exc))
 
 
-class AutograderWindow(QWidget):
-    """Top-level window: navigation rail + top strip + stacked pages."""
+class _TakenRow:
+    """Row record carried between takeItem() and insertItem() on reorder."""
+
+    def __init__(self, url, meta):
+        self.url = url
+        self.meta = meta
+
+
+class _FormTableAdapter:
+    """QListWidget-flavored API over the dense form table so the queue
+    orchestration code can stay row/item based (url in Qt.UserRole, meta in
+    Qt.UserRole+1 on the column-0 item)."""
+
+    def __init__(self, table, window):
+        self._table = table
+        self._win = window
+
+    def count(self):
+        return self._table.rowCount()
+
+    def item(self, row):
+        return self._table.item(row, 0)
+
+    def clear(self):
+        self._table.clearContents()
+        self._table.setRowCount(0)
+        self._win._row_bars.clear()
+
+    def currentItem(self):
+        current = self._table.currentItem()
+        if current is not None:
+            return self._table.item(current.row(), 0)
+        rows = self._table.selectionModel().selectedRows() if self._table.selectionModel() else []
+        if rows:
+            return self._table.item(rows[0].row(), 0)
+        return None
+
+    def setCurrentItem(self, item):
+        if item is not None:
+            self._table.selectRow(item.row())
+
+    def scrollToItem(self, item):
+        if item is not None:
+            self._table.scrollTo(self._table.model().index(item.row(), 0))
+
+    def selectedItems(self):
+        model = self._table.selectionModel()
+        rows = sorted({index.row() for index in model.selectedRows()}) if model else []
+        items = []
+        for row in rows:
+            item = self._table.item(row, 0)
+            if item is not None:
+                items.append(item)
+        return items
+
+    def itemAt(self, pos):
+        cell = self._table.itemAt(pos)
+        if cell is None:
+            return None
+        return self._table.item(cell.row(), 0)
+
+    def row(self, item):
+        return item.row() if item is not None else -1
+
+    def viewport(self):
+        return self._table.viewport()
+
+    def takeItem(self, row):
+        item = self._table.item(row, 0)
+        record = None
+        if item is not None:
+            record = _TakenRow(item.data(Qt.UserRole), item.data(Qt.UserRole + 1) or {})
+        if record is not None:
+            self._win._row_bars.pop(record.url, None)
+        self._table.removeRow(row)
+        return record
+
+    def insertItem(self, row, record):
+        self._table.insertRow(row)
+        self._win._create_table_row(row, record.url, record.meta)
+        self._win._refresh_form_row(self._table.item(row, 0))
+
+
+class AutograderWindow(QMainWindow):
+    """Classic utility window: menu bar + icon toolbar + category tree +
+    dense form table + status bar. Panels live in the stacked content area."""
 
     def __init__(self):
         super().__init__()
         self.setObjectName("AutograderWindow")
         self.setWindowTitle("Google Form Autograder")
         self.setWindowIcon(app_icon())
-        self.setMinimumSize(1180, 740)
-        self.resize(1520, 940)
+        self.setMinimumSize(1100, 700)
+        self.resize(1360, 860)
 
         # ---- orchestration state (contract with dialogs + backend) -------
         self.grader_thread = None
@@ -167,6 +281,8 @@ class AutograderWindow(QWidget):
         self.max_gui_log_lines = 2500
         self.debug_lines = []
         self.pipeline_stage_counts = {}
+        self._row_bars = {}  # url -> QProgressBar cell widget in the form table
+        self._category_status = "all"  # active tree category filter
 
         # Auto-run settings (set by the schedule dialog)
         self.recency_minutes = 60
@@ -230,29 +346,31 @@ class AutograderWindow(QWidget):
     # UI construction
     # ------------------------------------------------------------------
     def _build_ui(self):
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-
-        layout.addWidget(self._build_nav_rail())
-
-        content = QWidget()
-        content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(0)
-        content_layout.addWidget(self._build_top_strip())
+        self._build_menu_bar()
+        self._build_toolbar()
 
         self.stack = QStackedWidget()
+        self.queue_page = QueueTablePage()
         self.dashboard = DashboardPage()
-        self.queue_page = QueuePage()
         self.providers_page = ProvidersPage()
         self.activity = ActivityPage()
+        self.stack.addWidget(self.queue_page)   # index 0 — default view
         self.stack.addWidget(self.dashboard)
-        self.stack.addWidget(self.queue_page)
         self.stack.addWidget(self.providers_page)
         self.stack.addWidget(self.activity)
-        content_layout.addWidget(self.stack, 1)
-        layout.addWidget(content, 1)
+
+        self.queue_table = self.queue_page.table
+        self.form_list = _FormTableAdapter(self.queue_table, self)
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.addWidget(self._build_category_tree())
+        splitter.addWidget(self.stack)
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([190, 1100])
+        self.category_tree.setMinimumWidth(160)
+        self.setCentralWidget(splitter)
+
+        self._build_status_bar()
 
         # wire pages
         self.dashboard.run_clicked.connect(self.run_grader)
@@ -268,163 +386,216 @@ class AutograderWindow(QWidget):
         self.queue_page.clear_done_clicked.connect(self.clear_finished_forms_silently)
         self.queue_page.search_input.textChanged.connect(self._filter_form_queue)
         self.queue_page.filter_combo.currentTextChanged.connect(self._filter_form_queue)
-        self.queue_page.list.currentItemChanged.connect(self._on_form_selection_changed)
-        self.queue_page.list.customContextMenuRequested.connect(self._on_form_list_context_menu)
+        self.queue_table.customContextMenuRequested.connect(self._on_form_table_context_menu)
 
-    def _build_nav_rail(self):
-        rail = QFrame()
-        rail.setObjectName("NavRail")
-        rail.setFixedWidth(88)
-        layout = QVBoxLayout(rail)
-        layout.setContentsMargins(10, 14, 10, 14)
-        layout.setSpacing(8)
+    def _build_menu_bar(self):
+        menu_bar = self.menuBar()
 
-        brand = QLabel()
-        brand.setObjectName("BrandGlyph")
-        brand.setFixedSize(40, 40)
-        brand.setPixmap(T.brand_pixmap(40).scaled(40, 40, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-        layout.addWidget(brand, 0, Qt.AlignHCenter)
-        layout.addSpacing(10)
+        tasks_menu = menu_bar.addMenu("Tasks")
+        tasks_menu.addAction("Add Sources", self.open_manual_add_dialog)
+        tasks_menu.addAction("Scan Source", self.open_quick_grade_dialog)
+        tasks_menu.addAction("Grade All Forms", self.grade_all_forms_in_all_folders)
+        tasks_menu.addSeparator()
+        self.start_action = tasks_menu.addAction("Start Grading", self.run_grader)
+        self.stop_action = tasks_menu.addAction("Stop Grading", self.stop_grading)
+        self.stop_action.setEnabled(False)
+        tasks_menu.addSeparator()
+        tasks_menu.addAction("Schedule Automatic Runs", self.open_auto_run_dialog)
 
-        self.nav_buttons = {}
-        self._nav_group_targets = {}
-        for key, label, glyph in NAV_ITEMS:
+        file_menu = menu_bar.addMenu("File")
+        self.login_action = file_menu.addAction("Login to Google", self.login_google)
+        self.logout_action = file_menu.addAction("Logout Google Account", self.logout_google)
+        file_menu.addSeparator()
+        file_menu.addAction("Export Results (CSV)", self.export_results_csv_dialog)
+        file_menu.addAction("Generate Run Report", self.generate_run_report)
+        file_menu.addSeparator()
+        file_menu.addAction("Exit", self.exit_app)
+
+        grading_menu = menu_bar.addMenu("Grading")
+        grading_menu.addAction("Answer Keys", self.open_answer_key_dashboard)
+        grading_menu.addAction("Decision Audit", self.open_decision_audit_viewer)
+        grading_menu.addSeparator()
+        grading_menu.addAction("Requeue Selected Form", self._requeue_selected_form)
+        grading_menu.addAction("Remove Selected Form", self.remove_form)
+        grading_menu.addSeparator()
+        grading_menu.addAction("Clear Completed Forms", self.clear_finished_forms_silently)
+        grading_menu.addAction("Clear All Forms", lambda: self.clear_all_forms(confirm=True))
+
+        view_menu = menu_bar.addMenu("View")
+        self._view_actions = {}
+        for key, label in (
+            ("queue", "All Forms"),
+            ("dashboard", "Dashboard"),
+            ("providers", "Providers && Health"),
+            ("activity", "Activity && Console"),
+        ):
+            self._view_actions[key] = view_menu.addAction(label, lambda k=key: self._goto_page(k))
+
+        help_menu = menu_bar.addMenu("Help")
+        help_menu.addAction("About", self._show_about_dialog)
+
+    def _build_toolbar(self):
+        toolbar = QToolBar("Main")
+        toolbar.setMovable(False)
+        toolbar.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+        toolbar.setIconSize(QSize(34, 34))
+        self.addToolBar(toolbar)
+
+        def tool(text, glyph, accent, slot, tooltip=None):
             button = QToolButton()
-            button.setObjectName("NavButton")
-            button.setText(label)
+            button.setObjectName("ToolButton")
+            button.setText(text)
+            button.setIcon(pictograph_icon(glyph, size=44, accent=accent))
+            button.setIconSize(QSize(32, 32))
             button.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
-            button.setIcon(T.studio_icon(glyph, 30, T.INDIGO, tile=False))
-            button.setIconSize(QSize(26, 26))
-            button.setFixedSize(66, 54)
-            button.setCheckable(True)
-            button.setCursor(Qt.PointingHandCursor)
-            button.clicked.connect(lambda _checked=False, k=key: self._goto_page(k))
-            layout.addWidget(button, 0, Qt.AlignHCenter)
-            self.nav_buttons[key] = button
-        self.nav_buttons["dashboard"].setChecked(True)
-        layout.addStretch()
+            button.setToolTip(tooltip or text)
+            button.setMinimumWidth(70)
+            button.clicked.connect(slot)
+            toolbar.addWidget(button)
+            return button
 
-        self.fab = QPushButton()
-        self.fab.setObjectName("FabRun")
-        self.fab.setFixedSize(52, 52)
-        self.fab.setIcon(T.studio_icon("play", 22, "#ffffff", tile=False))
-        self.fab.setIconSize(QSize(22, 22))
-        self.fab.setToolTip("Start grading (Ctrl+R)")
-        self.fab.setProperty("running", "false")
-        self.fab.clicked.connect(self._on_fab_clicked)
-        layout.addWidget(self.fab, 0, Qt.AlignHCenter)
-        layout.addSpacing(8)
+        tool("Add URL", "plus", ACCENT_GREEN, self.open_manual_add_dialog,
+             "Add form sources (Ctrl+A)")
+        tool("Scan", "search", ACCENT_ORANGE, self.open_quick_grade_dialog)
+        toolbar.addSeparator()
+        self.run_tool = tool("Start", "play", ACCENT_GREEN, self.run_grader,
+                             "Start grading (Ctrl+R)")
+        self.stop_tool = tool("Stop", "stop", ACCENT_RED, self.stop_grading,
+                              "Stop grading (Ctrl+Shift+S)")
+        self.stop_tool.setEnabled(False)
+        tool("Grade All", "list", ACCENT_BLUE, self.grade_all_forms_in_all_folders,
+             "Find and grade all forms from predefined sources")
+        toolbar.addSeparator()
+        tool("Answer Keys", "key", ACCENT_PURPLE, self.open_answer_key_dashboard,
+             "Open the answer-key dashboard (Ctrl+Shift+A)")
+        tool("Audit", "doc", ACCENT_BLUE, self.open_decision_audit_viewer)
+        tool("Export", "tray", ACCENT_PURPLE, self.export_results_csv_dialog,
+             "Export grading results to CSV (Ctrl+E)")
+        tool("Report", "chart", ACCENT_ORANGE, self.generate_run_report)
+        toolbar.addSeparator()
+        tool("Auto Run", "calendar", ACCENT_PURPLE, self.open_auto_run_dialog,
+             "Schedule automatic grading runs")
+        tool("Settings", "gear", ACCENT_SLATE, self.open_settings_dialog)
 
-        settings_button = QPushButton()
-        settings_button.setObjectName("RailIcon")
-        settings_button.setIcon(T.studio_icon("gear", 22, T.SLATE, tile=False))
-        settings_button.setIconSize(QSize(22, 22))
-        settings_button.setFixedSize(40, 40)
-        settings_button.setToolTip("Settings")
-        settings_button.clicked.connect(self.open_settings_dialog)
-        layout.addWidget(settings_button, 0, Qt.AlignHCenter)
+    def _build_category_tree(self):
+        self.category_tree = QTreeWidget()
+        self.category_tree.setObjectName("CategoryTree")
+        self.category_tree.setHeaderHidden(True)
+        self.category_tree.setRootIsDecorated(True)
+        self.category_tree.itemSelectionChanged.connect(self._on_tree_selection)
 
-        more_button = QPushButton()
-        more_button.setObjectName("RailIcon")
-        more_button.setIcon(T.studio_icon("more", 22, T.SLATE, tile=False))
-        more_button.setIconSize(QSize(22, 22))
-        more_button.setFixedSize(40, 40)
-        more_button.setToolTip("More actions")
-        more_button.clicked.connect(self._show_more_menu)
-        layout.addWidget(more_button, 0, Qt.AlignHCenter)
+        self._tree_items = {}
 
-        self.account_button = QPushButton()
-        self.account_button.setObjectName("RailIcon")
-        self.account_button.setIcon(T.studio_icon("person", 22, T.BLUE, tile=False))
-        self.account_button.setIconSize(QSize(22, 22))
-        self.account_button.setFixedSize(40, 40)
-        self.account_button.setToolTip("Google account")
-        self.account_button.clicked.connect(self._on_account_clicked)
-        layout.addWidget(self.account_button, 0, Qt.AlignHCenter)
-        return rail
+        def category_item(parent, key, label):
+            item = QTreeWidgetItem(parent, [label])
+            item.setData(0, Qt.UserRole, key)
+            self._tree_items[key] = item
+            return item
 
-    def _build_top_strip(self):
-        strip = QFrame()
-        strip.setObjectName("TopStrip")
-        strip.setFixedHeight(58)
-        layout = QHBoxLayout(strip)
-        layout.setContentsMargins(22, 8, 18, 8)
-        layout.setSpacing(10)
+        all_root = category_item(self.category_tree, "all", "All Forms")
+        all_root.setExpanded(True)
+        for key, label in (
+            ("queued", "Queued"),
+            ("running", "Running"),
+            ("done", "Finished"),
+            ("partial", "Partial"),
+            ("failed", "Failed"),
+            ("skipped", "Skipped"),
+        ):
+            category_item(all_root, key, label)
 
-        self.page_title = QLabel("Dashboard")
-        self.page_title.setObjectName("PageTitle")
-        layout.addWidget(self.page_title)
-        layout.addStretch()
+        panels_root = QTreeWidgetItem(self.category_tree, ["Panels"])
+        panels_root.setFlags(Qt.ItemIsEnabled)
+        panels_root.setExpanded(True)
+        for key, label in (
+            ("dashboard", "Dashboard"),
+            ("providers", "Providers && Health"),
+            ("activity", "Activity && Console"),
+        ):
+            item = QTreeWidgetItem(panels_root, [label])
+            item.setData(0, Qt.UserRole, key)
+            self._tree_items[key] = item
 
-        self.activity_dot = QLabel()
-        self.activity_dot.setObjectName("StateDot")
-        self.activity_dot.setProperty("state", "off")
-        self.activity_dot.setFixedSize(8, 8)
-        self.activity_label = QLabel("Idle")
-        self.activity_label.setObjectName("StripMuted")
-        layout.addWidget(self.activity_dot)
-        layout.addWidget(self.activity_label)
-        layout.addSpacing(10)
+        self._tree_items["all"].setSelected(True)
+        return self.category_tree
 
-        self.auto_chip = QFrame()
-        self.auto_chip.setObjectName("AutoChip")
-        self.auto_chip.setProperty("state", "off")
-        auto_layout = QHBoxLayout(self.auto_chip)
-        auto_layout.setContentsMargins(10, 3, 12, 3)
-        auto_layout.setSpacing(6)
-        self.auto_dot = QLabel()
-        self.auto_dot.setObjectName("StateDot")
-        self.auto_dot.setProperty("state", "off")
-        self.auto_dot.setFixedSize(8, 8)
-        self.auto_chip_text = QLabel("Auto Run: Off")
-        self.auto_chip_text.setObjectName("AutoChipText")
-        self.auto_chip_text.setProperty("state", "off")
-        auto_layout.addWidget(self.auto_dot)
-        auto_layout.addWidget(self.auto_chip_text)
-        layout.addWidget(self.auto_chip)
+    def _build_status_bar(self):
+        bar = self.statusBar()
+        bar.setSizeGripEnabled(True)
 
-        self.auth_chip = QFrame()
-        self.auth_chip.setObjectName("AuthChip")
-        auth_layout = QHBoxLayout(self.auth_chip)
-        auth_layout.setContentsMargins(10, 3, 12, 3)
-        self.auth_chip_text = QLabel("Google: –")
-        self.auth_chip_text.setObjectName("AuthChipText")
-        auth_layout.addWidget(self.auth_chip_text)
-        layout.addWidget(self.auth_chip)
-        return strip
+        self.status_run_dot = QLabel()
+        self.status_run_dot.setObjectName("StatusDot")
+        self.status_run_dot.setProperty("state", "ready")
+        self.status_run_dot.setFixedSize(8, 8)
+        self.status_run_label = QLabel("Ready")
+        self.status_run_label.setObjectName("StatusPart")
+        bar.addWidget(self.status_run_dot)
+        bar.addWidget(self.status_run_label)
+
+        self.status_activity_label = QLabel("Idle")
+        self.status_activity_label.setObjectName("StatusPart")
+        self.status_activity_label.setProperty("muted", "true")
+        bar.addWidget(self.status_activity_label)
+
+        self.status_auto_label = QLabel("Auto: Off")
+        self.status_auto_label.setObjectName("StatusPart")
+        self.status_auto_label.setProperty("muted", "true")
+        bar.addWidget(self.status_auto_label)
+
+        bar.addWidget(QLabel(""), 1)  # stretch
+
+        self.status_model_label = QLabel("Model: idle")
+        self.status_model_label.setObjectName("StatusPart")
+        self.status_model_label.setProperty("muted", "true")
+        bar.addWidget(self.status_model_label)
+
+        self.status_queue_label = QLabel("0 forms")
+        self.status_queue_label.setObjectName("StatusPart")
+        self.status_queue_label.setProperty("muted", "true")
+        bar.addPermanentWidget(self.status_queue_label)
+
+    def _on_tree_selection(self):
+        items = self.category_tree.selectedItems()
+        if not items:
+            return
+        key = str(items[0].data(0, Qt.UserRole) or "")
+        if not key:
+            return
+        if key in PANEL_KEYS:
+            self.stack.setCurrentWidget({
+                "dashboard": self.dashboard,
+                "providers": self.providers_page,
+                "activity": self.activity,
+            }[key])
+        else:
+            self._category_status = key if key in CATEGORY_KEYS else "all"
+            self.stack.setCurrentWidget(self.queue_page)
+            self._filter_form_queue()
 
     def _goto_page(self, key):
-        titles = {
-            "dashboard": "Dashboard",
-            "queue": "Form queue",
-            "providers": "Providers & health",
-            "activity": "Live activity",
-        }
-        for button_key, button in self.nav_buttons.items():
-            button.setChecked(button_key == key)
-        self.stack.setCurrentWidget({
-            "dashboard": self.dashboard,
-            "queue": self.queue_page,
-            "providers": self.providers_page,
-            "activity": self.activity,
-        }[key])
-        self.page_title.setText(titles.get(key, "Dashboard"))
-
-    def _on_fab_clicked(self):
-        if self.is_grading or (self.grader_thread and self.grader_thread.isRunning()):
-            self.stop_grading()
+        if key in PANEL_KEYS:
+            self.stack.setCurrentWidget({
+                "dashboard": self.dashboard,
+                "providers": self.providers_page,
+                "activity": self.activity,
+            }[key])
+            item = self._tree_items.get(key)
         else:
-            self.run_grader()
+            self.stack.setCurrentWidget(self.queue_page)
+            self._category_status = key if key in CATEGORY_KEYS else "all"
+            item = self._tree_items.get(self._category_status)
+            self._filter_form_queue()
+        if item is not None:
+            self.category_tree.blockSignals(True)
+            self.category_tree.clearSelection()
+            item.setSelected(True)
+            self.category_tree.blockSignals(False)
 
-    def _set_fab_running(self, running):
-        self.fab.setProperty("running", "true" if running else "false")
-        repolish(self.fab)
-        if running:
-            self.fab.setIcon(T.studio_icon("stop", 20, "#ffffff", tile=False))
-            self.fab.setToolTip("Stop grading (Ctrl+Shift+S)")
-        else:
-            self.fab.setIcon(T.studio_icon("play", 20, "#ffffff", tile=False))
-            self.fab.setToolTip("Start grading (Ctrl+R)")
+    def _set_run_controls(self, running):
+        self.run_tool.setEnabled(not running)
+        self.stop_tool.setEnabled(running)
+        self.start_action.setEnabled(not running)
+        self.stop_action.setEnabled(running)
         self.dashboard.set_running(running)
 
     # ------------------------------------------------------------------
@@ -443,14 +614,13 @@ class AutograderWindow(QWidget):
     def _set_run_state(self, text):
         state, label = self._RUN_STATE_MAP.get(text, ("ready", text))
         self.dashboard.set_run_pill(label, state)
+        self.status_run_label.setText(str(label))
+        self.status_run_dot.setProperty("state", state)
+        repolish(self.status_run_dot)
 
     def _set_auto_status(self, text, state):
-        self.auto_chip_text.setText(text)
-        self.auto_chip_text.setProperty("state", state)
-        self.auto_chip.setProperty("state", state)
-        self.auto_dot.setProperty("state", state)
-        for widget in (self.auto_chip, self.auto_chip_text, self.auto_dot):
-            repolish(widget)
+        self.status_auto_label.setText(text.replace("Auto Run: ", "Auto: "))
+        self.status_auto_label.setToolTip(text)
 
     _ACTIVITY_DOT_MAP = {
         "idle": "off",
@@ -472,55 +642,16 @@ class AutograderWindow(QWidget):
         return "Current form"
 
     def _set_activity(self, text, state="busy", tooltip=""):
-        self.activity_label.setText(text)
-        self.activity_dot.setProperty("state", self._ACTIVITY_DOT_MAP.get(state, "off"))
-        repolish(self.activity_dot)
-        if tooltip:
-            self.activity_label.setToolTip(tooltip)
+        self.status_activity_label.setText(str(text))
+        self.status_activity_label.setToolTip(str(tooltip or text))
         if state == "grading":
             self.dashboard.set_console_badge("live")
         elif state == "idle":
             self.dashboard.set_console_badge("idle")
 
     # ------------------------------------------------------------------
-    # More menu / shortcuts / tray
+    # Shortcuts / tray
     # ------------------------------------------------------------------
-    def _show_more_menu(self):
-        menu = QMenu(self)
-        acts = [
-            ("Add Sources", self.open_manual_add_dialog),
-            ("Scan Source", self.open_quick_grade_dialog),
-            ("Schedule Automatic Runs", self.open_auto_run_dialog),
-            ("Grade All Queued Forms", self.grade_all_forms_in_all_folders),
-            None,
-            ("Answer Keys", self.open_answer_key_dashboard),
-            ("Decision Audit", self.open_decision_audit_viewer),
-            ("Export Results (CSV)", self.export_results_csv_dialog),
-            ("Generate Run Report", self.generate_run_report),
-            None,
-            ("Login to Google", self.login_google),
-            ("Logout Google Account", self.logout_google),
-            None,
-            ("About", self._show_about_dialog),
-            ("Exit", self.exit_app),
-        ]
-        for act in acts:
-            if act is None:
-                menu.addSeparator()
-                continue
-            menu.addAction(act[0], act[1])
-        button = self.sender()
-        if isinstance(button, QPushButton):
-            menu.exec(button.mapToGlobal(QPoint(0, button.height())))
-        else:
-            menu.exec(QCursor.pos())
-
-    def _on_account_clicked(self):
-        if self._auth_signed_in:
-            self.logout_google()
-        else:
-            self.login_google()
-
     def _show_about_dialog(self):
         QMessageBox.about(
             self,
@@ -590,8 +721,8 @@ class AutograderWindow(QWidget):
         try:
             from answer_key_manager import load_pending_review_records
 
-            for i in range(self.queue_page.list.count()):
-                meta = self.queue_page.list.item(i).data(Qt.UserRole + 1) or {}
+            for i in range(self.form_list.count()):
+                meta = self.form_list.item(i).data(Qt.UserRole + 1) or {}
                 form_id = meta.get("form_id")
                 if form_id:
                     pending = load_pending_review_records(form_id) or {}
@@ -612,7 +743,12 @@ class AutograderWindow(QWidget):
         from auth import has_saved_login
 
         self._auth_signed_in = has_saved_login()
-        self.auth_chip_text.setText("Google: signed in" if self._auth_signed_in else "Google: not signed in")
+        signed = "signed in" if self._auth_signed_in else "not signed in"
+        self.statusBar().showMessage(f"Google: {signed}", 8000)
+        if hasattr(self, "login_action"):
+            self.login_action.setEnabled(not self._auth_signed_in)
+        if hasattr(self, "logout_action"):
+            self.logout_action.setEnabled(self._auth_signed_in)
 
     def prompt_login_if_needed(self):
         from auth import has_saved_login
@@ -816,35 +952,71 @@ class AutograderWindow(QWidget):
             return f"{source} · {detail}"
         return detail or source
 
-    def _make_form_row_widget(self, meta):
-        return QueueRow(meta)
+    def _create_table_row(self, row, url, meta):
+        """Populate a table row for a form (col-0 item carries url + meta)."""
+        first = QTableWidgetItem(str(meta.get("title") or "Untitled"))
+        first.setData(Qt.UserRole, url)
+        first.setData(Qt.UserRole + 1, meta)
+        first.setToolTip(self._format_form_meta_line(meta) + "\n" + str(meta.get("detail") or ""))
+        self.queue_table.setItem(row, 0, first)
+        for column in range(1, len(QUEUE_COLUMNS)):
+            self.queue_table.setItem(row, column, QTableWidgetItem(""))
+        self._row_bars.pop(url, None)
+        bar = QProgressBar()
+        bar.setObjectName("QueueProgress")
+        bar.setRange(0, 100)
+        bar.setTextVisible(False)
+        bar.setFixedHeight(10)
+        # Cell widgets fill the whole row; center the slim bar vertically
+        # inside a transparent container so it isn't glued to the top edge.
+        bar_host = QWidget()
+        host_layout = QHBoxLayout(bar_host)
+        host_layout.setContentsMargins(4, 0, 4, 0)
+        host_layout.addWidget(bar)
+        self.queue_table.setCellWidget(row, 2, bar_host)
+        self._row_bars[url] = bar
 
     def _refresh_form_row(self, item):
+        if item is None:
+            return
+        row = item.row()
         meta = item.data(Qt.UserRole + 1) or {}
-        widget = self.queue_page.list.itemWidget(item)
-        if not widget:
-            url = meta.get("url") or item.data(Qt.UserRole) or ""
-            title = meta.get("title") or self.forms_data.get(url) or "Untitled"
-            meta = self._form_meta(
-                url,
-                title,
-                status=meta.get("status", "queued"),
-                position=meta.get("position"),
-                source=meta.get("source", "Queue"),
-                last_submission=meta.get("last_submission"),
-            )
-            item.setData(Qt.UserRole, url)
-            item.setData(Qt.UserRole + 1, meta)
-            widget = self._make_form_row_widget(meta)
-            self.queue_page.list.setItemWidget(item, widget)
-        widget.update_meta(
-            meta,
-            self._queue_progress_percent(meta),
-            self._queue_eta_text(meta),
-            self._queue_detail_text(meta),
-            self._format_form_meta_line(meta),
-        )
-        item.setSizeHint(QSize(0, 56))
+        url = item.data(Qt.UserRole) or meta.get("url") or ""
+        status = str(meta.get("status", "queued"))
+
+        title_item = self.queue_table.item(row, 0)
+        title_item.setText(str(meta.get("title") or "Untitled"))
+        tooltip = self._format_form_meta_line(meta)
+        detail = str(meta.get("detail") or "")
+        if detail:
+            tooltip += f"\n{detail}"
+        skipped = meta.get("skipped_questions") or []
+        if skipped:
+            tooltip += f"\n{len(skipped)} skipped question(s) missing teacher answers"
+        title_item.setToolTip(tooltip)
+
+        status_item = self.queue_table.item(row, 1)
+        status_item.setText(status_label(status))
+        status_item.setForeground(STATUS_TEXT_COLORS.get(status, QColor("#000000")))
+
+        bar = self._row_bars.get(url)
+        percent = self._queue_progress_percent(meta)
+        if bar is not None:
+            bar.setValue(percent)
+
+        def set_cell(column, text):
+            cell = self.queue_table.item(row, column)
+            if cell is not None:
+                cell.setText(str(text))
+
+        set_cell(3, f"{int(meta.get('completed', 0) or 0)}/{int(meta.get('total', 0) or 0)}")
+        set_cell(4, str(int(meta.get("accepted", 0) or 0)))
+        set_cell(5, str(int(meta.get("rejected", 0) or 0)))
+        set_cell(6, str(int(meta.get("review_questions", 0) or 0)))
+        set_cell(7, self._queue_eta_text(meta))
+        set_cell(8, meta.get("finished_at") or meta.get("started_at") or "–")
+        set_cell(9, str(meta.get("source") or "Queue"))
+        self.queue_table.setRowHeight(row, 26)
 
     def _is_placeholder_form_title(self, title):
         return str(title or "").strip().lower() in {"", "form", "untitled"}
@@ -874,30 +1046,27 @@ class AutograderWindow(QWidget):
         meta = self._form_meta(
             url,
             title,
-            position=position or self.queue_page.list.count() + 1,
+            position=position or self.queue_table.rowCount() + 1,
             source=source,
             last_submission=last_submission,
         )
-        item = QListWidgetItem()
-        item.setData(Qt.UserRole, url)
-        item.setData(Qt.UserRole + 1, meta)
-        widget = self._make_form_row_widget(meta)
-        item.setSizeHint(QSize(0, 56))
-        self.queue_page.list.addItem(item)
-        self.queue_page.list.setItemWidget(item, widget)
+        row = self.queue_table.rowCount()
+        self.queue_table.insertRow(row)
+        self._create_table_row(row, url, meta)
+        self._refresh_form_row(self.queue_table.item(row, 0))
         self._refresh_queue_positions()
-        return item
+        return self.queue_table.item(row, 0)
 
     def _find_form_item_by_url(self, url):
-        for i in range(self.queue_page.list.count()):
-            item = self.queue_page.list.item(i)
+        for i in range(self.form_list.count()):
+            item = self.form_list.item(i)
             if item.data(Qt.UserRole) == url:
                 return item
         return None
 
     def _find_form_item_by_id(self, form_id):
-        for i in range(self.queue_page.list.count()):
-            item = self.queue_page.list.item(i)
+        for i in range(self.form_list.count()):
+            item = self.form_list.item(i)
             meta = item.data(Qt.UserRole + 1) or {}
             if meta.get("form_id") == form_id:
                 return item
@@ -921,9 +1090,9 @@ class AutograderWindow(QWidget):
 
     def _refresh_queue_positions(self):
         counts = {"queued": 0, "running": 0, "done": 0, "partial": 0, "skipped": 0, "failed": 0}
-        total = self.queue_page.list.count()
+        total = self.form_list.count()
         for i in range(total):
-            item = self.queue_page.list.item(i)
+            item = self.form_list.item(i)
             meta = item.data(Qt.UserRole + 1) or {}
             meta["position"] = i + 1
             status = meta.get("status", "queued")
@@ -937,6 +1106,22 @@ class AutograderWindow(QWidget):
             f"{counts.get('done', 0)} done | {counts.get('partial', 0)} partial | "
             f"{counts.get('skipped', 0)} skipped | {counts.get('failed', 0)} failed",
         )
+        if hasattr(self, "status_queue_label"):
+            self.status_queue_label.setText(f"{total} form{'s' if total != 1 else ''} · {active} in queue")
+        if hasattr(self, "_tree_items"):
+            labels = {
+                "all": f"All Forms ({total})",
+                "queued": f"Queued ({counts.get('queued', 0)})",
+                "running": f"Running ({counts.get('running', 0)})",
+                "done": f"Finished ({counts.get('done', 0)})",
+                "partial": f"Partial ({counts.get('partial', 0)})",
+                "failed": f"Failed ({counts.get('failed', 0)})",
+                "skipped": f"Skipped ({counts.get('skipped', 0)})",
+            }
+            for key, label in labels.items():
+                item = self._tree_items.get(key)
+                if item is not None:
+                    item.setText(0, label)
         self._filter_form_queue()
 
     def update_in_queue_label(self):
@@ -945,34 +1130,36 @@ class AutograderWindow(QWidget):
     def _filter_form_queue(self, *_args):
         query = self.queue_page.search_input.text().strip().lower()
         selected_status = self.queue_page.filter_combo.currentText().strip().lower()
-        for index in range(self.queue_page.list.count()):
-            item = self.queue_page.list.item(index)
+        category = getattr(self, "_category_status", "all")
+        for index in range(self.form_list.count()):
+            item = self.form_list.item(index)
             meta = item.data(Qt.UserRole + 1) or {}
             title = str(meta.get("title", "")).lower()
             status = str(meta.get("status", "queued")).lower()
-            status_matches = selected_status == "all" or status == selected_status
-            item.setHidden(query not in title or not status_matches)
+            combo_matches = selected_status == "all" or status == selected_status
+            category_matches = category == "all" or status == category
+            self.queue_table.setRowHidden(index, not (query in title and combo_matches and category_matches))
 
     def _on_form_selection_changed(self, _current, _previous=None):
         return
 
     # -- queue context menu ------------------------------------------------
-    def _on_form_list_context_menu(self, pos):
-        item = self.queue_page.list.itemAt(pos)
+    def _on_form_table_context_menu(self, pos):
+        item = self.form_list.itemAt(pos)
         if item is None:
             return
-        self.queue_page.list.setCurrentItem(item)
+        self.form_list.setCurrentItem(item)
         menu = self._build_form_context_menu(item)
         self._active_context_menu = menu
-        menu.exec(self.queue_page.list.viewport().mapToGlobal(pos))
+        menu.exec(self.form_list.viewport().mapToGlobal(pos))
         self._active_context_menu = None
 
     def _build_form_context_menu(self, item):
         meta = item.data(Qt.UserRole + 1) or {}
         url = item.data(Qt.UserRole)
         status = str(meta.get("status", "queued"))
-        row = self.queue_page.list.row(item)
-        count = self.queue_page.list.count()
+        row = self.form_list.row(item)
+        count = self.form_list.count()
         grading_busy = self.is_grading or (self.grader_thread and self.grader_thread.isRunning())
 
         menu = QMenu(self)
@@ -1033,24 +1220,21 @@ class AutograderWindow(QWidget):
             self.save_forms()
 
     def _context_move(self, item, where):
-        widget = self.queue_page.list.itemWidget(item)
-        row = self.queue_page.list.row(item)
-        count = self.queue_page.list.count()
+        row = self.form_list.row(item)
+        count = self.form_list.count()
         target = {"top": 0, "bottom": count - 1, "up": row - 1}.get(where, row + 1)
         if target < 0 or target >= count or target == row:
             return
-        taken = self.queue_page.list.takeItem(row)
-        self.queue_page.list.insertItem(target, taken)
-        if widget is not None:
-            self.queue_page.list.setItemWidget(taken, widget)
+        taken = self.form_list.takeItem(row)
+        self.form_list.insertItem(target, taken)
         self._reorder_forms_data()
         self.save_forms()
         self._refresh_queue_positions()
 
     def _reorder_forms_data(self):
         ordered = {}
-        for i in range(self.queue_page.list.count()):
-            item = self.queue_page.list.item(i)
+        for i in range(self.form_list.count()):
+            item = self.form_list.item(i)
             url = item.data(Qt.UserRole)
             if url:
                 ordered[url] = self.forms_data.get(url)
@@ -1077,17 +1261,23 @@ class AutograderWindow(QWidget):
             return
         if url in self.forms_data:
             del self.forms_data[url]
-        self.queue_page.list.takeItem(self.queue_page.list.row(item))
+        self.form_list.takeItem(self.form_list.row(item))
         self.save_forms()
         self._refresh_queue_positions()
 
+    def _requeue_selected_form(self):
+        items = self.form_list.selectedItems()
+        if not items:
+            return
+        self._context_set_status(items[0], "queued")
+
     def remove_form(self):
-        selected_items = self.queue_page.list.selectedItems()
+        selected_items = self.form_list.selectedItems()
         for item in selected_items:
             url = item.data(Qt.UserRole)
             if url in self.forms_data:
                 del self.forms_data[url]
-            self.queue_page.list.takeItem(self.queue_page.list.row(item))
+            self.form_list.takeItem(self.form_list.row(item))
         self.save_forms()
         self._refresh_queue_positions()
 
@@ -1096,18 +1286,18 @@ class AutograderWindow(QWidget):
             reply = QMessageBox.question(self, "Clear All", "Clear all forms?", QMessageBox.Yes | QMessageBox.No)
             if reply != QMessageBox.Yes:
                 return
-        self.queue_page.list.clear()
+        self.form_list.clear()
         self.forms_data.clear()
         self.save_forms()
         self._refresh_queue_positions()
 
     def clear_finished_forms_silently(self):
         i = 0
-        while i < self.queue_page.list.count():
-            item = self.queue_page.list.item(i)
+        while i < self.form_list.count():
+            item = self.form_list.item(i)
             meta = item.data(Qt.UserRole + 1) or {}
             if meta.get("status") == "done":
-                self.queue_page.list.takeItem(i)
+                self.form_list.takeItem(i)
                 url = item.data(Qt.UserRole)
                 if url in self.forms_data:
                     del self.forms_data[url]
@@ -1212,8 +1402,8 @@ class AutograderWindow(QWidget):
 
     def open_current_form_review(self, _link="review"):
         target = self.current_form_url
-        if not target and self.queue_page.list.currentItem():
-            target = self.queue_page.list.currentItem().data(Qt.UserRole)
+        if not target and self.form_list.currentItem():
+            target = self.form_list.currentItem().data(Qt.UserRole)
         self.open_answer_key_dashboard(target_url=target, auto_scan=True)
 
     def open_decision_audit_viewer(self):
@@ -1443,7 +1633,7 @@ class AutograderWindow(QWidget):
 
         self.is_grading = True
         self._set_run_state("Running")
-        self._set_fab_running(True)
+        self._set_run_controls(True)
         if self.auto_mode:
             self._set_auto_status("Auto Run: Grading", "grading")
         self.dashboard.clear_console()
@@ -1461,13 +1651,13 @@ class AutograderWindow(QWidget):
         else:
             self.overall_forms_total = sum(
                 1
-                for i in range(self.queue_page.list.count())
-                if (self.queue_page.list.item(i).data(Qt.UserRole + 1) or {}).get("status", "queued") == "queued"
+                for i in range(self.form_list.count())
+                if (self.form_list.item(i).data(Qt.UserRole + 1) or {}).get("status", "queued") == "queued"
             )
         self.dashboard.set_forms_progress(0, self.overall_forms_total)
         self._reset_metric_labels()
-        for i in range(self.queue_page.list.count()):
-            item = self.queue_page.list.item(i)
+        for i in range(self.form_list.count()):
+            item = self.form_list.item(i)
             url = item.data(Qt.UserRole)
             if target_urls is not None and url not in target_urls:
                 continue
@@ -1511,8 +1701,8 @@ class AutograderWindow(QWidget):
                 service = None
             urls_to_truncate = list(target_urls) if target_urls else []
             if not urls_to_truncate:
-                for i in range(self.queue_page.list.count()):
-                    item = self.queue_page.list.item(i)
+                for i in range(self.form_list.count()):
+                    item = self.form_list.item(i)
                     meta = item.data(Qt.UserRole + 1) or {}
                     if meta.get("status") == "queued":
                         urls_to_truncate.append(item.data(Qt.UserRole))
@@ -1747,8 +1937,8 @@ class AutograderWindow(QWidget):
                 item, "running",
                 "Grading now: fetching responses, evaluating answers, applying updates",
             )
-            self.queue_page.list.scrollToItem(item)
-            self.queue_page.list.setCurrentItem(item)
+            self.form_list.scrollToItem(item)
+            self.form_list.setCurrentItem(item)
         self.dashboard.set_subline(title)
         self._set_run_state("Running")
         self._set_activity(f"Grading “{title}”", "grading", tooltip=url)
@@ -1825,8 +2015,8 @@ class AutograderWindow(QWidget):
             return
         queued_urls = []
         seen_ids = set()
-        for i in range(self.queue_page.list.count()):
-            item = self.queue_page.list.item(i)
+        for i in range(self.form_list.count()):
+            item = self.form_list.item(i)
             meta = item.data(Qt.UserRole + 1) or {}
             if meta.get("status") == "queued":
                 url = (item.data(Qt.UserRole) or "").strip()
@@ -1842,7 +2032,7 @@ class AutograderWindow(QWidget):
     def on_grading_finished(self, success, msg):
         self.is_grading = False
         self._elapsed_ticker.stop()
-        self._set_fab_running(False)
+        self._set_run_controls(False)
         if self.auto_mode:
             self._set_auto_status("Auto Run: Waiting", "active")
             self._set_activity("Auto-run: cycle complete · preparing next check", "waiting")
@@ -1854,8 +2044,8 @@ class AutograderWindow(QWidget):
         now_str = datetime.now().strftime("%H:%M:%S")
         if not success:
             self._set_run_state("Failed")
-            for i in range(self.queue_page.list.count()):
-                item = self.queue_page.list.item(i)
+            for i in range(self.form_list.count()):
+                item = self.form_list.item(i)
                 meta = item.data(Qt.UserRole + 1) or {}
                 if meta.get("status") == "running":
                     self._set_form_status(item, "failed", msg or "Grading process failed")
@@ -1871,8 +2061,8 @@ class AutograderWindow(QWidget):
 
         queued_urls = []
         seen_ids = set()
-        for i in range(self.queue_page.list.count()):
-            item = self.queue_page.list.item(i)
+        for i in range(self.form_list.count()):
+            item = self.form_list.item(i)
             meta = item.data(Qt.UserRole + 1) or {}
             if meta.get("status") == "queued":
                 url = (item.data(Qt.UserRole) or "").strip()
@@ -1917,8 +2107,8 @@ class AutograderWindow(QWidget):
             forms_cleared = 0
             finished_ids = set(self.finished_forms)
             i = 0
-            while i < self.queue_page.list.count():
-                item = self.queue_page.list.item(i)
+            while i < self.form_list.count():
+                item = self.form_list.item(i)
                 url = item.data(Qt.UserRole)
                 form_id = self.extract_form_id(url) if url else None
                 meta = item.data(Qt.UserRole + 1) or {}
@@ -1927,18 +2117,18 @@ class AutograderWindow(QWidget):
                     or (form_id and form_id in self.auto_partial_forms)
                 )
                 if form_id in finished_ids and not keep_partial:
-                    self.queue_page.list.takeItem(i)
+                    self.form_list.takeItem(i)
                     if url in self.forms_data:
                         del self.forms_data[url]
                     forms_cleared += 1
                 else:
                     i += 1
             i = 0
-            while i < self.queue_page.list.count():
-                item = self.queue_page.list.item(i)
+            while i < self.form_list.count():
+                item = self.form_list.item(i)
                 meta = item.data(Qt.UserRole + 1) or {}
                 if meta.get("status") == "done":
-                    self.queue_page.list.takeItem(i)
+                    self.form_list.takeItem(i)
                     url = item.data(Qt.UserRole)
                     if url in self.forms_data:
                         del self.forms_data[url]
@@ -1949,7 +2139,7 @@ class AutograderWindow(QWidget):
                 self.append_debug(f"<font color='gray'>[AUTO] Cleared {forms_cleared} finished forms from queue</font>")
                 self.save_forms()
                 self._refresh_queue_positions()
-            remaining_forms = self.queue_page.list.count()
+            remaining_forms = self.form_list.count()
             finished_count = len(self.finished_forms)
             self.append_debug(
                 f"<font color='blue'>[AUTO] Session stats: finished {finished_count}, in queue {remaining_forms}</font>"
@@ -2306,7 +2496,7 @@ class AutograderWindow(QWidget):
                 self.grader_thread.wait(2000)
         self.is_searching = False
         self.is_grading = False
-        self._set_fab_running(False)
+        self._set_run_controls(False)
         self._set_run_state("Stopped")
         if not self.auto_mode:
             self._set_auto_status("Auto Run: Off", "off")

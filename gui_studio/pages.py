@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
     QGridLayout,
+    QHeaderView,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -16,6 +17,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QStackedWidget,
+    QTableWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -369,9 +371,13 @@ class DashboardPage(QWidget):
 
 
 # ---------------------------------------------------------------------------
-# Queue
+# Queue (dense classic table)
 # ---------------------------------------------------------------------------
-class QueuePage(QWidget):
+QUEUE_COLUMNS = ["Form", "Status", "Progress", "Answers", "Accepted",
+                 "Rejected", "Review", "Time Left", "Last Activity", "Source"]
+
+
+class QueueTablePage(QWidget):
     add_sources_clicked = Signal()
     scan_clicked = Signal()
     clear_all_clicked = Signal()
@@ -380,42 +386,54 @@ class QueuePage(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(18, 16, 18, 16)
-        layout.setSpacing(10)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
 
         toolbar = QHBoxLayout()
-        toolbar.setSpacing(8)
+        toolbar.setSpacing(6)
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Search forms…  (Ctrl+K)")
-        self.search_input.setFixedWidth(260)
+        self.search_input.setFixedWidth(240)
         self.filter_combo = QComboBox()
         self.filter_combo.addItems(["All", "Running", "Queued", "Done", "Partial", "Skipped", "Failed"])
-        self.filter_combo.setFixedWidth(120)
+        self.filter_combo.setFixedWidth(110)
         self.summary_label = QLabel("0 forms")
         self.summary_label.setObjectName("Subline")
         toolbar.addWidget(self.search_input)
         toolbar.addWidget(self.filter_combo)
         toolbar.addWidget(self.summary_label)
         toolbar.addStretch()
-        add_button = QPushButton("Add sources")
+        add_button = QPushButton("Add Sources")
         add_button.clicked.connect(self.add_sources_clicked)
-        scan_button = QPushButton("Scan source")
+        scan_button = QPushButton("Scan Source")
         scan_button.clicked.connect(self.scan_clicked)
-        clear_done_button = QPushButton("Clear completed")
+        clear_done_button = QPushButton("Clear Completed")
         clear_done_button.clicked.connect(self.clear_done_clicked)
-        clear_all_button = QPushButton("Clear all")
+        clear_all_button = QPushButton("Clear All")
         clear_all_button.setObjectName("Danger")
         clear_all_button.clicked.connect(self.clear_all_clicked)
         for button in (add_button, scan_button, clear_done_button, clear_all_button):
             toolbar.addWidget(button)
         layout.addLayout(toolbar)
 
-        self.list = QListWidget()
-        self.list.setObjectName("QueueList")
-        self.list.setSpacing(4)
-        self.list.setSelectionMode(QListWidget.ExtendedSelection)
-        self.list.setContextMenuPolicy(Qt.CustomContextMenu)
-        layout.addWidget(self.list, 1)
+        self.table = QTableWidget(0, len(QUEUE_COLUMNS))
+        self.table.setObjectName("QueueTable")
+        self.table.setHorizontalHeaderLabels(QUEUE_COLUMNS)
+        self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setDefaultSectionSize(24)
+        self.table.setShowGrid(True)
+        self.table.setSortingEnabled(False)
+        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.setSelectionMode(QTableWidget.ExtendedSelection)
+        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.setContextMenuPolicy(Qt.CustomContextMenu)
+        header = self.table.horizontalHeader()
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(0, QHeaderView.Interactive)
+        for column, width in ((0, 340), (1, 90), (2, 130), (3, 90), (4, 80),
+                              (5, 80), (6, 70), (7, 90), (8, 120), (9, 110)):
+            self.table.setColumnWidth(column, width)
+        layout.addWidget(self.table, 1)
 
     def set_summary(self, text, tooltip=""):
         self.summary_label.setText(str(text))

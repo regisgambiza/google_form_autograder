@@ -6,7 +6,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QShortcut
-from PySide6.QtWidgets import QApplication, QMessageBox, QPushButton
+from PySide6.QtWidgets import QApplication, QMessageBox, QPushButton, QToolButton, QTreeWidget
 
 from gui_studio import theme as studio_theme
 from gui_studio.main_window import AutograderWindow
@@ -27,39 +27,86 @@ def _add_form(window, url, title):
 
 
 def _clear_queue(window):
-    window.queue_page.list.clear()
+    window.form_list.clear()
     window.forms_data.clear()
 
 
-def _badge(widget):
-    return widget.pill.text()
+def _status_text(widget, row):
+    return window_status_cell(widget, row, 1)
+
+
+def window_status_cell(window, row, column):
+    item = window.queue_table.item(row, column)
+    return item.text() if item else ""
 
 
 # ---------------------------------------------------------------------------
 # Shell structure
 # ---------------------------------------------------------------------------
-def test_shell_uses_nav_rail_and_stacked_pages():
+def test_shell_uses_menu_toolbar_tree_and_table():
     window = _make_window()
-    assert set(window.nav_buttons) == {"dashboard", "queue", "providers", "activity"}
+    menu_titles = [action.text() for action in window.menuBar().actions()]
+    assert menu_titles == ["Tasks", "File", "Grading", "View", "Help"]
+    tools = {button.text(): button for button in window.findChildren(QToolButton)}
+    assert {"Add URL", "Start", "Stop", "Answer Keys", "Settings"}.issubset(tools)
+    assert not tools["Start"].icon().isNull()
+    assert window.category_tree.objectName() == "CategoryTree"
+    assert window.queue_table.objectName() == "QueueTable"
+    assert window.queue_table.columnCount() == 10
     assert window.stack.count() == 4
-    for key in ("dashboard", "queue", "providers", "activity"):
-        window._goto_page(key)
-        assert window.nav_buttons[key].isChecked()
-    assert window.fab.objectName() == "FabRun"
-    assert window.dashboard is not None
-    assert window.queue_page.list is not None
 
 
-def test_run_fab_toggles_between_start_and_stop():
+def test_tree_categories_filter_table_and_panels_switch_pages():
     window = _make_window()
-    assert window.fab.property("running") == "false"
-    window._set_fab_running(True)
-    assert window.fab.property("running") == "true"
+    _clear_queue(window)
+    _add_form(window, "https://docs.google.com/forms/d/a/edit", "Algebra")
+    second = _add_form(window, "https://docs.google.com/forms/d/b/edit", "Fractions")
+    window._set_form_status(second, "done")
+
+    def visible_urls():
+        return [
+            window.queue_table.item(row, 0).data(Qt.UserRole)
+            for row in range(window.queue_table.rowCount())
+            if not window.queue_table.isRowHidden(row)
+        ]
+
+    window._goto_page("queued")
+    assert visible_urls() == ["https://docs.google.com/forms/d/a/edit"]
+    window._goto_page("done")
+    assert visible_urls() == ["https://docs.google.com/forms/d/b/edit"]
+    window._goto_page("all")
+    assert len(visible_urls()) == 2
+
+    window._goto_page("dashboard")
+    assert window.stack.currentWidget() is window.dashboard
+    window._goto_page("providers")
+    assert window.stack.currentWidget() is window.providers_page
+    window._goto_page("activity")
+    assert window.stack.currentWidget() is window.activity
+    window._goto_page("all")
+    assert window.stack.currentWidget() is window.queue_page
+
+
+def test_tree_labels_carry_counts():
+    window = _make_window()
+    _clear_queue(window)
+    _add_form(window, "https://docs.google.com/forms/d/a/edit", "Algebra")
+    _add_form(window, "https://docs.google.com/forms/d/b/edit", "Fractions")
+    assert window._tree_items["all"].text(0) == "All Forms (2)"
+    assert window._tree_items["queued"].text(0) == "Queued (2)"
+
+
+def test_run_controls_toggle_like_classic_toolbar():
+    window = _make_window()
+    assert window.run_tool.isEnabled()
+    assert not window.stop_tool.isEnabled()
+    window._set_run_controls(True)
+    assert not window.run_tool.isEnabled()
+    assert window.stop_tool.isEnabled()
     assert not window.dashboard.run_button.isVisibleTo(window.dashboard)
-    assert window.dashboard.stop_button.isVisibleTo(window.dashboard)
-    window._set_fab_running(False)
-    assert window.fab.property("running") == "false"
-    assert window.dashboard.run_button.isVisibleTo(window.dashboard)
+    window._set_run_controls(False)
+    assert window.run_tool.isEnabled()
+    assert not window.stop_tool.isEnabled()
 
 
 def test_console_log_buffers_are_bounded():
@@ -72,7 +119,7 @@ def test_console_log_buffers_are_bounded():
 
 
 # ---------------------------------------------------------------------------
-# Queue page
+# Queue table
 # ---------------------------------------------------------------------------
 def test_queue_search_and_status_filter_hide_nonmatches():
     window = _make_window()
@@ -82,29 +129,33 @@ def test_queue_search_and_status_filter_hide_nonmatches():
     window._set_form_status(second, "done")
 
     window.queue_page.search_input.setText("alg")
-    assert not first.isHidden()
-    assert second.isHidden()
+    assert not window.queue_table.isRowHidden(first.row())
+    assert window.queue_table.isRowHidden(second.row())
 
     window.queue_page.search_input.clear()
     window.queue_page.filter_combo.setCurrentText("Done")
-    assert first.isHidden()
-    assert not second.isHidden()
+    assert window.queue_table.isRowHidden(first.row())
+    assert not window.queue_table.isRowHidden(second.row())
     window.queue_page.filter_combo.setCurrentText("All")
 
 
-def test_form_queue_rows_show_progress_percent_and_eta():
+def test_form_table_rows_show_progress_eta_and_answers():
     window = _make_window()
     _clear_queue(window)
     first = _add_form(window, "https://docs.google.com/forms/d/a/edit", "Algebra")
-    window.current_form_url = first.data(Qt.UserRole)
+    url = first.data(Qt.UserRole)
+    window.current_form_url = url
     window._set_form_status(first, "running", "Grading now")
     window.update_form_metrics(5, 10, 4, 1, 60, 0, 2, 3, 1200.0)
 
-    widget = window.queue_page.list.itemWidget(first)
-    assert widget.progress.value() == 50
-    assert widget.percent_label.text() == "50%"
-    assert widget.eta_label.text() == "01:00"
-    assert _badge(widget) == "RUNNING"
+    row = first.row()
+    assert window_status_cell(window, row, 1) == "RUNNING"
+    assert window._row_bars[url].value() == 50
+    assert window_status_cell(window, row, 3) == "5/10"
+    assert window_status_cell(window, row, 4) == "4"
+    assert window_status_cell(window, row, 5) == "0"
+    assert window_status_cell(window, row, 6) == "1"
+    assert window_status_cell(window, row, 7) == "01:00"
 
 
 def test_partial_form_badge_is_shown_on_queue_row():
@@ -117,10 +168,10 @@ def test_partial_form_badge_is_shown_on_queue_row():
     )
     meta = item.data(Qt.UserRole + 1) or {}
     assert meta["status"] == "partial"
-    widget = window.queue_page.list.itemWidget(item)
-    assert _badge(widget) == "PARTIAL"
-    assert widget.eta_label.text() == "Partial"
-    assert "Missing teacher answer key" in widget.meta_label.text()
+    row = item.row()
+    assert window_status_cell(window, row, 1) == "PARTIAL"
+    assert window_status_cell(window, row, 7) == "Partial"
+    assert "Missing teacher answer key" in window.queue_table.item(row, 0).toolTip()
     assert "form-1" in window.auto_partial_forms
 
 
@@ -132,7 +183,7 @@ def test_partial_form_badge_can_match_queue_row_by_url():
     window.update_skipped_form("", url, "Missing teacher answer key", "[]")
     meta = item.data(Qt.UserRole + 1) or {}
     assert meta["status"] == "partial"
-    assert _badge(window.queue_page.list.itemWidget(item)) == "PARTIAL"
+    assert window_status_cell(window, item.row(), 1) == "PARTIAL"
 
 
 def test_finished_event_does_not_overwrite_partial_badge():
@@ -143,7 +194,7 @@ def test_finished_event_does_not_overwrite_partial_badge():
     window.update_finished_form("form-1")
     meta = item.data(Qt.UserRole + 1) or {}
     assert meta["status"] == "partial"
-    assert _badge(window.queue_page.list.itemWidget(item)) == "PARTIAL"
+    assert window_status_cell(window, item.row(), 1) == "PARTIAL"
 
 
 # ---------------------------------------------------------------------------
@@ -335,7 +386,7 @@ def test_activity_consoles_route_worker_logs():
 # ---------------------------------------------------------------------------
 def test_queue_list_has_custom_context_menu_policy():
     window = _make_window()
-    assert window.queue_page.list.contextMenuPolicy() == Qt.CustomContextMenu
+    assert window.queue_table.contextMenuPolicy() == Qt.CustomContextMenu
 
 
 def test_context_menu_builds_expected_actions_and_separators():
@@ -405,10 +456,10 @@ def test_context_mark_status_changes_status():
     item = _add_form(window, "https://docs.google.com/forms/d/a/edit", "Algebra")
     window._context_set_status(item, "done")
     assert (item.data(Qt.UserRole + 1) or {})["status"] == "done"
-    assert _badge(window.queue_page.list.itemWidget(item)) == "DONE"
+    assert window_status_cell(window, item.row(), 1) == "DONE"
     window._context_set_status(item, "skipped")
     assert (item.data(Qt.UserRole + 1) or {})["status"] == "skipped"
-    assert _badge(window.queue_page.list.itemWidget(item)) == "SKIPPED"
+    assert window_status_cell(window, item.row(), 1) == "SKIPPED"
 
 
 def test_context_move_to_top_and_bottom_reorders_queue_and_saves():
@@ -421,32 +472,33 @@ def test_context_move_to_top_and_bottom_reorders_queue_and_saves():
         _add_form(window, url, url.split("/d/")[1].split("/")[0])
 
     def ordered_urls():
-        return [window.queue_page.list.item(i).data(Qt.UserRole)
-                for i in range(window.queue_page.list.count())]
+        return [window.queue_table.item(i, 0).data(Qt.UserRole)
+                for i in range(window.queue_table.rowCount())]
 
-    last = window.queue_page.list.item(2)
+    last = window.queue_table.item(2, 0)
     window._context_move(last, "top")
     assert ordered_urls()[0] == urls[2]
     assert list(window.forms_data.keys())[0] == urls[2]
 
-    first = window.queue_page.list.item(0)
+    first = window.queue_table.item(0, 0)
     window._context_move(first, "bottom")
     assert ordered_urls()[-1] == urls[2]
 
 
-def test_context_move_keeps_item_widget_attached():
+def test_context_move_keeps_row_metadata_attached():
     window = _make_window()
     _clear_queue(window)
     urls = ["https://docs.google.com/forms/d/a1/edit",
             "https://docs.google.com/forms/d/b1/edit"]
     for url in urls:
         _add_form(window, url, url)
-    second = window.queue_page.list.item(1)
-    second_widget = window.queue_page.list.itemWidget(second)
+    second = window.queue_table.item(1, 0)
+    second.setData(Qt.UserRole + 1, {**(second.data(Qt.UserRole + 1) or {}), "detail": "keep-me"})
     window._context_move(second, "top")
-    moved = window.queue_page.list.item(0)
-    assert moved is second
-    assert window.queue_page.list.itemWidget(moved) is second_widget
+    moved = window.queue_table.item(0, 0)
+    assert moved.data(Qt.UserRole) == urls[1]
+    assert (moved.data(Qt.UserRole + 1) or {}).get("detail") == "keep-me"
+    assert urls[1] in window._row_bars
 
 
 def test_context_remove_single_item_deletes_and_saves(monkeypatch):
@@ -457,8 +509,8 @@ def test_context_remove_single_item_deletes_and_saves(monkeypatch):
     monkeypatch.setattr(window, "save_forms", lambda: None)
     monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
     window._context_remove(item, item.data(Qt.UserRole))
-    assert window.queue_page.list.count() == 1
-    assert window.queue_page.list.item(0).data(Qt.UserRole) == "https://docs.google.com/forms/d/a/edit"
+    assert window.queue_table.rowCount() == 1
+    assert window.queue_table.item(0, 0).data(Qt.UserRole) == "https://docs.google.com/forms/d/a/edit"
 
 
 def test_context_remove_cancelled_keeps_item(monkeypatch):
@@ -468,7 +520,7 @@ def test_context_remove_cancelled_keeps_item(monkeypatch):
     item = _add_form(window, "https://docs.google.com/forms/d/b/edit", "Fractions")
     monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.No)
     window._context_remove(item, item.data(Qt.UserRole))
-    assert window.queue_page.list.count() == 2
+    assert window.queue_table.rowCount() == 2
 
 
 # ---------------------------------------------------------------------------
