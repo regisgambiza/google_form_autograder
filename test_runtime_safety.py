@@ -131,8 +131,8 @@ def test_stop_before_thread_run_never_spawns_grader(monkeypatch):
 
 
 def test_window_close_is_exit_not_implicit_tray_hide():
-    source = Path("gui_main.py").read_text(encoding="utf-8")
-    close_body = source.split("def closeEvent(self, event):", 1)[1].split("if __name__ ==", 1)[0]
+    source = Path("gui_studio/main_window.py").read_text(encoding="utf-8")
+    close_body = source.split("def closeEvent(self, event):", 1)[1].split("def ", 1)[0]
     assert "self._shutdown_owned_work()" in close_body
     assert "event.accept()" in close_body
     assert "event.ignore()" not in close_body

@@ -2104,45 +2104,14 @@ class AutograderWindow(QMainWindow):
                             "Teacher Answers Added — Re-graded",
                             f"{len(re_graded)} form(s) that were missing teacher answers have now been fully graded.",
                         )
-            forms_cleared = 0
-            finished_ids = set(self.finished_forms)
-            i = 0
-            while i < self.form_list.count():
-                item = self.form_list.item(i)
-                url = item.data(Qt.UserRole)
-                form_id = self.extract_form_id(url) if url else None
-                meta = item.data(Qt.UserRole + 1) or {}
-                keep_partial = (
-                    meta.get("status") == "partial"
-                    or (form_id and form_id in self.auto_partial_forms)
-                )
-                if form_id in finished_ids and not keep_partial:
-                    self.form_list.takeItem(i)
-                    if url in self.forms_data:
-                        del self.forms_data[url]
-                    forms_cleared += 1
-                else:
-                    i += 1
-            i = 0
-            while i < self.form_list.count():
-                item = self.form_list.item(i)
-                meta = item.data(Qt.UserRole + 1) or {}
-                if meta.get("status") == "done":
-                    self.form_list.takeItem(i)
-                    url = item.data(Qt.UserRole)
-                    if url in self.forms_data:
-                        del self.forms_data[url]
-                    forms_cleared += 1
-                else:
-                    i += 1
-            if forms_cleared > 0:
-                self.append_debug(f"<font color='gray'>[AUTO] Cleared {forms_cleared} finished forms from queue</font>")
-                self.save_forms()
-                self._refresh_queue_positions()
             remaining_forms = self.form_list.count()
             finished_count = len(self.finished_forms)
             self.append_debug(
                 f"<font color='blue'>[AUTO] Session stats: finished {finished_count}, in queue {remaining_forms}</font>"
+            )
+            self.append_debug(
+                "<font color='gray'>[AUTO] Finished forms are kept in the list for review. "
+                "Use Clear Completed / Clear All to remove them manually.</font>"
             )
             self.schedule_next_cycle()
         else:

@@ -1,16 +1,16 @@
 import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
-import gui_main
-from gui_main import FormManager
+from gui_studio.main_window import AutograderWindow
 
 # Ensure a QApplication exists for widget construction
 APP = QApplication.instance() or QApplication([])
 
 
 def test_start_next_form_after_finish(monkeypatch):
-    window = FormManager()
+    window = AutograderWindow()
     # Ensure clean state
     window.form_list.clear()
     window.forms_data.clear()
@@ -36,7 +36,7 @@ def test_start_next_form_after_finish(monkeypatch):
         window.is_grading = True
 
     # Make timers run immediately in the test environment
-    monkeypatch.setattr(gui_main.QTimer, "singleShot", lambda _ms, fn: fn())
+    monkeypatch.setattr(QTimer, "singleShot", lambda _ms, fn: fn())
     monkeypatch.setattr(window, "run_grader", fake_run_grader)
 
     # Simulate finishing the first form

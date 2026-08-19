@@ -7,14 +7,14 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication
 
 from app_theme import apply_application_theme
-from gui_main import FormManager
+from gui_studio.main_window import AutograderWindow
 
 APP = QApplication.instance() or QApplication([])
 apply_application_theme(APP)
 
 
 def _make_window(monkeypatch, tmp_path):
-    window = FormManager()
+    window = AutograderWindow()
     window.auto_partial_forms_path = str(tmp_path / "auto_partial_forms.json")
     window.forms_to_grade = None
     window._load_auto_partial_forms = lambda: None
@@ -67,13 +67,13 @@ def test_partial_form_survives_auto_cleanup(monkeypatch, tmp_path):
     assert meta.get("status") in {"partial", "queued"}
 
 
-def test_done_form_still_cleared_in_auto_mode(monkeypatch, tmp_path):
+def test_done_form_kept_in_auto_mode(monkeypatch, tmp_path):
     window = _make_window(monkeypatch, tmp_path)
     url = "https://docs.google.com/forms/d/abc345/edit"
     window._add_form_to_queue(url, "Test Form")
     form_id = window.extract_form_id(url)
     item = window._find_form_item_by_id(form_id)
-    from gui_main import Qt
+    from PySide6.QtCore import Qt
     window._set_form_status(item, "done", "Finished and saved grading updates")
 
     window.auto_mode = True
@@ -81,7 +81,10 @@ def test_done_form_still_cleared_in_auto_mode(monkeypatch, tmp_path):
     window.auto_partial_forms.clear()
     window.on_grading_finished(True, "")
 
-    assert window._find_form_item_by_id(form_id) is None
+    item = window._find_form_item_by_id(form_id)
+    assert item is not None, "graded form must remain in the finished list after auto-mode cleanup"
+    meta = item.data(0x0100 + 1) or {}
+    assert meta.get("status") == "done"
 
 
 def test_recheck_schedules_whole_form_regrade(monkeypatch, tmp_path):
@@ -107,9 +110,8 @@ def test_recheck_schedules_whole_form_regrade(monkeypatch, tmp_path):
     def fake_missing(service, fid, structure, qids):
         return []  # everything now has a teacher answer
 
-    import gui_main
     import form_utils
-    monkeypatch.setattr("gui_main.get_service", lambda: object())
+    monkeypatch.setattr("auth.get_service", lambda: object())
     monkeypatch.setattr(form_utils, "get_form_structure", fake_structure)
     monkeypatch.setattr(window, "_current_missing_qids", fake_missing)
 
@@ -150,9 +152,8 @@ def test_recheck_skips_when_still_missing(monkeypatch, tmp_path):
     def fake_missing(service, fid, structure, qids):
         return list(qids)  # nothing resolved yet
 
-    import gui_main
     import form_utils
-    monkeypatch.setattr("gui_main.get_service", lambda: object())
+    monkeypatch.setattr("auth.get_service", lambda: object())
     monkeypatch.setattr(form_utils, "get_form_structure", fake_structure)
     monkeypatch.setattr(window, "_current_missing_qids", fake_missing)
 
@@ -175,9 +176,8 @@ def test_recheck_throttle_respected(monkeypatch, tmp_path):
         "last_check": (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat(),
     }
 
-    import gui_main
     import form_utils
-    monkeypatch.setattr("gui_main.get_service", lambda: object())
+    monkeypatch.setattr("auth.get_service", lambda: object())
     monkeypatch.setattr(
         form_utils, "get_form_structure",
         lambda service, fid: [{"questionId": "q1", "itemId": "item1", "index": 0,
