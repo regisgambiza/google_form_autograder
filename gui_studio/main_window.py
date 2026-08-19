@@ -54,6 +54,7 @@ from answer_key_dashboard import AnswerKeyDashboard
 from auto_add_dialog import AutoAddDialog, SearchThread
 from decision_audit_viewer import DecisionAuditViewer, load_audit_records
 from evaluator_config import (
+    configured_provider_names,
     effective_ai_worker_count,
     effective_provider_worker_counts,
     is_llamacpp_only,
@@ -1671,7 +1672,8 @@ class AutograderWindow(QMainWindow):
                 preflight_cfg = json.load(fh)
         except Exception:
             preflight_cfg = {}
-        if is_llamacpp_only(preflight_cfg) and bool(preflight_cfg.get("llamacpp_require_server", True)):
+        if "llamacpp" in configured_provider_names(preflight_cfg) and bool(preflight_cfg.get("llamacpp_require_server", True)):
+            llamacpp_only = is_llamacpp_only(preflight_cfg)
             try:
                 from providers.llamacpp_provider import LlamaCppProvider
 
@@ -1680,7 +1682,7 @@ class AutograderWindow(QMainWindow):
                 llamacpp_ready = False
             if not llamacpp_ready and bool(preflight_cfg.get("llamacpp_auto_start_server", True)):
                 llamacpp_ready = self._start_llamacpp_server(preflight_cfg)
-            if not llamacpp_ready:
+            if not llamacpp_ready and llamacpp_only:
                 message = (
                     "llama.cpp-only grading is selected, but no compatible llama.cpp server is responding.\n\n"
                     "The app tried to start llama-server.exe but it did not become ready. "
@@ -1693,6 +1695,11 @@ class AutograderWindow(QMainWindow):
                 )
                 QMessageBox.warning(self, "llama.cpp server offline", message)
                 return
+            if not llamacpp_ready:
+                self.append_debug(
+                    "<font color='orange'>[LLAMACPP] llama.cpp is configured but the local server is offline; "
+                    "grading will fall back to the other enabled providers.</font>"
+                )
 
         self.is_grading = True
         self._set_run_state("Running")

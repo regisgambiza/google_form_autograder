@@ -119,42 +119,35 @@
             "nvidia/nemotron-3-nano-30b-a3b:free"
         ],
         "factual_judge": [
-            "qwen/qwen3-next-80b-a3b-instruct:free"
+            "z-ai/glm-5.2:free"
         ],
         "concept_judge": [
-            "poolside/laguna-m.1:free"
+            "poolside/laguna-s-2.1:free"
         ],
         "strict_judge": [
             "google/gemma-4-31b-it:free"
         ],
         "misconception_judge": [
-            "meta-llama/llama-3.3-70b-instruct:free"
+            "nvidia/nemotron-3-super-120b-a12b:free"
         ],
         "language_filter": [
-            "tencent/hy3:free"
+            "google/gemma-4-26b-a4b-it:free"
         ]
     },
     "openrouter_fallback_models": [
         "nvidia/nemotron-3-nano-30b-a3b:free",
-        "poolside/laguna-m.1:free",
-        "qwen/qwen3-next-80b-a3b-instruct:free",
+        "z-ai/glm-5.2:free",
         "google/gemma-4-31b-it:free",
         "google/gemma-4-26b-a4b-it:free",
         "nvidia/nemotron-3-super-120b-a12b:free",
         "nvidia/nemotron-3-ultra-550b-a55b:free",
         "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+        "nvidia/nemotron-3.5-lightning:free",
+        "poolside/laguna-s-2.1:free",
         "poolside/laguna-xs-2.1:free",
-        "liquid/lfm-2.5-1.2b-instruct:free",
-        "liquid/lfm-2.5-1.2b-thinking:free",
         "nvidia/nemotron-nano-9b-v2:free",
-        "openai/gpt-oss-120b:free",
         "openai/gpt-oss-20b:free",
-        "cognitivecomputations/dolphin-mistral-24b-venice-edition:free",
-        "meta-llama/llama-3.3-70b-instruct:free",
-        "meta-llama/llama-3.2-3b-instruct:free",
-        "nousresearch/hermes-3-llama-3.1-405b:free",
         "nvidia/nemotron-nano-12b-v2-vl:free",
-        "tencent/hy3:free",
         "openrouter/free"
     ],
     "openrouter_paid_fallback_models": [
@@ -181,7 +174,7 @@
             "completion": 0.1
         }
     },
-    "max_openrouter_spend_usd_per_run": 80000.0,
+    "max_openrouter_spend_usd_per_run": 100.0,
     "openrouter_dynamic_model_pool_enabled": true,
     "openrouter_model_catalog_refresh_enabled": true,
     "openrouter_model_catalog_refresh_seconds": 3600,
@@ -209,25 +202,18 @@
     "openrouter_blocked_model_keywords": [],
     "openrouter_free_model_catalog": [
         "nvidia/nemotron-3-nano-30b-a3b:free",
-        "poolside/laguna-m.1:free",
-        "qwen/qwen3-next-80b-a3b-instruct:free",
+        "z-ai/glm-5.2:free",
         "google/gemma-4-31b-it:free",
         "google/gemma-4-26b-a4b-it:free",
         "nvidia/nemotron-3-super-120b-a12b:free",
         "nvidia/nemotron-3-ultra-550b-a55b:free",
         "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+        "nvidia/nemotron-3.5-lightning:free",
+        "poolside/laguna-s-2.1:free",
         "poolside/laguna-xs-2.1:free",
-        "liquid/lfm-2.5-1.2b-instruct:free",
-        "liquid/lfm-2.5-1.2b-thinking:free",
         "nvidia/nemotron-nano-9b-v2:free",
-        "openai/gpt-oss-120b:free",
         "openai/gpt-oss-20b:free",
-        "cognitivecomputations/dolphin-mistral-24b-venice-edition:free",
-        "meta-llama/llama-3.3-70b-instruct:free",
-        "meta-llama/llama-3.2-3b-instruct:free",
-        "nousresearch/hermes-3-llama-3.1-405b:free",
         "nvidia/nemotron-nano-12b-v2-vl:free",
-        "tencent/hy3:free",
         "openrouter/free"
     ],
     "decision_audit_path": "logs/grading_decisions.jsonl",
@@ -263,7 +249,7 @@
     },
     "enable_pipeline_workers": true,
     "deterministic_worker_count": 4,
-    "ai_worker_count": 10,
+    "ai_worker_count": 1,
     "worker_queue_size": 1200,
     "global_prefetch_mode": true,
     "dispatch_mode": "global",
@@ -284,7 +270,7 @@
     "adaptive_target_latency_ms": 15000,
     "adaptive_timeout_rate_threshold": 0.2,
     "adaptive_chunk_size": 12,
-    "max_concurrent_jury_answers": 10,
+    "max_concurrent_jury_answers": 1,
     "jury_semaphore_acquire_timeout_seconds": 21600,
     "enable_async_judges": false,
     "sync_judge_parallelism": 1,
@@ -372,12 +358,11 @@
     "truncate_answers_before_grading": false,
     "enable_deduplication": true,
     "dark_mode": false,
-    "rubric_timeout_seconds": 3600,
     "auto_run": {
         "grading_mode": "Recent Only",
-        "recency_value": 5,
+        "recency_value": 10,
         "recency_unit": "hours",
-        "interval_value": 5,
+        "interval_value": 30,
         "interval_unit": "minutes",
         "notify_on_new": true,
         "spend_budget_usd": 80000.0,
@@ -393,5 +378,7 @@
             true
         ],
         "sources": []
-    }
+    },
+    "concurrent_forms": 1,
+    "rubric_timeout_seconds": 3600
 }
