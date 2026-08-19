@@ -18,6 +18,7 @@ class GraderThread(QThread):
     current_form = Signal(str)
     finished_form = Signal(str)
     skipped_form = Signal(str, str, str, str)
+    form_done = Signal(str, int, int, int, int)
 
     def __init__(self, grade_recent_only=False, form_urls=None):
         super().__init__()
@@ -334,6 +335,98 @@ class GraderThread(QThread):
             )
         return esc(event.get("message", ""))
 
+    def parse_line(self, ls):
+        """Route a single stdout line from the grader subprocess to signals.
+
+        Extracted from the run() read loop so it can be unit tested.
+        """
+        if ls.startswith("FormProgress:"):
+            try:
+                current, total = map(int, ls.split(":")[1].strip().split("/"))
+                self.progress.emit(current, total)
+            except:
+                pass
+
+        if ls.startswith("Progress:"):
+            try:
+                current, total = map(int, ls.split(":")[1].strip().split("/"))
+                self.overall_progress.emit(current, total)
+            except:
+                pass
+
+        if "Processing form ID:" in ls and "from URL:" in ls:
+            try:
+                url = ls.split("from URL:", 1)[1].strip()
+                self.current_form.emit(url)
+            except:
+                pass
+
+        if "Finished processing form" in ls:
+            try:
+                form_id = ls.split("Finished processing form", 1)[1].strip().split()[0]
+                self.finished_form.emit(form_id)
+            except:
+                pass
+
+        if ls.startswith("FormMetrics:"):
+            try:
+                payload = ls.split(":", 1)[1].strip().split()
+                completed, total = map(int, payload[0].split("/", 1))
+                accepted, review_questions, elapsed = map(int, payload[1:4])
+                rejected = 0
+                if len(payload) >= 5:
+                    rejected = int(payload[4])
+                extras = {}
+                for token in payload[5:]:
+                    if "=" not in token:
+                        continue
+                    key, value = token.split("=", 1)
+                    extras[key] = value
+                det_decisions = int(float(extras.get("det", 0) or 0))
+                ai_decisions = int(float(extras.get("ai", 0) or 0))
+                avg_latency_ms = float(extras.get("avg_ms", 0.0) or 0.0)
+                self.form_metrics.emit(
+                    completed,
+                    total,
+                    accepted,
+                    review_questions,
+                    elapsed,
+                    rejected,
+                    det_decisions,
+                    ai_decisions,
+                    avg_latency_ms,
+                )
+            except Exception:
+                pass
+
+        if "[FORM] FINISHED" in ls and "(" in ls and ")" in ls:
+            try:
+                form_id = ls.rsplit("(", 1)[1].split(")", 1)[0].strip()
+                if form_id:
+                    self.finished_form.emit(form_id)
+            except:
+                pass
+
+        if ls.startswith("FormDone:"):
+            try:
+                payload = ls.split(":", 1)[1].strip().split()
+                form_id = ""
+                extras = {}
+                for token in payload:
+                    if "=" in token:
+                        key, value = token.split("=", 1)
+                        extras[key] = value
+                    elif not form_id:
+                        form_id = token
+                total = int(float(extras.get("total", 0) or 0))
+                accepted = int(float(extras.get("accepted", 0) or 0))
+                review = int(float(extras.get("review", 0) or 0))
+                rejected = int(float(extras.get("rejected", 0) or 0))
+                if form_id:
+                    self.form_done.emit(form_id, total, accepted, review, rejected)
+            except Exception:
+                pass
+
     def run(self):
         try:
             if self._stop_requested:
@@ -420,72 +513,7 @@ class GraderThread(QThread):
                         self.debug_message.emit(ls)
 
                 # Parse progress messages from main.py
-                if ls.startswith("FormProgress:"):
-                    try:
-                        current, total = map(int, ls.split(":")[1].strip().split("/"))
-                        self.progress.emit(current, total)
-                    except:
-                        pass
-
-                if ls.startswith("Progress:"):
-                    try:
-                        current, total = map(int, ls.split(":")[1].strip().split("/"))
-                        self.overall_progress.emit(current, total)
-                    except:
-                        pass
-
-                if "Processing form ID:" in ls and "from URL:" in ls:
-                    try:
-                        url = ls.split("from URL:", 1)[1].strip()
-                        self.current_form.emit(url)
-                    except:
-                        pass
-
-                if "Finished processing form" in ls:
-                    try:
-                        form_id = ls.split("Finished processing form", 1)[1].strip().split()[0]
-                        self.finished_form.emit(form_id)
-                    except:
-                        pass
-
-                if ls.startswith("FormMetrics:"):
-                    try:
-                        payload = ls.split(":", 1)[1].strip().split()
-                        completed, total = map(int, payload[0].split("/", 1))
-                        accepted, review_questions, elapsed = map(int, payload[1:4])
-                        rejected = 0
-                        if len(payload) >= 5:
-                            rejected = int(payload[4])
-                        extras = {}
-                        for token in payload[5:]:
-                            if "=" not in token:
-                                continue
-                            key, value = token.split("=", 1)
-                            extras[key] = value
-                        det_decisions = int(float(extras.get("det", 0) or 0))
-                        ai_decisions = int(float(extras.get("ai", 0) or 0))
-                        avg_latency_ms = float(extras.get("avg_ms", 0.0) or 0.0)
-                        self.form_metrics.emit(
-                            completed,
-                            total,
-                            accepted,
-                            review_questions,
-                            elapsed,
-                            rejected,
-                            det_decisions,
-                            ai_decisions,
-                            avg_latency_ms,
-                        )
-                    except Exception:
-                        pass
-
-                if "[FORM] FINISHED" in ls and "(" in ls and ")" in ls:
-                    try:
-                        form_id = ls.rsplit("(", 1)[1].split(")", 1)[0].strip()
-                        if form_id:
-                            self.finished_form.emit(form_id)
-                    except:
-                        pass
+                self.parse_line(ls)
 
             # Wait for process to finish
             self.process.wait(timeout=10)

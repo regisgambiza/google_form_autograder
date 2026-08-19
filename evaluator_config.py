@@ -256,6 +256,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "embedding": 0.10,
     },
     "execution_mode": "Maximum accuracy: independent unanimous jury + review",
+    "concurrent_forms": 1,
     "active_judge_roles": [
         "semantic_judge", "factual_judge", "concept_judge", "strict_judge",
     ],

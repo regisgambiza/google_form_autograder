@@ -192,6 +192,12 @@ def _prepare_form(service, idx: int, total_forms: int, form_url: str, grade_rece
     }
 
 
+def chunked(items, n):
+    """Yield successive n-sized chunks from items."""
+    for i in range(0, len(items), n):
+        yield items[i : i + n]
+
+
 def main():
     acquire_grader_lock()
     run_id = datetime.now(timezone.utc).strftime("run-%Y%m%dT%H%M%SZ") + f"-{os.getpid()}"
@@ -242,29 +248,33 @@ def main():
     if str(config.get("dispatch_mode", "")).lower() == "global":
         processed_count = 0
         failed_count = 0
-        log("INFO", "[DISPATCH] Sequential form mode enabled: grading one queued form at a time.")
-        for idx, form_url in enumerate(form_urls, start=1):
-            form_id = "unknown"
-            try:
-                form_id = extract_form_id(form_url)
-            except Exception:
-                pass
-
-            print(f"Progress: {idx - 1}/{total_forms}")
-            log("INFO", f"Processing form ID: {form_id} from URL: {form_url}")
-            log("INFO", f"[FORM] QUEUED {idx}/{total_forms} | form_id={form_id}")
+        concurrent_forms = max(1, min(8, int(config.get("concurrent_forms", 1) or 1)))
+        log(
+            "INFO",
+            f"[DISPATCH] Global form mode enabled: grading up to {concurrent_forms} form(s) at a time.",
+        )
+        for chunk in chunked(form_urls, concurrent_forms):
+            for form_url in chunk:
+                form_id = "unknown"
+                try:
+                    form_id = extract_form_id(form_url)
+                except Exception:
+                    pass
+                log("INFO", f"Processing form ID: {form_id} from URL: {form_url}")
             write_heartbeat("form_start")
 
             try:
-                run_global_dispatcher(form_urls=[form_url], grade_recent_only=grade_recent_only, generate_report=generate_report)
-                processed_count += 1
+                run_global_dispatcher(form_urls=list(chunk), grade_recent_only=grade_recent_only, generate_report=generate_report)
+                for _ in chunk:
+                    processed_count += 1
+                    print(f"Progress: {processed_count}/{total_forms}")
             except Exception as ex:
-                failed_count += 1
-                log("ERROR", f"Failed to process form: {form_url}")
-                log("ERROR", f"Form ID: {form_id} | Error: {ex}")
-                print(f"ERROR processing {form_url}: {ex}")
+                failed_count += len(chunk)
+                log("ERROR", f"Failed to process form chunk: {list(chunk)}")
+                log("ERROR", f"Error: {ex}")
+                for form_url in chunk:
+                    print(f"ERROR processing {form_url}: {ex}")
 
-            print(f"Progress: {idx}/{total_forms}")
             write_heartbeat("form_complete")
 
         if failed_count:

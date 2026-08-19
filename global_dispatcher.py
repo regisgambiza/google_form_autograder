@@ -1421,3 +1421,17 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
             generate_form_feedback(form_id, title, all_questions)
         save_grading_time(form_id, datetime.now(timezone.utc))
         log("INFO", f"[FORM] FINISHED '{title}' ({form_id})")
+        counts = data.get("counts", {}) or {}
+        answers = data.get("question_answers", {}) or {}
+        rejected = data.get("question_rejected", {}) or {}
+        total = int(sum(counts.get(qid, 0) for qid in counts))
+        accepted = int(
+            sum(len([a for a in answers.get(qid, []) if a]) for qid in answers)
+        )
+        review = int(sum(1 for (fi, qid) in review_question_ids if fi == i))
+        rejected_count = int(sum(len(rejected.get(qid, [])) for qid in rejected))
+        print(
+            f"FormDone: {form_id} total={total} accepted={accepted} "
+            f"review={review} rejected={rejected_count}",
+            flush=True,
+        )

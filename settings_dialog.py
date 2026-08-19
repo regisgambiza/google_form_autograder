@@ -878,6 +878,15 @@ def show_settings_dialog(owner):
     heartbeat_max_restarts_spin.setRange(1, 10)
     heartbeat_max_restarts_spin.setValue(cfg.get("heartbeat_max_restarts", 5))
 
+    concurrent_forms_spin = QSpinBox(dialog)
+    concurrent_forms_spin.setRange(1, 8)
+    concurrent_forms_spin.setValue(max(1, min(8, int(cfg.get("concurrent_forms", 1) or 1))))
+    concurrent_forms_spin.setToolTip(
+        "Grade this many forms at once (1 = current behavior). "
+        "Forms share the same AI worker pool, so higher values raise throughput "
+        "without multiplying model load."
+    )
+
     # Ollama options
     judge_num_ctx_spin = QSpinBox(dialog)
     judge_num_ctx_spin.setRange(512, 8192)
@@ -956,6 +965,7 @@ def show_settings_dialog(owner):
     )
 
     global_form.addRow("Grade Mode:", grading_mode_combo)
+    global_form.addRow("Concurrent Forms:", concurrent_forms_spin)
     global_form.addRow("Execution Mode:", execution_mode_combo)
     global_form.addRow("Grading Strictness:", strictness_combo)
     global_form.addRow("Minimum Judge Confidence:", minimum_judge_confidence_spin)
@@ -1143,6 +1153,7 @@ def show_settings_dialog(owner):
             config_data["batch_size"] = int(batch_size_spin.value())
 
         config_data["grading_mode"] = grading_mode_combo.currentText()
+        config_data["concurrent_forms"] = int(concurrent_forms_spin.value())
         selected_mode = execution_mode_combo.currentText()
         config_data["execution_mode"] = selected_mode
 

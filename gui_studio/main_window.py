@@ -1791,6 +1791,7 @@ class AutograderWindow(QMainWindow):
         self.grader_thread.current_form.connect(self.update_current_form)
         self.grader_thread.finished_form.connect(self.update_finished_form)
         self.grader_thread.skipped_form.connect(self.update_skipped_form)
+        self.grader_thread.form_done.connect(self.update_form_done)
         self.grader_thread.start()
 
     def _format_duration(self, seconds):
@@ -2021,6 +2022,19 @@ class AutograderWindow(QMainWindow):
             self._set_form_status(item, "done", "Finished and saved grading updates")
         self.append_debug(f"<font color='green'>[{now_str}] Completed: {title}</font>")
         QTimer.singleShot(800, self._maybe_start_next_after_finish)
+
+    def update_form_done(self, form_id, total, accepted, review, rejected):
+        item = self._find_form_item_by_id(form_id) if form_id else None
+        if not item:
+            return
+        meta = item.data(Qt.UserRole + 1) or {}
+        meta["completed"] = int(total)
+        meta["total"] = int(total)
+        meta["accepted"] = int(accepted)
+        meta["rejected"] = int(rejected)
+        meta["review_questions"] = int(review)
+        item.setData(Qt.UserRole + 1, meta)
+        self._refresh_form_row(item)
 
     def update_skipped_form(self, form_id, url="", reason="Missing teacher answer key", missing_questions_json="[]"):
         item = self._find_form_item_by_id(form_id) if form_id else None
