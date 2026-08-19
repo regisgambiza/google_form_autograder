@@ -158,6 +158,59 @@ def test_scan_whole_drive_includes_shared_drives(monkeypatch):
     assert by_id["unit1"]["parent_id"] == "sdroot" and by_id["unit1"]["root"] == "Team Drive"
 
 
+def test_scan_dedupes_folders_visible_in_drive_and_shared_with_me(monkeypatch):
+    """A drive folder shared with the account directly must appear once,
+    nested under its real drive parent (not flattened or duplicated)."""
+    service = FakeDriveService(
+        user_pages=[{"files": [
+            {"id": "mine", "name": "Mine", "parents": ["MYROOT"]},
+            # Directly shared with the account, but really lives in the drive:
+            {"id": "unit1", "name": "Unit 1", "parents": ["top"]},
+            {"id": "top", "name": "Top", "parents": ["SD1"]},
+        ]}],
+        shared_drives=[{"id": "SD1", "name": "Team Drive"}],
+        shared_drive_pages=[
+            {"files": [
+                {"id": "top", "name": "Top", "parents": ["SD1"]},
+                {"id": "unit1", "name": "Unit 1", "parents": ["top"]},
+            ]},
+        ],
+    )
+    _patch_drive(monkeypatch, service)
+
+    nodes = drive_folders.scan_whole_drive()
+    assert len(nodes) == 3  # no duplicates
+    by_id = {node["id"]: node for node in nodes}
+    assert by_id["top"]["parent_id"] is None and by_id["top"]["root"] == "Team Drive"
+    assert by_id["unit1"]["parent_id"] == "top" and by_id["unit1"]["root"] == "Team Drive"
+    assert by_id["mine"]["parent_id"] is None and by_id["mine"]["root"] == "My Drive"
+
+
+def test_scan_preserves_deep_shared_drive_nesting(monkeypatch):
+    service = FakeDriveService(
+        user_pages=[{"files": []}],
+        shared_drives=[{"id": "SD1", "name": "Deep"}],
+        shared_drive_pages=[
+            {"files": [
+                {"id": "a", "name": "A", "parents": ["SD1"]},
+                {"id": "b", "name": "B", "parents": ["a"]},
+                {"id": "c", "name": "C", "parents": ["b"]},
+                {"id": "d", "name": "D", "parents": ["c"]},
+            ]},
+        ],
+    )
+    _patch_drive(monkeypatch, service)
+
+    nodes = drive_folders.scan_whole_drive()
+    by_id = {node["id"]: node for node in nodes}
+    assert by_id["a"]["parent_id"] is None
+    assert by_id["b"]["parent_id"] == "a"
+    assert by_id["c"]["parent_id"] == "b"
+    assert by_id["d"]["parent_id"] == "c"
+    # Exactly one root: no flat dump of subfolders.
+    assert [n for n in nodes if n["parent_id"] is None][0]["id"] == "a"
+
+
 # ---------------------------------------------------------------------------
 # DriveFoldersPage widget
 # ---------------------------------------------------------------------------
@@ -233,6 +286,22 @@ def test_page_apply_signal_emits_folder_urls():
     page._emit_apply()
     assert len(emitted) == 5
     assert all(url.startswith("https://drive.google.com/drive/folders/") for url in emitted)
+
+
+def test_page_group_order_is_deterministic():
+    page = _make_page()
+    # Nodes may arrive drive-first; groups must still render in a fixed order.
+    page.populate_tree([
+        {"id": "z1", "name": "Z Drive root", "parent_id": None, "root": "Z Drive"},
+        {"id": "s1", "name": "Shared", "parent_id": None, "root": "Shared with me"},
+        {"id": "m1", "name": "Mine", "parent_id": None, "root": "My Drive"},
+        {"id": "a1", "name": "A Drive root", "parent_id": None, "root": "A Drive"},
+    ])
+    labels = [
+        page.folder_tree.topLevelItem(i).text(0)
+        for i in range(page.folder_tree.topLevelItemCount())
+    ]
+    assert labels == ["My Drive", "Shared with me", "A Drive", "Z Drive"]
 
 
 def test_page_filter_hides_non_matching_folders():

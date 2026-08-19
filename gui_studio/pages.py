@@ -950,16 +950,13 @@ class DriveFoldersPage(QWidget):
             for node in nodes:
                 children.setdefault(node.get("parent_id"), []).append(node)
 
-            group_order = ["My Drive"]
+            group_order = ["My Drive", "Shared with me"]
             groups = {}
             roots = [node for node in nodes if not node.get("parent_id")]
             for node in roots:
                 label = node.get("root") or "Shared with me"
-                if label not in groups:
-                    groups[label] = []
-                    if label not in group_order:
-                        group_order.append(label)
-                groups[label].append(node)
+                groups.setdefault(label, []).append(node)
+            group_order += sorted(label for label in groups if label not in group_order)
 
             for label in group_order:
                 members = groups.get(label)

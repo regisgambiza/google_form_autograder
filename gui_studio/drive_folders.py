@@ -60,6 +60,9 @@ class DriveFolderScanThread(QThread):
 
     parent_id is None for top-level nodes; "root" names the container the
     folder lives under ("My Drive", "Shared with me", or a Shared Drive name).
+    Folders visible through two paths (e.g. in a Shared Drive and shared
+    with the account directly) appear exactly once, nested in their real
+    container.
     """
 
     progress = Signal(str)
@@ -108,90 +111,70 @@ def _list_pages(drive_service, request_builder, context, progress_callback=None,
 
 
 def scan_whole_drive(progress_callback=None, cancel_check=None):
-    """Return every visible folder as flat node dicts (see DriveFolderScanThread)."""
+    """Return every visible folder as flat node dicts (see DriveFolderScanThread).
+
+    Shared Drives are scanned first so folders that are also shared with the
+    account directly still nest under their real Drive parent instead of
+    surfacing twice or collapsing into a flat list.
+    """
     from auth import get_drive_service
 
     drive_service = get_drive_service()
     nodes = []
     seen_ids = set()
 
-    def add_folder(fid, name, parent_id, root_label):
+    def add_node(fid, name, parent_id, root_label):
         if not fid or fid in seen_ids:
-            return
+            return False
         seen_ids.add(fid)
         nodes.append({"id": fid, "name": name, "parent_id": parent_id, "root": root_label})
+        return True
 
-    # --- My Drive + folders shared with the account -----------------------
-    if progress_callback:
-        progress_callback("Scanning My Drive folders…")
-    user_folders = _list_pages(
-        drive_service,
-        lambda token: drive_service.files().list(
-            q="mimeType='application/vnd.google-apps.folder' and trashed=false",
-            fields="nextPageToken, files(id, name, parents)",
-            pageSize=1000,
-            pageToken=token,
-            supportsAllDrives=True,
-            includeItemsFromAllDrives=True,
-        ),
-        context="Drive folder scan (My Drive)",
-        progress_callback=progress_callback,
-    )
+    def attach_tree(folder_records, default_label, root_label_fn=None):
+        """Nest folder_records following their real Drive hierarchy.
 
-    user_ids = {folder.get("id") for folder in user_folders if folder.get("id")}
-    by_parent = {}
-    for folder in user_folders:
-        fid = folder.get("id")
-        if not fid:
-            continue
-        for parent in folder.get("parents", []) or [None]:
-            by_parent.setdefault(parent, []).append(folder)
-
-    try:
-        root_id = (
-            drive_service.files().get(fileId="root", fields="id").execute().get("id")
-        )
-    except Exception:
-        root_id = None
-
-    # Top-level My Drive folders list the My Drive root as their parent;
-    # shared-with-me folders reference parents that are not visible at all.
-    def is_root_folder(folder):
-        parents = folder.get("parents", []) or []
-        if not parents:
-            return True
-        if root_id and root_id in parents:
-            return True
-        return not any(parent in user_ids for parent in parents)
-
-    def walk_children(parent_id, root_label):
-        for folder in by_parent.get(parent_id, []):
+        A folder is a root when none of its parents is another folder from
+        the same container (My Drive root / drive root / invisible parents
+        all count as "no parent here"). Roots are labelled via root_label_fn
+        when given, descendants inherit that label. Folders already placed
+        by an earlier container are skipped, so items visible through two
+        paths appear exactly once, in their real container.
+        """
+        ids = {f.get("id") for f in folder_records if f.get("id")}
+        by_parent = {}
+        for folder in folder_records:
             fid = folder.get("id")
-            add_folder(fid, folder.get("name", "Untitled"), parent_id, root_label)
+            if not fid:
+                continue
+            for parent in folder.get("parents") or [None]:
+                by_parent.setdefault(parent, []).append(folder)
+
+        def walk(folder, parent_id, label):
+            fid = folder.get("id")
+            if not add_node(fid, folder.get("name", "Untitled"), parent_id, label):
+                return  # already placed in an earlier container
+            for child in by_parent.get(fid, []):
+                walk(child, fid, label)
+
+        for folder in folder_records:
+            fid = folder.get("id")
+            if not fid:
+                continue
+            if any(p in ids and p != fid for p in folder.get("parents") or []):
+                continue  # not a root: its parent is in this container
             if cancel_check and cancel_check():
                 return
-            walk_children(fid, root_label)
+            parents = folder.get("parents") or []
+            label = root_label_fn(parents) if root_label_fn else default_label
+            walk(folder, None, label)
 
-    for folder in user_folders:
-        fid = folder.get("id")
-        if not fid or fid in seen_ids:
-            continue
-        if is_root_folder(folder):
-            parents = folder.get("parents", []) or []
-            root_label = "My Drive" if (root_id and root_id in parents) or not parents \
-                else "Shared with me"
-            add_folder(fid, folder.get("name", "Untitled"), None, root_label)
-            walk_children(fid, root_label)
-            if cancel_check and cancel_check():
-                return nodes
+        # Safety net for unreachable chains/cycles: keep them visible.
+        for folder in folder_records:
+            fid = folder.get("id")
+            if fid and fid not in seen_ids:
+                add_node(fid, folder.get("name", "Untitled"), None, default_label)
 
-    # Orphaned folders (parents unreachable) still get shown as shared roots.
-    for folder in user_folders:
-        fid = folder.get("id")
-        if fid and fid not in seen_ids:
-            add_folder(fid, folder.get("name", "Untitled"), None, "Shared with me")
-
-    # --- Shared Drives ------------------------------------------------------
+    # --- Shared Drives first (their folders win the nesting) ---------------
     if progress_callback:
         progress_callback("Scanning Shared Drives…")
     try:
@@ -234,42 +217,39 @@ def scan_whole_drive(progress_callback=None, cancel_check=None):
         except Exception as exc:
             log("WARNING", f"Could not scan Shared Drive '{drive_name}': {exc}")
             continue
+        attach_tree(drive_folders, drive_name)
 
-        drive_ids = {folder.get("id") for folder in drive_folders if folder.get("id")}
-        drive_parents = {}
-        for folder in drive_folders:
-            fid = folder.get("id")
-            if not fid:
-                continue
-            for parent in folder.get("parents", []) or [None]:
-                drive_parents.setdefault(parent, []).append(folder)
+    # --- My Drive + folders shared with the account ------------------------
+    if progress_callback:
+        progress_callback("Scanning My Drive folders…")
+    user_folders = _list_pages(
+        drive_service,
+        lambda token: drive_service.files().list(
+            q="mimeType='application/vnd.google-apps.folder' and trashed=false",
+            corpora="user",
+            fields="nextPageToken, files(id, name, parents)",
+            pageSize=1000,
+            pageToken=token,
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True,
+        ),
+        context="Drive folder scan (My Drive)",
+        progress_callback=progress_callback,
+    )
 
-        def walk_drive_children(parent_id):
-            for folder in drive_parents.get(parent_id, []):
-                fid = folder.get("id")
-                add_folder(fid, folder.get("name", "Untitled"), parent_id, drive_name)
-                if cancel_check and cancel_check():
-                    return
-                walk_drive_children(fid)
+    try:
+        root_id = (
+            drive_service.files().get(fileId="root", fields="id").execute().get("id")
+        )
+    except Exception:
+        root_id = None
 
-        # Top-level folders in a shared drive have the drive itself (or the
-        # drive root folder, itself a folder) as parent.
-        for folder in drive_folders:
-            fid = folder.get("id")
-            if not fid or fid in seen_ids:
-                continue
-            parents = folder.get("parents", []) or []
-            if not any(parent in drive_ids and parent != fid for parent in parents):
-                add_folder(fid, folder.get("name", "Untitled"), None, drive_name)
-                walk_drive_children(fid)
-                if cancel_check and cancel_check():
-                    return nodes
+    def user_root_label(parents):
+        if not parents or (root_id and root_id in parents):
+            return "My Drive"
+        return "Shared with me"
 
-        # Orphaned shared-drive folders still get shown under the drive name.
-        for folder in drive_folders:
-            fid = folder.get("id")
-            if fid and fid not in seen_ids:
-                add_folder(fid, folder.get("name", "Untitled"), None, drive_name)
+    attach_tree(user_folders, "Shared with me", root_label_fn=user_root_label)
 
     if progress_callback:
         progress_callback(f"Found {len(nodes)} folder(s)")
