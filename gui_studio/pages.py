@@ -19,6 +19,8 @@ from PySide6.QtWidgets import (
     QStackedWidget,
     QTableWidget,
     QTextEdit,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -845,3 +847,285 @@ class ActivityPage(QWidget):
     def goto_console(self):
         self.segments.set_active("console")
         self.stack.setCurrentIndex(1)
+
+
+# ---------------------------------------------------------------------------
+# Drive folders
+# ---------------------------------------------------------------------------
+def _extract_folder_id(url):
+    """Pull the folder id out of a Drive folder URL (query params ignored)."""
+    if not isinstance(url, str) or "/folders/" not in url:
+        return None
+    tail = url.split("/folders/", 1)[1]
+    return tail.split("/")[0].split("?")[0].split("#")[0].strip() or None
+
+
+class DriveFoldersPage(QWidget):
+    """Whole-Drive folder picker: scan Drive, tick folders, apply to auto-run."""
+
+    scan_requested = Signal()
+    apply_clicked = Signal(list)  # list of Drive folder URLs
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._checked_ids = set()
+        self._populated = False
+        self._building = False
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(18, 16, 18, 16)
+        root.setSpacing(10)
+
+        card, layout = _card((20, 16, 20, 16), 10)
+        layout.addWidget(_caption("Google Drive folders"))
+        head = QHBoxLayout()
+        head.setSpacing(8)
+        intro = QLabel(
+            "Scan your whole Drive, then tick the folders and subfolders that "
+            "auto-run should watch. Applying also updates the predefined sources "
+            "used by Grade All."
+        )
+        intro.setObjectName("Subline")
+        intro.setWordWrap(True)
+        head.addWidget(intro, 1)
+        self.scan_button = QPushButton("Scan Drive")
+        self.scan_button.setObjectName("Primary")
+        self.scan_button.clicked.connect(self.scan_requested)
+        head.addWidget(self.scan_button)
+        layout.addLayout(head)
+
+        self.status_label = QLabel("Not scanned yet — click Scan Drive.")
+        self.status_label.setObjectName("Subline")
+        layout.addWidget(self.status_label)
+
+        toolbar = QHBoxLayout()
+        toolbar.setSpacing(6)
+        self.filter_input = QLineEdit()
+        self.filter_input.setPlaceholderText("Filter folders…")
+        self.filter_input.setFixedWidth(220)
+        self.filter_input.textChanged.connect(self._apply_filter)
+        self.select_all_button = QPushButton("Select All")
+        self.select_all_button.clicked.connect(self._select_all)
+        self.clear_button = QPushButton("Clear Selection")
+        self.clear_button.clicked.connect(self._clear_selection)
+        self.apply_button = QPushButton("Apply to Auto Run")
+        self.apply_button.setObjectName("Primary")
+        self.apply_button.setEnabled(False)
+        self.apply_button.clicked.connect(self._emit_apply)
+        self.count_label = QLabel("0 of 0 folders selected")
+        self.count_label.setObjectName("Subline")
+        toolbar.addWidget(self.filter_input)
+        toolbar.addWidget(self.select_all_button)
+        toolbar.addWidget(self.clear_button)
+        toolbar.addStretch()
+        toolbar.addWidget(self.count_label)
+        toolbar.addWidget(self.apply_button)
+        layout.addLayout(toolbar)
+        root.addWidget(card)
+
+        self.folder_tree = QTreeWidget()
+        self.folder_tree.setObjectName("FolderTree")
+        self.folder_tree.setHeaderLabel("Folder")
+        self.folder_tree.setColumnCount(1)
+        self.folder_tree.itemChanged.connect(self._on_item_changed)
+        root.addWidget(self.folder_tree, 1)
+
+    # -- API --------------------------------------------------------------
+    def set_scan_state(self, text, scanning=False):
+        self.status_label.setText(str(text))
+        self.scan_button.setText("Rescan Drive" if self._populated else "Scan Drive")
+        self.scan_button.setEnabled(not scanning)
+        self.apply_button.setEnabled(self._populated and not scanning)
+
+    def populate_tree(self, nodes):
+        """Rebuild the checkbox tree from scan nodes ({id,name,parent_id,root})."""
+        self._building = True
+        try:
+            self.filter_input.blockSignals(True)
+            self.filter_input.clear()
+            self.filter_input.blockSignals(False)
+            self.folder_tree.clear()
+            by_id = {node["id"]: node for node in nodes}
+            children = {}
+            for node in nodes:
+                children.setdefault(node.get("parent_id"), []).append(node)
+
+            group_order = ["My Drive"]
+            groups = {}
+            roots = [node for node in nodes if not node.get("parent_id")]
+            for node in roots:
+                label = node.get("root") or "Shared with me"
+                if label not in groups:
+                    groups[label] = []
+                    if label not in group_order:
+                        group_order.append(label)
+                groups[label].append(node)
+
+            for label in group_order:
+                members = groups.get(label)
+                if not members:
+                    continue
+                group_item = QTreeWidgetItem(self.folder_tree, [label])
+                group_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
+                group_item.setCheckState(0, Qt.Unchecked)
+                for node in members:
+                    self._add_node(group_item, node, children)
+                self.folder_tree.expandItem(group_item)
+        finally:
+            self._building = False
+        self._populated = True
+        self._refresh_counts()
+        self.set_scan_state(f"{len(by_id)} folder(s) found. Tick the ones auto-run should scan.")
+
+    def set_selected(self, urls):
+        """Pre-check folders from a list of folder URLs (matched by id)."""
+        self._checked_ids = {
+            fid for fid in (_extract_folder_id(url) for url in (urls or [])) if fid
+        }
+        if not self._populated:
+            return
+        self._building = True
+        try:
+            for item in self._iter_folder_items():
+                fid = item.data(0, Qt.UserRole)
+                item.setCheckState(0, Qt.Checked if fid in self._checked_ids else Qt.Unchecked)
+        finally:
+            self._building = False
+        self._refresh_counts()
+
+    def selected_urls(self):
+        from gui_studio.drive_folders import folder_url
+
+        return [
+            folder_url(item.data(0, Qt.UserRole))
+            for item in self._iter_folder_items()
+            if item.checkState(0) == Qt.Checked
+        ]
+
+    # -- internals ----------------------------------------------------------
+    def _add_node(self, parent_item, node, children):
+        item = QTreeWidgetItem(parent_item, [node.get("name", "Untitled")])
+        item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
+        item.setData(0, Qt.UserRole, node["id"])
+        item.setCheckState(0, Qt.Checked if node["id"] in self._checked_ids else Qt.Unchecked)
+        for child in children.get(node["id"], []):
+            self._add_node(item, child, children)
+        return item
+
+    def _iter_folder_items(self):
+        stack = []
+        root = self.folder_tree.invisibleRootItem()
+        for i in range(root.childCount()):
+            group = root.child(i)
+            for j in range(group.childCount()):
+                stack.append(group.child(j))
+        while stack:
+            item = stack.pop()
+            yield item
+            for i in range(item.childCount()):
+                stack.append(item.child(i))
+
+    def _on_item_changed(self, item, column):
+        if self._building or column != 0:
+            return
+        # Parent toggled -> push state to every descendant.
+        if item.data(0, Qt.UserRole) is None:
+            state = item.checkState(0)
+            self._building = True
+            try:
+                for i in range(item.childCount()):
+                    self._set_subtree(item.child(i), state)
+            finally:
+                self._building = False
+            self._refresh_counts()
+            return
+        # Folder toggled -> recompute ancestor group check states.
+        self._building = True
+        try:
+            parent = item.parent()
+            while parent is not None:
+                total = parent.childCount()
+                checked = sum(
+                    1 for i in range(total) if parent.child(i).checkState(0) == Qt.Checked
+                )
+                parent.setCheckState(
+                    0, Qt.Checked if checked == total else (Qt.PartiallyChecked if checked else Qt.Unchecked)
+                )
+                parent = parent.parent()
+        finally:
+            self._building = False
+        self._refresh_counts()
+
+    def _set_subtree(self, item, state):
+        item.setCheckState(0, state)
+        for i in range(item.childCount()):
+            self._set_subtree(item.child(i), state)
+
+    def _apply_filter(self, text):
+        """Hide folders that don't match the filter (ancestors stay visible)."""
+        query = str(text or "").strip().lower()
+        root = self.folder_tree.invisibleRootItem()
+        if not query:
+            for i in range(root.childCount()):
+                group = root.child(i)
+                group.setHidden(False)
+                for j in range(group.childCount()):
+                    self._set_subtree_hidden(group.child(j), False)
+            return
+
+        def set_visible(item):
+            visible = query in item.text(0).lower()
+            for i in range(item.childCount()):
+                if set_visible(item.child(i)):
+                    visible = True
+            item.setHidden(not visible)
+            return visible
+
+        for i in range(root.childCount()):
+            group = root.child(i)
+            group_visible = False
+            for j in range(group.childCount()):
+                if set_visible(group.child(j)):
+                    group_visible = True
+            group.setHidden(not group_visible)
+
+    def _set_subtree_hidden(self, item, hidden):
+        item.setHidden(hidden)
+        for i in range(item.childCount()):
+            self._set_subtree_hidden(item.child(i), hidden)
+
+    def _select_all(self):
+        if not self._populated:
+            return
+        self._building = True
+        try:
+            root = self.folder_tree.invisibleRootItem()
+            for i in range(root.childCount()):
+                root.child(i).setCheckState(0, Qt.Checked)
+                for j in range(root.child(i).childCount()):
+                    self._set_subtree(root.child(i).child(j), Qt.Checked)
+        finally:
+            self._building = False
+        self._refresh_counts()
+
+    def _clear_selection(self):
+        if not self._populated:
+            return
+        self._building = True
+        try:
+            root = self.folder_tree.invisibleRootItem()
+            for i in range(root.childCount()):
+                root.child(i).setCheckState(0, Qt.Unchecked)
+                for j in range(root.child(i).childCount()):
+                    self._set_subtree(root.child(i).child(j), Qt.Unchecked)
+        finally:
+            self._building = False
+        self._refresh_counts()
+
+    def _refresh_counts(self):
+        items = list(self._iter_folder_items())
+        checked = sum(1 for item in items if item.checkState(0) == Qt.Checked)
+        self.count_label.setText(f"{checked} of {len(items)} folders selected")
+
+    def _emit_apply(self):
+        self.apply_clicked.emit(self.selected_urls())

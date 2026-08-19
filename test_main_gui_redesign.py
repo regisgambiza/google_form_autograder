@@ -53,7 +53,7 @@ def test_shell_uses_menu_toolbar_tree_and_table():
     assert window.category_tree.objectName() == "CategoryTree"
     assert window.queue_table.objectName() == "QueueTable"
     assert window.queue_table.columnCount() == 10
-    assert window.stack.count() == 4
+    assert window.stack.count() == 5
 
 
 def test_tree_categories_filter_table_and_panels_switch_pages():
@@ -83,6 +83,8 @@ def test_tree_categories_filter_table_and_panels_switch_pages():
     assert window.stack.currentWidget() is window.providers_page
     window._goto_page("activity")
     assert window.stack.currentWidget() is window.activity
+    window._goto_page("drive")
+    assert window.stack.currentWidget() is window.drive_page
     window._goto_page("all")
     assert window.stack.currentWidget() is window.queue_page
 

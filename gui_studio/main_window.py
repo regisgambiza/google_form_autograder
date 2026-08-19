@@ -69,10 +69,16 @@ from settings_dialog import show_settings_dialog
 
 from gui_studio import telemetry
 from gui_studio import theme as T
+from gui_studio.drive_folders import (
+    DriveFolderScanThread,
+    load_selected_folders,
+    save_selected_folders,
+)
 from gui_studio.pages import (
     QUEUE_COLUMNS,
     ActivityPage,
     DashboardPage,
+    DriveFoldersPage,
     ProvidersPage,
     QueueTablePage,
 )
@@ -106,7 +112,7 @@ STATUS_TEXT_COLORS = {
 }
 
 CATEGORY_KEYS = ["all", "queued", "running", "done", "partial", "failed", "skipped"]
-PANEL_KEYS = ["dashboard", "providers", "activity"]
+PANEL_KEYS = ["dashboard", "providers", "activity", "drive"]
 
 
 def resource_path(*parts):
@@ -254,6 +260,7 @@ class AutograderWindow(QMainWindow):
         self.grader_thread = None
         self.auto_search_thread = None
         self.source_scan_thread = None
+        self.drive_scan_thread = None
         self.forms_data = {}
         self.service = None
         self.drive_service = None
@@ -321,6 +328,8 @@ class AutograderWindow(QMainWindow):
 
         self.load_forms()
         self.load_config()
+        self.folders = load_selected_folders()
+        self.drive_page.set_selected(self.folders)
         self._sync_worker_cards_to_config()
         self._refresh_queue_positions()
         self.update_in_queue_label()
@@ -354,10 +363,12 @@ class AutograderWindow(QMainWindow):
         self.dashboard = DashboardPage()
         self.providers_page = ProvidersPage()
         self.activity = ActivityPage()
+        self.drive_page = DriveFoldersPage()
         self.stack.addWidget(self.queue_page)   # index 0 — default view
         self.stack.addWidget(self.dashboard)
         self.stack.addWidget(self.providers_page)
         self.stack.addWidget(self.activity)
+        self.stack.addWidget(self.drive_page)
 
         self.queue_table = self.queue_page.table
         self.form_list = _FormTableAdapter(self.queue_table, self)
@@ -387,6 +398,8 @@ class AutograderWindow(QMainWindow):
         self.queue_page.search_input.textChanged.connect(self._filter_form_queue)
         self.queue_page.filter_combo.currentTextChanged.connect(self._filter_form_queue)
         self.queue_table.customContextMenuRequested.connect(self._on_form_table_context_menu)
+        self.drive_page.scan_requested.connect(self.start_drive_folder_scan)
+        self.drive_page.apply_clicked.connect(self.apply_drive_folder_selection)
 
     def _build_menu_bar(self):
         menu_bar = self.menuBar()
@@ -428,6 +441,7 @@ class AutograderWindow(QMainWindow):
             ("dashboard", "Dashboard"),
             ("providers", "Providers && Health"),
             ("activity", "Activity && Console"),
+            ("drive", "Drive Folders"),
         ):
             self._view_actions[key] = view_menu.addAction(label, lambda k=key: self._goto_page(k))
 
@@ -511,6 +525,7 @@ class AutograderWindow(QMainWindow):
             ("dashboard", "Dashboard"),
             ("providers", "Providers && Health"),
             ("activity", "Activity && Console"),
+            ("drive", "Drive Folders"),
         ):
             item = QTreeWidgetItem(panels_root, [label])
             item.setData(0, Qt.UserRole, key)
@@ -566,6 +581,7 @@ class AutograderWindow(QMainWindow):
                 "dashboard": self.dashboard,
                 "providers": self.providers_page,
                 "activity": self.activity,
+                "drive": self.drive_page,
             }[key])
         else:
             self._category_status = key if key in CATEGORY_KEYS else "all"
@@ -578,6 +594,7 @@ class AutograderWindow(QMainWindow):
                 "dashboard": self.dashboard,
                 "providers": self.providers_page,
                 "activity": self.activity,
+                "drive": self.drive_page,
             }[key])
             item = self._tree_items.get(key)
         else:
@@ -1588,6 +1605,52 @@ class AutograderWindow(QMainWindow):
             self.source_scan_progress.close()
         QMessageBox.critical(self, "Scan Failed", str(error))
         self.append_debug(f"[SCAN] Failed: {error}")
+
+    # ------------------------------------------------------------------
+    # Drive Folders page (whole-Drive folder picker for auto-run)
+    # ------------------------------------------------------------------
+    def start_drive_folder_scan(self):
+        if self.drive_scan_thread and self.drive_scan_thread.isRunning():
+            self.drive_page.set_scan_state("Drive scan already running…", scanning=True)
+            return
+        self.drive_page.set_scan_state("Scanning Google Drive…", scanning=True)
+        self.append_debug("[DRIVE] Scanning Google Drive for folders…")
+        self.drive_scan_thread = DriveFolderScanThread(self)
+        self.drive_scan_thread.progress.connect(
+            lambda msg: self.drive_page.set_scan_state(msg, scanning=True)
+        )
+        self.drive_scan_thread.finished.connect(self._on_drive_scan_finished)
+        self.drive_scan_thread.failed.connect(self._on_drive_scan_failed)
+        self.drive_scan_thread.start()
+
+    def _on_drive_scan_finished(self, nodes):
+        nodes = list(nodes or [])
+        self.drive_page.set_selected(load_selected_folders())
+        self.drive_page.populate_tree(nodes)
+        selected = len(self.drive_page.selected_urls())
+        self.append_debug(
+            f"[DRIVE] Folder scan complete: {len(nodes)} folder(s) found, {selected} selected"
+        )
+
+    def _on_drive_scan_failed(self, error):
+        self.drive_page.set_scan_state(f"Drive scan failed: {error}")
+        self.append_debug(f"[DRIVE] Folder scan failed: {error}")
+        QMessageBox.warning(
+            self, "Drive Scan Failed", f"Could not scan Google Drive folders:\n{error}"
+        )
+
+    def apply_drive_folder_selection(self, folder_urls):
+        folder_urls = list(folder_urls or [])
+        save_selected_folders(folder_urls)
+        self.folders = list(folder_urls)
+        saved = len(load_selected_folders())
+        self.append_debug(
+            f"[DRIVE] Auto-run scan scope updated: {saved} folder(s) selected"
+        )
+        self._notify(
+            "Scan Sources Updated",
+            f"Auto-run will now scan {saved} selected Drive folder(s).",
+        )
 
     # ------------------------------------------------------------------
     # Grading run
@@ -3120,6 +3183,12 @@ class AutograderWindow(QMainWindow):
                 self.auto_search_thread.wait(2000)
         if self.source_scan_thread and self.source_scan_thread.isRunning():
             self.source_scan_thread.wait(2000)
+        if self.drive_scan_thread and self.drive_scan_thread.isRunning():
+            self.drive_scan_thread.cancel()
+            self.drive_scan_thread.quit()
+            if not self.drive_scan_thread.wait(3000):
+                self.drive_scan_thread.terminate()
+                self.drive_scan_thread.wait(2000)
         self._terminate_project_python_processes()
         if self.tray_icon:
             self.tray_icon.hide()
