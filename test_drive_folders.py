@@ -127,6 +127,30 @@ def test_scan_whole_drive_builds_my_drive_tree_and_shared_roots(monkeypatch):
     assert by_id["shared"]["parent_id"] is None and by_id["shared"]["root"] == "Shared with me"
 
 
+def test_scan_whole_drive_folders_without_parents_are_shared_with_me(monkeypatch):
+    """Folders Google reports with no parent list are NOT part of My Drive.
+
+    A genuine My Drive folder always carries the My Drive root as its parent.
+    Items the API returns with parents=None (e.g. shared-with-me folders)
+    must not be dumped into the "My Drive" group as top-level folders.
+    """
+    service = FakeDriveService(user_pages=[{
+        "files": [
+            {"id": "top", "name": "Math", "parents": ["MYROOT"]},
+            {"id": "orphan1", "name": "Sub 1.1", "parents": None},
+            {"id": "orphan2", "name": "Media Upload", "parents": []},
+        ]
+    }])
+    _patch_drive(monkeypatch, service)
+
+    nodes = drive_folders.scan_whole_drive()
+    by_id = {node["id"]: node for node in nodes}
+
+    assert by_id["top"]["parent_id"] is None and by_id["top"]["root"] == "My Drive"
+    assert by_id["orphan1"]["parent_id"] is None and by_id["orphan1"]["root"] == "Shared with me"
+    assert by_id["orphan2"]["parent_id"] is None and by_id["orphan2"]["root"] == "Shared with me"
+
+
 def test_scan_whole_drive_handles_pagination(monkeypatch):
     service = FakeDriveService(user_pages=[
         {"files": [{"id": "p1", "name": "First", "parents": ["MYROOT"]}], "nextPageToken": 1},

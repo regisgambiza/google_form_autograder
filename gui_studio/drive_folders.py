@@ -245,7 +245,7 @@ def scan_whole_drive(progress_callback=None, cancel_check=None):
         root_id = None
 
     def user_root_label(parents):
-        if not parents or (root_id and root_id in parents):
+        if root_id and root_id in parents:
             return "My Drive"
         return "Shared with me"
 
