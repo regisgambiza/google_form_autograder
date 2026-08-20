@@ -12,6 +12,7 @@ from PySide6.QtCore import QThread, Signal
 class GraderThread(QThread):
     finished = Signal(bool, str)
     progress = Signal(int, int)
+    model_progress = Signal(int, int)
     overall_progress = Signal(int, int)
     form_metrics = Signal(int, int, int, int, int, int, int, int, float)
     debug_message = Signal(str)
@@ -344,6 +345,13 @@ class GraderThread(QThread):
             try:
                 current, total = map(int, ls.split(":")[1].strip().split("/"))
                 self.progress.emit(current, total)
+            except:
+                pass
+
+        if ls.startswith("ModelProgress:"):
+            try:
+                current, total = map(int, ls.split(":")[1].strip().split("/"))
+                self.model_progress.emit(current, total)
             except:
                 pass
 

@@ -99,6 +99,21 @@ class OpenRouterModelRegistry:
         thread.start()
         log("INFO", "[OPENROUTER MODELS] background catalogue refresh enabled")
 
+    def has_any_available_model(self, cfg: Dict[str, Any]) -> bool:
+        """Whether any remembered OpenRouter model is currently off cooldown.
+
+        Used to gate provider-level availability checks (e.g. batch-provider
+        selection) so a HALF_OPEN circuit does not cause oscillation when all
+        models are still cooling down. Unknown models count as available so a
+        fresh process is never wrongly treated as unavailable.
+        """
+        self.configure_from_config(cfg)
+        now = time.monotonic()
+        with self._lock:
+            if not self._models:
+                return True
+            return any(stats.cooldown_until <= now for stats in self._models.values())
+
     def order_models(self, role: str, preferred: Iterable[str], cfg: Dict[str, Any]) -> List[str]:
         self.configure_from_config(cfg)
         enabled = bool(cfg.get("openrouter_dynamic_model_pool_enabled", True))

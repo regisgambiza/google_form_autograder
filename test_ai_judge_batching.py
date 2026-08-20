@@ -1,6 +1,7 @@
 import json
 
 import ai_judges
+from openrouter_model_registry import OpenRouterModelRegistry
 
 
 class _FakeResponse:
@@ -358,6 +359,53 @@ def test_model_first_judging_refreshes_answer_batch_size_between_roles(monkeypat
     assert single_calls == [("factual_judge", "a"), ("factual_judge", "b"), ("factual_judge", "c")]
 
 
+def test_form_model_plan_counts_provider_sized_batches_and_adjudicator_capacity(monkeypatch):
+    cfg = {
+        "provider_manager_enabled": False,
+        "active_judge_roles": ["semantic_judge", "factual_judge", "strict_judge"],
+        "adaptive_math_jury": {
+            "enabled": True,
+            "primary_roles": ["semantic_judge", "factual_judge"],
+            "adjudicator_role": "strict_judge",
+        },
+        "judge_answer_batch_size": 25,
+        "ollama_judge_answer_batch_size": 25,
+    }
+    monkeypatch.setattr(ai_judges, "load_config", lambda: cfg)
+
+    # 26 answers means two batches for each primary role and two reserved
+    # adjudicator slots. Retries do not change this logical plan.
+    assert ai_judges.estimate_form_model_calls({"q1": ["a"] * 26}, cfg, True) == 6
+
+
+def test_model_progress_never_exceeds_fixed_plan_when_batch_succeeds(monkeypatch, capsys):
+    cfg = {
+        "provider_manager_enabled": False,
+        "jury_models": {"semantic_judge": "model-a", "factual_judge": "model-b"},
+        "active_judge_roles": ["semantic_judge", "factual_judge"],
+        "adaptive_math_jury": {"enabled": False},
+        "judge_answer_batch_size": 2,
+        "ollama_judge_answer_batch_size": 2,
+    }
+    monkeypatch.setattr(ai_judges, "load_config", lambda: cfg)
+    monkeypatch.setattr(ai_judges, "_selected_roles", lambda _cfg: ["semantic_judge", "factual_judge"])
+    monkeypatch.setattr(
+        ai_judges,
+        "call_judge_role_batch_sync",
+        lambda role, answers, *args, **kwargs: {
+            answer: _judge_result(index + 1)
+            for index, answer in enumerate(answers)
+        },
+    )
+
+    ai_judges.configure_model_progress(4, scope="test")
+    ai_judges.run_judges_model_first(["a", "b", "c"], "q", "e", {}, retries=1)
+
+    progress = [line for line in capsys.readouterr().out.splitlines() if line.startswith("ModelProgress:")]
+    assert progress[-1] == "ModelProgress: 4/4"
+    assert not any("ModelProgressWarning:" in line for line in progress)
+
+
 def test_model_first_avoid_models_are_scoped_to_answer_chunk(monkeypatch):
     batch_calls = []
 
@@ -416,3 +464,35 @@ def test_model_first_avoid_models_are_scoped_to_answer_chunk(monkeypatch):
         ("factual_judge", ["a", "b"], ["model-x"]),
         ("factual_judge", ["c", "d"], ["model-y"]),
     ]
+
+
+def test_preferred_batch_provider_falls_back_when_openrouter_unavailable(monkeypatch):
+    cfg = {
+        "provider_manager_enabled": True,
+        "provider_strategy": "openrouter_llamacpp",
+        "provider_priority": ["openrouter", "llamacpp", "ollama"],
+        "judge_answer_batch_size": 25,
+        "openrouter_judge_answer_batch_size": 25,
+        "llamacpp_judge_answer_batch_size": 1,
+    }
+
+    class _FakeManager:
+        def provider_available(self, provider_name):
+            return provider_name != "openrouter"
+
+    monkeypatch.setattr(ai_judges, "is_provider_available", _FakeManager().provider_available)
+
+    assert ai_judges._preferred_batch_provider(cfg) == "llamacpp"
+    assert ai_judges._judge_answer_batch_size(cfg) == 1
+
+
+def test_registry_has_any_available_model_handles_cooldown_and_unknown():
+    cfg = {"openrouter_models": {"semantic_judge": ["model-a", "model-b"]}}
+    registry = OpenRouterModelRegistry()
+
+    assert registry.has_any_available_model(cfg) is True
+
+    registry.record_failure("model-a", "rate_limited", "busy", cfg)
+    registry.record_failure("model-b", "rate_limited", "busy", cfg)
+
+    assert registry.has_any_available_model(cfg) is False

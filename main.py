@@ -24,7 +24,7 @@ from response_utils import get_responses, save_grading_time
 from updater import update_correct_answers
 from global_prefetch import prefetch_all_forms
 from global_dispatcher import run_global_dispatcher
-from ai_judges import prewarm_judge_runtime
+from ai_judges import prewarm_judge_runtime, reset_model_progress
 from cache_manager import prepare_fresh_grading_run
 
 _GRADER_LOCK_FH = None
@@ -130,7 +130,7 @@ def _load_form_urls() -> List[str]:
 
 
 def _prepare_form(service, idx: int, total_forms: int, form_url: str, grade_recent_only: bool) -> Dict:
-    text_types = {"SHORT_ANSWER", "LONG_ANSWER"}
+    text_types = {"SHORT_ANSWER"}
     form_id = extract_form_id(form_url)
     log("INFO", f"[HYBRID PREP] START {idx}/{total_forms} form_id={form_id}")
 
@@ -163,15 +163,19 @@ def _prepare_form(service, idx: int, total_forms: int, form_url: str, grade_rece
 
     all_questions = []
     for q in form_structure:
+        if q.get("type") not in text_types:
+            log(
+                "INFO",
+                f"[QUESTION SKIPPED] form_id={form_id} question_id={q.get('questionId')} "
+                f"reason=non_short_answer_type (type={q.get('type')}) title={q.get('title')!r}",
+            )
+            continue
         responses = get_responses(service, form_id, q["questionId"], grade_recent_only=grade_recent_only)
 
         correct_answers_fetched = get_effective_expected(q, expected_by_item_id.get(q["itemId"], []))
         trusted_teacher_answer = correct_answers_fetched[:1]
 
-        if q["type"] in text_types:
-            evaluated = evaluate_answers(q, responses, expected=correct_answers_fetched or None)
-        else:
-            evaluated = correct_answers_fetched
+        evaluated = evaluate_answers(q, responses, expected=correct_answers_fetched or None)
 
         all_questions.append({
             "question": q,
@@ -241,6 +245,7 @@ def main():
         sys.exit(1)
 
     log("INFO", f"Found {total_forms} form(s) to process")
+    reset_model_progress()
     print(f"Progress: 0/{total_forms}")
 
     service = get_service()
@@ -318,7 +323,7 @@ def main():
                     log("INFO", f"Report generated -> {report_path or 'FAILED'}")
 
                 duplicates_found = []
-                text_types = {"SHORT_ANSWER", "LONG_ANSWER"}
+                text_types = {"SHORT_ANSWER"}
                 for q_data in all_questions:
                     q = q_data["question"]
                     correct = q_data["correct_answers"]
@@ -418,7 +423,7 @@ def main():
                 log("INFO", f"Report generated -> {report_path or 'FAILED'}")
 
             duplicates_found = []
-            text_types = {"SHORT_ANSWER", "LONG_ANSWER"}
+            text_types = {"SHORT_ANSWER"}
             for q_data in all_questions:
                 q = q_data["question"]
                 correct = q_data["correct_answers"]

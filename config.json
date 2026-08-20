@@ -51,7 +51,7 @@
     "openrouter_judge_answer_batch_size": 25,
     "judge_batch_num_predict": 8192,
     "provider_manager_enabled": true,
-    "provider_strategy": "openrouter_llamacpp",
+    "provider_strategy": "openrouter_only",
     "provider_priority": [
         "openrouter",
         "llamacpp"
@@ -249,7 +249,7 @@
     },
     "enable_pipeline_workers": true,
     "deterministic_worker_count": 4,
-    "ai_worker_count": 1,
+    "ai_worker_count": 10,
     "worker_queue_size": 1200,
     "global_prefetch_mode": true,
     "dispatch_mode": "global",
@@ -270,7 +270,7 @@
     "adaptive_target_latency_ms": 15000,
     "adaptive_timeout_rate_threshold": 0.2,
     "adaptive_chunk_size": 12,
-    "max_concurrent_jury_answers": 1,
+    "max_concurrent_jury_answers": 10,
     "jury_semaphore_acquire_timeout_seconds": 21600,
     "enable_async_judges": false,
     "sync_judge_parallelism": 1,
@@ -360,7 +360,7 @@
     "dark_mode": false,
     "auto_run": {
         "grading_mode": "Recent Only",
-        "recency_value": 10,
+        "recency_value": 5,
         "recency_unit": "hours",
         "interval_value": 30,
         "interval_unit": "minutes",

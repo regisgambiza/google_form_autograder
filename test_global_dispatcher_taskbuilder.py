@@ -428,3 +428,167 @@ def test_model_first_batching_raw_mode_keeps_duplicate_form_answers(monkeypatch,
     emitted_lines = capsys.readouterr().out.splitlines()
     assert "FormProgress: 3/3" in emitted_lines
 
+
+def test_non_short_answer_questions_are_skipped_from_grading(monkeypatch, capsys):
+    structure = [
+        {"questionId": "q1", "itemId": "item1", "index": 0, "type": "SHORT_ANSWER", "title": "Short answer question"},
+        {"questionId": "q2", "itemId": "item2", "index": 1, "type": "MULTIPLE_CHOICE", "title": "Multiple choice question"},
+        {"questionId": "q3", "itemId": "item3", "index": 2, "type": "CHECKBOX", "title": "Checkbox question"},
+        {"questionId": "q4", "itemId": "item4", "index": 3, "type": "DROPDOWN", "title": "Dropdown question"},
+        {"questionId": "q5", "itemId": "item5", "index": 4, "type": "LONG_ANSWER", "title": "Paragraph question"},
+        {"questionId": "q6", "itemId": "item6", "index": 5, "type": "SCALE", "title": "Scale question"},
+    ]
+    form_payload = {
+        "info": {"title": "Mixed Types Form"},
+        "items": [
+            {
+                "itemId": "item1",
+                "questionItem": {
+                    "question": {
+                        "questionId": "q1",
+                        "textQuestion": {"paragraph": False},
+                        "grading": {"correctAnswers": {"answers": [{"value": "42"}]}},
+                    }
+                },
+            },
+            {
+                "itemId": "item2",
+                "questionItem": {
+                    "question": {
+                        "questionId": "q2",
+                        "choiceQuestion": {"type": "RADIO"},
+                        "grading": {"correctAnswers": {"answers": [{"value": "Option A"}]}},
+                    }
+                },
+            },
+            {
+                "itemId": "item3",
+                "questionItem": {
+                    "question": {
+                        "questionId": "q3",
+                        "choiceQuestion": {"type": "CHECKBOX"},
+                        "grading": {"correctAnswers": {"answers": [{"value": "Box 1"}]}},
+                    }
+                },
+            },
+            {
+                "itemId": "item4",
+                "questionItem": {
+                    "question": {
+                        "questionId": "q4",
+                        "choiceQuestion": {"type": "DROP_DOWN"},
+                        "grading": {"correctAnswers": {"answers": [{"value": "Drop 1"}]}},
+                    }
+                },
+            },
+            {
+                "itemId": "item5",
+                "questionItem": {
+                    "question": {
+                        "questionId": "q5",
+                        "textQuestion": {"paragraph": True},
+                        "grading": {"correctAnswers": {"answers": [{"value": "Long explanation"}]}},
+                    }
+                },
+            },
+            {
+                "itemId": "item6",
+                "questionItem": {
+                    "question": {
+                        "questionId": "q6",
+                        "scaleQuestion": {"low": 1, "high": 5},
+                        "grading": {"correctAnswers": {"answers": [{"value": "5"}]}},
+                    }
+                },
+            },
+        ],
+    }
+    responses_payload = {
+        "responses": [
+            {
+                "answers": {
+                    "q1": {"textAnswers": {"answers": [{"value": "42"}]}},
+                    "q2": {"choiceAnswers": {"answers": [{"value": "Option A"}]}},
+                    "q3": {"choiceAnswers": {"answers": [{"value": "Box 1"}]}},
+                    "q4": {"choiceAnswers": {"answers": [{"value": "Drop 1"}]}},
+                    "q5": {"textAnswers": {"answers": [{"value": "Student essay"}]}},
+                    "q6": {"textAnswers": {"answers": [{"value": "5"}]}},
+                }
+            }
+        ]
+    }
+    fake_service = _FakeService(form_payload, responses_payload)
+    calls = []
+    logs = []
+    update_calls = []
+
+    monkeypatch.setattr(gd, "get_service", lambda: fake_service)
+    monkeypatch.setattr(gd, "get_form_structure", lambda service, form_id: structure)
+    monkeypatch.setattr(gd, "generate_form_feedback", lambda *args, **kwargs: None)
+    monkeypatch.setattr(gd, "save_grading_time", lambda *args, **kwargs: None)
+    monkeypatch.setattr(gd, "update_correct_answers", lambda *args, **kwargs: update_calls.append(args))
+    monkeypatch.setattr(gd, "log", lambda level, msg: logs.append((level, msg)))
+
+    def fake_evaluate_answers_model_first(answers, expected, question):
+        calls.append((list(answers), list(expected), question))
+        return [
+            gd.EvaluationResult(
+                answer=answer,
+                decision="YES",
+                final_score=1.0,
+                semantic_score=1.0,
+                concept_score=1.0,
+                factual_score=1.0,
+                misconception_detected=False,
+                misconception_description="",
+                missing_concepts=[],
+                accepted_concepts=[],
+                model_agreement=1.0,
+                confidence=1.0,
+                fast_path_used=False,
+                latency_ms=1.0,
+                stage_reached="jury",
+                evidence={"key_eligible": True},
+            )
+            for answer in answers
+        ]
+
+    monkeypatch.setattr(gd, "evaluate_answers_model_first", fake_evaluate_answers_model_first)
+    monkeypatch.setattr(
+        gd,
+        "load_config",
+        lambda: {
+            "global_prefetch_workers": 1,
+            "ai_worker_count": 1,
+            "model_first_question_batching": True,
+            "force_ai_jury_for_all_answers": True,
+            "enable_deduplication": True,
+            "max_latency_per_answer_seconds": 5,
+            "forms_expensive_reads_per_minute": 6000,
+            "dispatcher_stall_timeout_seconds": 30,
+            "worker_queue_size": 100,
+            "enable_form_context": False,
+            "patient_ai_mode": True,
+        },
+    )
+
+    gd.run_global_dispatcher(
+        form_urls=["https://docs.google.com/forms/d/fake_form_mixed/viewform"],
+        grade_recent_only=False,
+        generate_report=False,
+    )
+
+    # Only q1 (SHORT_ANSWER) should be evaluated
+    assert len(calls) == 1
+    assert calls[0][0] == ["42"]
+    assert calls[0][1] == ["42"]
+
+    # Verify log notes skipped questions for non-short-answer types
+    skipped_types = [msg for _level, msg in logs if "reason=non_short_answer_type" in msg]
+    assert len(skipped_types) == 5
+
+    # Verify progress reported exactly 1 expected task
+    emitted_lines = capsys.readouterr().out.splitlines()
+    assert "FormProgress: 1/1" in emitted_lines
+
+

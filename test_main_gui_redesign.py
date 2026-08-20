@@ -259,6 +259,22 @@ def test_live_dashboard_updates_ai_backlog_and_current_model():
     assert window.providers_page.active_model.text() == "gemma3:12b"
 
 
+def test_model_progress_clamps_stale_overflow_in_running_queue():
+    window = _make_window()
+    _clear_queue(window)
+    item = _add_form(window, "https://docs.google.com/forms/d/form-1/edit", "Algebra")
+    window.current_form_url = item.data(Qt.UserRole)
+    window._set_form_status(item, "running", "Grading now")
+
+    window.update_model_progress(24, 21)
+
+    meta = item.data(Qt.UserRole + 1)
+    assert meta["model_done"] == 21
+    assert meta["model_total"] == 21
+    assert window_status_cell(window, item.row(), 3) == "21/21"
+    assert window._row_bars[item.data(Qt.UserRole)].value() == 100
+
+
 def test_stage_stepper_reflects_queue_depths():
     window = _make_window()
     window.is_grading = True

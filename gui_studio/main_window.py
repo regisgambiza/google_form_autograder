@@ -285,6 +285,7 @@ class AutograderWindow(QMainWindow):
         self.is_closing = False
         self.is_grading = False
         self.is_searching = False
+        self._model_progress_seen = False
         self.tray_icon = None
         self.max_gui_log_lines = 2500
         self.debug_lines = []
@@ -940,11 +941,23 @@ class AutograderWindow(QMainWindow):
             return 0
         total = int(meta.get("total", 0) or 0)
         completed = int(meta.get("completed", 0) or 0)
+        model_total = int(meta.get("model_total", 0) or 0)
+        model_done = int(meta.get("model_done", 0) or 0)
+        if model_total > 0:
+            if status == "queued" and model_done <= 0:
+                return 0
+            return max(0, min(100, int(round((model_done / model_total) * 100))))
         if total <= 0:
             return 0
         if status == "queued" and completed <= 0:
             return 0
         return max(0, min(100, int(round((completed / total) * 100))))
+
+    def _queue_progress_text(self, meta):
+        model_total = int(meta.get("model_total", 0) or 0)
+        if model_total > 0:
+            return f"{int(meta.get('model_done', 0) or 0)}/{model_total}"
+        return f"{int(meta.get('completed', 0) or 0)}/{int(meta.get('total', 0) or 0)}"
 
     def _queue_eta_text(self, meta):
         status = str(meta.get("status", "queued"))
@@ -1027,7 +1040,7 @@ class AutograderWindow(QMainWindow):
             if cell is not None:
                 cell.setText(str(text))
 
-        set_cell(3, f"{int(meta.get('completed', 0) or 0)}/{int(meta.get('total', 0) or 0)}")
+        set_cell(3, self._queue_progress_text(meta))
         set_cell(4, str(int(meta.get("accepted", 0) or 0)))
         set_cell(5, str(int(meta.get("rejected", 0) or 0)))
         set_cell(6, str(int(meta.get("review_questions", 0) or 0)))
@@ -1792,6 +1805,7 @@ class AutograderWindow(QMainWindow):
         self.grader_thread = GraderThread(grade_recent_only=grade_recent_only, form_urls=target_urls)
         self.grader_thread.finished.connect(self.on_grading_finished)
         self.grader_thread.progress.connect(self.update_progress)
+        self.grader_thread.model_progress.connect(self.update_model_progress)
         self.grader_thread.overall_progress.connect(self.update_overall_progress)
         self.grader_thread.form_metrics.connect(self.update_form_metrics)
         self.grader_thread.debug_message.connect(self.append_debug)
@@ -1923,11 +1937,25 @@ class AutograderWindow(QMainWindow):
             self.dashboard.set_headline("No learner answers")
             self._set_activity("Evaluating answers…", "grading")
             return
-        self.dashboard.set_answer_progress(cur, tot)
+        if not self._model_progress_seen:
+            self.dashboard.set_answer_progress(cur, tot)
         self.dashboard.set_headline(f"Grading answer {cur} of {tot}")
         title = self._activity_form_title()
         self._set_activity(f"Grading “{title}” · {cur}/{tot} answers", "grading")
         self._update_stage_stepper(done=cur, total=tot)
+
+    def update_model_progress(self, done, total):
+        self._model_progress_seen = True
+        total = max(0, int(total or 0))
+        done = max(0, min(int(done or 0), total))
+        self.dashboard.set_answer_progress(done, total)
+        item = self._find_form_item_by_url(self.current_form_url)
+        if item:
+            meta = item.data(Qt.UserRole + 1) or {}
+            meta["model_done"] = done
+            meta["model_total"] = total
+            item.setData(Qt.UserRole + 1, meta)
+            self._refresh_form_row(item)
 
     def update_overall_progress(self, cur, tot):
         if not tot:

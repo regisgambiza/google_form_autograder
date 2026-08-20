@@ -10,6 +10,10 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from auth import get_service
+from ai_judges import (
+    configure_model_progress,
+    estimate_form_model_calls,
+)
 from deterministic_checks import run_deterministic_checks
 from evaluation_pipeline import EvaluationResult, evaluate_answer, evaluate_answers_model_first
 from evaluator_config import effective_ai_worker_count, load_config
@@ -72,6 +76,8 @@ def missing_answer_key_questions(
 ) -> List[Dict[str, object]]:
     missing: List[Dict[str, object]] = []
     for q in structure:
+        if q.get("type", "SHORT_ANSWER") != "SHORT_ANSWER":
+            continue
         qid = str(q.get("questionId") or "")
         if not qid or not answers_by_qid.get(qid):
             continue
@@ -152,6 +158,16 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
 
     forms_results: Dict[int, Dict] = {}
     forms_total = len(form_urls)
+    model_plan_answers: Dict[str, List[str]] = {}
+
+    def announce_model_plan():
+        nonlocal model_plan_answers
+        plan_total = estimate_form_model_calls(
+            model_plan_answers,
+            cfg=cfg,
+            model_first_batching=model_first_batching,
+        )
+        configure_model_progress(plan_total, scope="global_dispatcher")
     metrics_lock = threading.Lock()
     counters = {"fetch": 0, "det": 0, "ai": 0, "apply": 0}
     progress = {
@@ -311,11 +327,15 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
             if "textQuestion" in question:
                 q["type"] = "LONG_ANSWER" if question["textQuestion"].get("paragraph", False) else "SHORT_ANSWER"
             elif "choiceQuestion" in question:
-                q["type"] = "MULTIPLE_CHOICE"
-            elif "checkboxQuestion" in question:
-                q["type"] = "CHECKBOX"
-            elif "dropdownQuestion" in question:
-                q["type"] = "DROPDOWN"
+                cq_type = question["choiceQuestion"].get("type", "RADIO")
+                if cq_type == "CHECKBOX":
+                    q["type"] = "CHECKBOX"
+                elif cq_type == "DROP_DOWN":
+                    q["type"] = "DROPDOWN"
+                else:
+                    q["type"] = "MULTIPLE_CHOICE"
+            elif "scaleQuestion" in question:
+                q["type"] = "SCALE"
             else:
                 q["type"] = "OTHER"
             if q.get("questionId") and q.get("itemId"):
@@ -490,6 +510,14 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
 
                 for q in structure:
                     qid = q.get("questionId")
+                    q_type = q.get("type", "OTHER")
+                    if q_type != "SHORT_ANSWER":
+                        log(
+                            "INFO",
+                            f"[QUESTION SKIPPED] form_id={form_id} question_id={qid} "
+                            f"reason=non_short_answer_type (type={q_type}) title={q.get('title')!r}",
+                        )
+                        continue
                     expected = get_effective_expected(q, expected_by_item_id.get(q.get("itemId"), []))
                     q["trusted_expected"] = expected[:1]
                     fetched_answers = answers_by_qid.get(qid, [])
@@ -518,6 +546,8 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                             "INFO",
                             f"[DEDUP] disabled; question_id={qid} using {len(answers)} raw form responses",
                         )
+                    if str(qid or "") not in missing_qids and answers:
+                        model_plan_answers[f"{i}:{qid}"] = list(answers)
                     forms_results[i]["counts"][qid] = len(answers)
                     question_tasks: List[Task] = []
                     for ai, ans in enumerate(answers):
@@ -1189,7 +1219,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                         ),
                         flush=True,
                     )
-                if categorized_candidates and question["type"] in {"SHORT_ANSWER", "LONG_ANSWER"}:
+                if categorized_candidates and question.get("type") == "SHORT_ANSWER":
                     update_correct_answers(
                         service, form_id, question["itemId"], categorized_candidates, question["index"], trusted_expected,
                         enqueue_added_review=False,
@@ -1335,6 +1365,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
         tb.join()
         if failed.is_set():
             raise RuntimeError("Global dispatcher failed in task-builder phase")
+        announce_model_plan()
         announce_stage(2, "Build/Distribute Tasks", "DONE")
 
         validate_stage_transition("workers")
@@ -1359,6 +1390,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
     else:
         tf.start(); tb.start(); [t.start() for t in da]; [t.start() for t in aw]; ag.start(); ap.start(); mr.start()
         tf.join(); tb.join()
+        announce_model_plan()
         with metrics_lock:
             expected_at_start = int(progress["expected_tasks"])
         first_meta = next((data.get("meta", {}) for data in forms_results.values()), {})

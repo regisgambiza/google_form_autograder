@@ -39,7 +39,7 @@ def _extract_form_id(form_url: str) -> str:
 
 def _fetch_single_form(idx: int, total: int, form_url: str, grade_recent_only: bool) -> PrefetchedForm:
     service = get_service()
-    text_types = {"SHORT_ANSWER", "LONG_ANSWER"}
+    text_types = {"SHORT_ANSWER"}
     form_id = _extract_form_id(form_url)
     log("INFO", f"[GLOBAL PREFETCH] START {idx}/{total} form_id={form_id}")
     form_structure = get_form_structure(service, form_id)

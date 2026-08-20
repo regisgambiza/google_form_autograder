@@ -953,6 +953,28 @@ class ProviderManager:
         )
         return False
 
+    def provider_available(self, provider_name: str) -> bool:
+        """Public availability check for a provider (health/circuit based).
+
+        Safe to call outside request dispatch; does not start workers.
+
+        For openrouter the check is tightened with the model registry so a
+        HALF_OPEN circuit does not report availability while every candidate
+        model is still cooling down (avoids batch-provider oscillation).
+        """
+        if provider_name not in self._states:
+            return False
+        if not self._provider_available(provider_name):
+            return False
+        if provider_name == "openrouter":
+            try:
+                cfg = load_config()
+                if not self._openrouter_registry.has_any_available_model(cfg):
+                    return False
+            except Exception as ex:
+                log("DEBUG", f"OpenRouter model availability check failed: {ex}")
+        return True
+
     def _provider_available(self, provider_name: str) -> bool:
         with self._lock:
             state = self._states[provider_name]
@@ -1282,6 +1304,21 @@ class ProviderManager:
 
 _MANAGER: Optional[ProviderManager] = None
 _MANAGER_LOCK = threading.Lock()
+
+
+def is_provider_available(provider_name: str) -> bool:
+    """Check whether a provider is currently available.
+
+    Returns True when the manager has not been constructed yet so callers
+    degrade gracefully to static config-based behavior (e.g. during tests
+    that exercise batching logic without a live provider manager).
+    """
+    if _MANAGER is None:
+        return True
+    try:
+        return _MANAGER.provider_available(provider_name)
+    except Exception:
+        return True
 
 
 def get_provider_manager() -> ProviderManager:

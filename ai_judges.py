@@ -20,11 +20,131 @@ from evaluator_config import load_config
 from logger import log, update_runtime_state
 from ollama_diagnostics import log_post_inference_gpu_probe_once
 from ollama_options import build_ollama_options
-from provider_manager import get_provider_manager, make_request_id
+from provider_manager import get_provider_manager, is_provider_available, make_request_id
 from provider_types import ProviderError, ProviderRequest
 
 _JUDGE_HTTP_LIMIT_LOCK = threading.Lock()
 _JUDGE_HTTP_SEMAPHORE = None
+
+_MODEL_PROGRESS_LOCK = threading.Lock()
+_MODEL_PROGRESS_DONE = 0
+_MODEL_PROGRESS_TOTAL = 0
+_MODEL_PROGRESS_OVERFLOW = 0
+
+
+def reset_model_progress() -> None:
+    """Reset the logical model-work progress counter to 0/0."""
+    global _MODEL_PROGRESS_DONE, _MODEL_PROGRESS_TOTAL, _MODEL_PROGRESS_OVERFLOW
+    with _MODEL_PROGRESS_LOCK:
+        _MODEL_PROGRESS_DONE = 0
+        _MODEL_PROGRESS_TOTAL = 0
+        _MODEL_PROGRESS_OVERFLOW = 0
+
+
+def _model_progress_register(estimate: int) -> None:
+    """Add planned logical work units to the current progress plan."""
+    if estimate <= 0:
+        return
+    global _MODEL_PROGRESS_TOTAL
+    with _MODEL_PROGRESS_LOCK:
+        _MODEL_PROGRESS_TOTAL += estimate
+
+
+def _model_progress_extend(units: int, reason: str = "") -> None:
+    """Extend a plan when runtime provider fallback creates extra logical units."""
+    global _MODEL_PROGRESS_TOTAL
+    units = max(0, int(units))
+    if not units:
+        return
+    with _MODEL_PROGRESS_LOCK:
+        _MODEL_PROGRESS_TOTAL += units
+        total = _MODEL_PROGRESS_TOTAL
+    label = f" reason={reason}" if reason else ""
+    print(f"ModelPlanAdjust: +{units} total={total}{label}", flush=True)
+
+
+def configure_model_progress(total: int, scope: str = "") -> None:
+    """Start a fixed logical-work plan before model workers run."""
+    reset_model_progress()
+    _model_progress_register(total)
+    label = f" scope={scope}" if scope else ""
+    print(f"ModelPlan: total={max(0, int(total))}{label}", flush=True)
+    print(f"ModelProgress: 0/{max(0, int(total))}", flush=True)
+
+
+def _model_progress_tick(units: int = 1) -> None:
+    """Complete logical work units, never raw HTTP attempts."""
+    global _MODEL_PROGRESS_DONE, _MODEL_PROGRESS_OVERFLOW
+    units = max(0, int(units))
+    with _MODEL_PROGRESS_LOCK:
+        if _MODEL_PROGRESS_TOTAL <= 0:
+            _MODEL_PROGRESS_DONE += units
+            done = _MODEL_PROGRESS_DONE
+            total = done
+            overflow = _MODEL_PROGRESS_OVERFLOW
+        else:
+            requested_done = _MODEL_PROGRESS_DONE + units
+            if requested_done > _MODEL_PROGRESS_TOTAL:
+                _MODEL_PROGRESS_OVERFLOW += requested_done - _MODEL_PROGRESS_TOTAL
+                _MODEL_PROGRESS_DONE = _MODEL_PROGRESS_TOTAL
+            else:
+                _MODEL_PROGRESS_DONE = requested_done
+            done = _MODEL_PROGRESS_DONE
+            total = _MODEL_PROGRESS_TOTAL
+            overflow = _MODEL_PROGRESS_OVERFLOW
+    if overflow:
+        print(f"ModelProgressWarning: overflow={overflow} done={done}/{total}", flush=True)
+    print(f"ModelProgress: {done}/{total}", flush=True)
+
+
+def _estimate_model_calls_single(roles: List[str], adaptive_cfg: Dict[str, object]) -> int:
+    """Estimated model calls for one answer graded through the per-answer path."""
+    if bool(adaptive_cfg.get("enabled", False)):
+        primary = [r for r in adaptive_cfg.get("primary_roles", ["semantic_judge", "factual_judge", "concept_judge"]) if r in roles]
+        adjudicator = str(adaptive_cfg.get("adjudicator_role", "strict_judge"))
+        return len(primary) + (1 if adjudicator in roles else 0)
+    return len(roles)
+
+
+def _estimate_model_calls_for_question(
+    answers: List[str],
+    batch_size: int,
+    roles: List[str],
+    adaptive_cfg: Dict[str, object],
+) -> int:
+    """Estimated model calls for one question graded through the model-first batch path."""
+    per_role = len(answers) if batch_size <= 1 else (len(answers) + batch_size - 1) // batch_size
+    if bool(adaptive_cfg.get("enabled", False)):
+        primary = [r for r in adaptive_cfg.get("primary_roles", ["semantic_judge", "factual_judge", "concept_judge"]) if r in roles]
+        adjudicator = str(adaptive_cfg.get("adjudicator_role", "strict_judge"))
+        return len(primary) * per_role + (per_role if adjudicator in roles else 0)
+    return len(roles) * per_role
+
+
+def estimate_form_model_calls(
+    answers_by_qid: Dict[str, List[str]],
+    cfg: Optional[Dict[str, object]] = None,
+    model_first_batching: bool = False,
+) -> int:
+    """Estimated total model calls needed to grade a whole form.
+
+    Sums the per-question (or per-answer) estimates for every question that
+    has at least one fetched answer. The dispatcher uses this to announce an
+    upfront ``ModelProgress: 0/{total}`` line before grading starts, so the
+    GUI progress bar reflects successful model calls against a whole-form total.
+    """
+    cfg = cfg if cfg is not None else load_config()
+    roles = _selected_roles(cfg)
+    adaptive_cfg = cfg.get("adaptive_math_jury", {})
+    if model_first_batching:
+        batch_size = _judge_answer_batch_size(cfg, _preferred_batch_provider(cfg))
+        return sum(
+            _estimate_model_calls_for_question(answers, batch_size, roles, adaptive_cfg)
+            for answers in answers_by_qid.values()
+            if answers
+        )
+    per_answer = _estimate_model_calls_single(roles, adaptive_cfg)
+    return sum(len(answers) * per_answer for answers in answers_by_qid.values() if answers)
 
 
 def _get_judge_http_semaphore():
@@ -232,7 +352,8 @@ def _chat_response(
     metadata: Optional[Dict[str, object]] = None,
 ) -> Dict[str, object]:
     if _provider_manager_enabled():
-        return _ask_provider(role, payload, timeout_s, request_kind, metadata)
+        resp = _ask_provider(role, payload, timeout_s, request_kind, metadata)
+        return resp
     resp = requests.post(_ollama_chat_url(), json=payload, timeout=(10, timeout_s))
     resp.raise_for_status()
     return resp.json()
@@ -895,16 +1016,26 @@ def _preferred_batch_provider(cfg: Optional[Dict[str, object]] = None) -> str:
         "llamacpp_openrouter": "llamacpp",
         "local_all": "llamacpp",
     }
-    if strategy in strategy_map:
-        return strategy_map[strategy]
+    candidates: List[str] = []
+    preferred = strategy_map.get(strategy)
+    if preferred:
+        candidates.append(preferred)
     priority = cfg.get("provider_priority", ["openrouter", "llamacpp", "ollama"])
     if not isinstance(priority, list):
         priority = ["openrouter", "llamacpp", "ollama"]
     for provider in priority:
         provider_name = str(provider).strip().lower()
-        if provider_name in {"openrouter", "llamacpp", "ollama"}:
-            return provider_name
-    return "openrouter"
+        if provider_name in {"openrouter", "llamacpp", "ollama"} and provider_name not in candidates:
+            candidates.append(provider_name)
+    if not candidates:
+        return "openrouter"
+    try:
+        for provider_name in candidates:
+            if is_provider_available(provider_name):
+                return provider_name
+    except Exception as ex:
+        log("DEBUG", f"Batch provider availability check failed: {ex}")
+    return candidates[0]
 
 
 def _judge_answer_batch_size(cfg: Optional[Dict[str, object]] = None, provider: Optional[str] = None) -> int:
@@ -1140,12 +1271,23 @@ def run_judges_model_first(
         if used_model and used_model not in used_openrouter_models_by_answer.setdefault(answer, []):
             used_openrouter_models_by_answer[answer].append(used_model)
 
-    def run_role_for_answers(role: str, role_answers: List[str]) -> None:
+    def run_role_for_answers(role: str, role_answers: List[str]) -> int:
         if not role_answers:
-            return
+            return 0
+        completed_units = 0
         runtime_cfg = load_config()
         batch_provider = _preferred_batch_provider(runtime_cfg)
         batch_size = _judge_answer_batch_size(runtime_cfg, batch_provider)
+        planned_units = (
+            (len(role_answers) + initial_batch_size - 1) // initial_batch_size
+            if initial_batch_size > 1 else len(role_answers)
+        )
+        actual_units = (
+            (len(role_answers) + batch_size - 1) // batch_size
+            if batch_size > 1 else len(role_answers)
+        )
+        if actual_units > planned_units:
+            _model_progress_extend(actual_units - planned_units, reason=f"{role}:{batch_provider}")
         if batch_size <= 1:
             for answer in role_answers:
                 avoid_models = avoid_models_for_chunk([answer])
@@ -1160,7 +1302,10 @@ def run_judges_model_first(
                 )
                 out[answer].append(result)
                 remember_used_model(answer, result)
-            return
+                completed_units += 1
+                _model_progress_tick()
+            _model_progress_tick(max(0, planned_units - completed_units))
+            return completed_units
         for chunk in _chunked(role_answers, batch_size):
             avoid_models = avoid_models_for_chunk(chunk)
             batch_results = call_judge_role_batch_sync(
@@ -1176,6 +1321,10 @@ def run_judges_model_first(
                 result = batch_results[answer]
                 out[answer].append(result)
                 remember_used_model(answer, result)
+            completed_units += 1
+            _model_progress_tick()
+        _model_progress_tick(max(0, planned_units - completed_units))
+        return completed_units
 
     log(
         "INFO",
@@ -1219,9 +1368,19 @@ def run_judges_model_first(
 
         if needs_adjudication and adjudicator_role in roles:
             log("INFO", f"[JUDGES] Model-first adjudicator START role={adjudicator_role} answers={len(needs_adjudication)}")
-            run_role_for_answers(adjudicator_role, needs_adjudication)
+            actual_units = run_role_for_answers(adjudicator_role, needs_adjudication)
+            reserved_units = (
+                (len(answers) + initial_batch_size - 1) // initial_batch_size
+                if initial_batch_size > 1 else len(answers)
+            )
+            _model_progress_tick(max(0, reserved_units - actual_units))
             log("INFO", f"[JUDGES] Model-first adjudicator DONE role={adjudicator_role}")
         else:
+            reserved_units = (
+                (len(answers) + initial_batch_size - 1) // initial_batch_size
+                if initial_batch_size > 1 else len(answers)
+            )
+            _model_progress_tick(reserved_units if adjudicator_role in roles else 0)
             log("INFO", "[JUDGES] Model-first adjudicator skipped")
         return out
 
@@ -1273,6 +1432,7 @@ async def run_all_judges_with_early_exit(
                 log("WARNING", "Judge call timed out without a binary verdict; retry state recorded")
                 r = _abstain("timeout")
             results.append(r)
+            _model_progress_tick()
             
             # Early exit check
             if enabled and len(results) >= min_judges:
@@ -1281,9 +1441,11 @@ async def run_all_judges_with_early_exit(
                 avg_conf = sum(confs) / len(confs) if confs else 0.0
                 
                 if len(set(decisions)) == 1 and avg_conf >= agree_thresh:
+                    pending_count = sum(1 for t in tasks if not t.done())
                     for t in tasks:
                         if not t.done():
                             t.cancel()
+                    _model_progress_tick(pending_count)
                     log("DEBUG", f"Early exit: {len(results)} judges, unanimous {decisions[0]} @ {avg_conf:.2f}")
                     break
         
@@ -1414,6 +1576,7 @@ def _run_judges_sync(
         for role in primary_roles:
             result = _call_one(role, avoid_models=used_openrouter_models)
             out.append(result)
+            _model_progress_tick()
             used_model = _openrouter_model_used(result)
             if used_model and used_model not in used_openrouter_models:
                 used_openrouter_models.append(used_model)
@@ -1437,7 +1600,10 @@ def _run_judges_sync(
             reason = "invalid" if not valid_primary else "disagreement" if len(set(decisions)) != 1 else "low-confidence/ambiguous"
             log("INFO", f"[JUDGES] Escalating to {adjudicator_role}: {reason}")
             out.append(_call_one(adjudicator_role, avoid_models=used_openrouter_models))
+            _model_progress_tick()
         else:
+            if adjudicator_role in roles:
+                _model_progress_tick()
             log("INFO", f"[JUDGES] {expected_primary_count} primary roles agree confidently; adjudicator skipped")
         return out
 
@@ -1446,6 +1612,7 @@ def _run_judges_sync(
         for role in roles:
             result = _call_one(role, avoid_models=used_openrouter_models)
             out.append(result)
+            _model_progress_tick()
             used_model = _openrouter_model_used(result)
             if used_model and used_model not in used_openrouter_models:
                 used_openrouter_models.append(used_model)
@@ -1465,9 +1632,11 @@ def _run_judges_sync(
                 pending.discard(fut)
                 try:
                     out.append(fut.result())
+                    _model_progress_tick()
                 except Exception as exx:
                     log("WARNING", f"Judge future failed: {exx}")
                     out.append(_abstain("future_exception"))
+                    _model_progress_tick()
 
                 if ee_enabled and len(out) >= ee_min:
                     decisions = [str(x.get("decision", "ERROR")) for x in out]
@@ -1476,6 +1645,7 @@ def _run_judges_sync(
                     if len(set(decisions)) == 1 and avg_conf >= ee_agree:
                         for pf in list(pending):
                             pf.cancel()
+                        _model_progress_tick(len(pending))
                         break
         except FuturesTimeoutError:
             log("WARNING", "Synchronous judge batch timed out; unresolved judges produced no verdict")
