@@ -112,8 +112,12 @@ def _estimate_model_calls_for_question(
     roles: List[str],
     adaptive_cfg: Dict[str, object],
 ) -> int:
-    """Estimated model calls for one question graded through the model-first batch path."""
-    per_role = len(answers) if batch_size <= 1 else (len(answers) + batch_size - 1) // batch_size
+    """Estimated model calls for one question graded through the model-first batch path.
+
+    Progress counts one unit per answer per role regardless of batching, so the
+    queue progress bar tracks the answer count in every provider mode.
+    """
+    per_role = len(answers)
     if bool(adaptive_cfg.get("enabled", False)):
         primary = [r for r in adaptive_cfg.get("primary_roles", ["semantic_judge", "factual_judge", "concept_judge"]) if r in roles]
         adjudicator = str(adaptive_cfg.get("adjudicator_role", "strict_judge"))
@@ -1278,14 +1282,8 @@ def run_judges_model_first(
         runtime_cfg = load_config()
         batch_provider = _preferred_batch_provider(runtime_cfg)
         batch_size = _judge_answer_batch_size(runtime_cfg, batch_provider)
-        planned_units = (
-            (len(role_answers) + initial_batch_size - 1) // initial_batch_size
-            if initial_batch_size > 1 else len(role_answers)
-        )
-        actual_units = (
-            (len(role_answers) + batch_size - 1) // batch_size
-            if batch_size > 1 else len(role_answers)
-        )
+        planned_units = len(role_answers)
+        actual_units = len(role_answers)
         if actual_units > planned_units:
             _model_progress_extend(actual_units - planned_units, reason=f"{role}:{batch_provider}")
         if batch_size <= 1:
@@ -1321,8 +1319,8 @@ def run_judges_model_first(
                 result = batch_results[answer]
                 out[answer].append(result)
                 remember_used_model(answer, result)
-            completed_units += 1
-            _model_progress_tick()
+            completed_units += len(chunk)
+            _model_progress_tick(len(chunk))
         _model_progress_tick(max(0, planned_units - completed_units))
         return completed_units
 
@@ -1369,17 +1367,11 @@ def run_judges_model_first(
         if needs_adjudication and adjudicator_role in roles:
             log("INFO", f"[JUDGES] Model-first adjudicator START role={adjudicator_role} answers={len(needs_adjudication)}")
             actual_units = run_role_for_answers(adjudicator_role, needs_adjudication)
-            reserved_units = (
-                (len(answers) + initial_batch_size - 1) // initial_batch_size
-                if initial_batch_size > 1 else len(answers)
-            )
+            reserved_units = len(answers)
             _model_progress_tick(max(0, reserved_units - actual_units))
             log("INFO", f"[JUDGES] Model-first adjudicator DONE role={adjudicator_role}")
         else:
-            reserved_units = (
-                (len(answers) + initial_batch_size - 1) // initial_batch_size
-                if initial_batch_size > 1 else len(answers)
-            )
+            reserved_units = len(answers)
             _model_progress_tick(reserved_units if adjudicator_role in roles else 0)
             log("INFO", "[JUDGES] Model-first adjudicator skipped")
         return out

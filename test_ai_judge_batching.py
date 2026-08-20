@@ -359,7 +359,7 @@ def test_model_first_judging_refreshes_answer_batch_size_between_roles(monkeypat
     assert single_calls == [("factual_judge", "a"), ("factual_judge", "b"), ("factual_judge", "c")]
 
 
-def test_form_model_plan_counts_provider_sized_batches_and_adjudicator_capacity(monkeypatch):
+def test_form_model_plan_counts_answers_per_role_with_adjudicator_capacity(monkeypatch):
     cfg = {
         "provider_manager_enabled": False,
         "active_judge_roles": ["semantic_judge", "factual_judge", "strict_judge"],
@@ -373,9 +373,10 @@ def test_form_model_plan_counts_provider_sized_batches_and_adjudicator_capacity(
     }
     monkeypatch.setattr(ai_judges, "load_config", lambda: cfg)
 
-    # 26 answers means two batches for each primary role and two reserved
-    # adjudicator slots. Retries do not change this logical plan.
-    assert ai_judges.estimate_form_model_calls({"q1": ["a"] * 26}, cfg, True) == 6
+    # 26 answers count one unit per answer per role regardless of batching:
+    # two primary roles (52) plus one reserved adjudicator slot per answer (26).
+    # Retries do not change this logical plan.
+    assert ai_judges.estimate_form_model_calls({"q1": ["a"] * 26}, cfg, True) == 78
 
 
 def test_model_progress_never_exceeds_fixed_plan_when_batch_succeeds(monkeypatch, capsys):
@@ -398,11 +399,11 @@ def test_model_progress_never_exceeds_fixed_plan_when_batch_succeeds(monkeypatch
         },
     )
 
-    ai_judges.configure_model_progress(4, scope="test")
+    ai_judges.configure_model_progress(6, scope="test")
     ai_judges.run_judges_model_first(["a", "b", "c"], "q", "e", {}, retries=1)
 
     progress = [line for line in capsys.readouterr().out.splitlines() if line.startswith("ModelProgress:")]
-    assert progress[-1] == "ModelProgress: 4/4"
+    assert progress[-1] == "ModelProgress: 6/6"
     assert not any("ModelProgressWarning:" in line for line in progress)
 
 
