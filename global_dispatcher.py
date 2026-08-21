@@ -170,6 +170,26 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
     stop = threading.Event()
     failed = threading.Event()
 
+    # Failed-answer requeue: ERROR results get another grading pass (with
+    # backoff) instead of being silently dropped. Attempts are tracked per
+    # logical task; exhaustion falls back to the legacy drop behavior.
+    requeue_enabled = bool(cfg.get("requeue_failed_answers", False))
+    try:
+        requeue_max_attempts = max(0, int(cfg.get("requeue_max_attempts", 2)))
+    except (TypeError, ValueError):
+        requeue_max_attempts = 2
+    try:
+        requeue_base_delay_s = max(1.0, float(cfg.get("requeue_base_delay_seconds", 30)))
+    except (TypeError, ValueError):
+        requeue_base_delay_s = 30.0
+    requeue_attempts: Dict[str, int] = {}
+    retry_schedule_q: "queue.Queue[Optional[tuple[float, Task]]]" = queue.Queue()
+    # Number of tasks currently held by the requeue scheduler (gate -> inject).
+    # det_worker uses this to keep its shutdown sentinel behind every possible
+    # future requeue injection; otherwise a retried task lands after the
+    # sentinel in ai_q FIFO order and its worker exits before seeing it.
+    requeue_state = {"scheduled": 0}
+
     forms_results: Dict[int, Dict] = {}
     forms_total = len(form_urls)
     model_plan_answers: Dict[str, List[str]] = {}
@@ -826,6 +846,16 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
             except queue.Empty:
                 continue
             if t is None:
+                # Hold the shutdown sentinel until the AI pipeline has fully
+                # drained AND no requeue retries are scheduled; a retried task
+                # must never land behind this None in ai_q FIFO order.
+                while not stop.is_set():
+                    with metrics_lock:
+                        inflight = int(progress.get("ai_backlog", 0))
+                        scheduled = int(requeue_state.get("scheduled", 0))
+                    if inflight <= 0 and scheduled <= 0:
+                        break
+                    time.sleep(0.1)
                 ai_q.put(None)
                 log("INFO", "[Worker: Deterministic] DONE det_worker")
                 return
@@ -1019,6 +1049,78 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
             )
             update_runtime_state(active_task="", active_model="idle", active_since=0.0)
 
+    def _finalize_requeue_error(t: Task, stage: str) -> None:
+        """Close accounting for a task that can no longer be retried."""
+        result = EvaluationResult(
+            answer=t.answer,
+            decision="ERROR",
+            final_score=0.0,
+            semantic_score=0.0,
+            concept_score=0.0,
+            factual_score=0.0,
+            misconception_detected=False,
+            misconception_description="requeue_abandoned",
+            missing_concepts=[],
+            accepted_concepts=[],
+            model_agreement=0.0,
+            confidence=0.0,
+            fast_path_used=False,
+            latency_ms=0.0,
+            stage_reached=stage,
+        )
+        try:
+            result_q.put((t, result), timeout=2)
+        except Exception:
+            pass
+
+    def _inject_requeued_task(t: Task) -> None:
+        """Put a requeued task back into the active grading pipeline."""
+        try:
+            t.queued_monotonic = time.monotonic()
+            if model_first_batching:
+                ai_batch_q.put(
+                    QuestionBatch(t.form_idx, t.form_id, t.form_title, t.question, [t]),
+                    timeout=2,
+                )
+                with metrics_lock:
+                    progress["ai_backlog"] += 1
+            else:
+                enqueue_ai_task(t)
+            log(
+                "INFO",
+                f"[REQUEUE] re-injected task={task_id(t)} form_id={t.form_id} "
+                f"question_id={t.question.get('questionId')}",
+            )
+        except Exception as ex:
+            log("ERROR", f"[REQUEUE] injection failed task={task_id(t)}: {ex}; finalizing as ERROR")
+            _finalize_requeue_error(t, "requeue_injection_failed")
+        finally:
+            with metrics_lock:
+                requeue_state["scheduled"] = max(0, requeue_state["scheduled"] - 1)
+
+    def retry_scheduler():
+        log("INFO", "[Worker: Requeue] START retry_scheduler")
+        pending = []  # entries of [ready_monotonic, Task]
+        while True:
+            now = time.monotonic()
+            due = [entry for entry in pending if entry[0] <= now]
+            for _ready, task in due:
+                _inject_requeued_task(task)
+            if due:
+                pending = [entry for entry in pending if entry[0] > now]
+            try:
+                item = retry_schedule_q.get(timeout=0.25)
+            except queue.Empty:
+                continue
+            if item is None:
+                # Drain-on-stop: inject leftovers immediately at shutdown.
+                for _ready, task in pending:
+                    _inject_requeued_task(task)
+                pending = []
+                break
+            pending.append(list(item))
+        log("INFO", "[Worker: Requeue] DONE retry_scheduler")
+
     def result_aggregator():
         log("INFO", "[Worker: Aggregator] START result_aggregator")
         while not stop.is_set():
@@ -1036,6 +1138,39 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                 log("INFO", "[Worker: Aggregator] DONE result_aggregator")
                 return
             t, r = item
+            # Requeue gate: hold ERROR results out of accounting while retry
+            # attempts remain. Skipping the placeholder append and completed
+            # increment keeps per-question apply and run termination exact.
+            if r.decision == "ERROR":
+                attempt_key = task_id(t)
+                attempts_used = requeue_attempts.get(attempt_key, 0)
+                if requeue_enabled and attempts_used < requeue_max_attempts and not failed.is_set():
+                    with metrics_lock:
+                        requeue_state["scheduled"] += 1
+                    requeue_attempts[attempt_key] = attempts_used + 1
+                    delay_s = requeue_base_delay_s * (2 ** attempts_used)
+                    log(
+                        "WARNING",
+                        f"[REQUEUE] grading failed for task={attempt_key} "
+                        f"(stage={r.stage_reached}); scheduling retry "
+                        f"{attempts_used + 1}/{requeue_max_attempts} in {delay_s:.0f}s",
+                    )
+                    gui_event(
+                        "answer_requeued",
+                        question_number=int(t.question.get("index", 0)) + 1,
+                        question=safe_text(t.question.get("title", "Untitled Question"), 1000),
+                        answer=safe_text(t.answer) if bool(cfg.get("gui_show_student_answers", True)) else "[hidden]",
+                        attempt=attempts_used + 1,
+                        max_attempts=requeue_max_attempts,
+                        delay_seconds=int(delay_s),
+                    )
+                    try:
+                        retry_schedule_q.put((time.monotonic() + delay_s, t), timeout=2)
+                        continue
+                    except Exception:
+                        with metrics_lock:
+                            requeue_state["scheduled"] = max(0, requeue_state["scheduled"] - 1)
+                        log("ERROR", f"[REQUEUE] schedule queue full; dropping task={attempt_key}")
             fi = t.form_idx
             qid = t.question["questionId"]
             forms_results.setdefault(fi, {"meta": {}, "question_answers": {}, "counts": {}})
@@ -1149,7 +1284,14 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
             elif r.decision == "REVIEW":
                 action = "Answer added to Google Forms; pending teacher review."
             elif r.decision == "ERROR":
-                action = "Grading failed after retries; answer was not added to Google Forms or teacher review."
+                attempts_used = requeue_attempts.get(task_id(t), 0)
+                if requeue_enabled and requeue_max_attempts > 0:
+                    action = (
+                        f"Grading failed after {attempts_used + 1} attempt(s); "
+                        "answer was not added to Google Forms or teacher review."
+                    )
+                else:
+                    action = "Grading failed after retries; answer was not added to Google Forms or teacher review."
             else:
                 action = "Rejected and not added to Google Forms."
             shown_answer = safe_text(t.answer) if bool(cfg.get("gui_show_student_answers", True)) else "[hidden]"
@@ -1390,6 +1532,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
     ag = threading.Thread(target=result_aggregator, daemon=False)
     ap = threading.Thread(target=incremental_apply_worker, daemon=False)
     mr = threading.Thread(target=metrics_reporter, daemon=False)
+    rs = threading.Thread(target=retry_scheduler, daemon=False)
 
     if staged_startup:
         log("INFO", "[DISPATCH] Staged startup ON: phase1(fetch) -> phase2(task_builder) -> phase3(workers)")
@@ -1428,10 +1571,11 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
         ag.start()
         ap.start()
         mr.start()
+        rs.start()
         if expected_at_start == 0:
             result_q.put(None)
     else:
-        tf.start(); tb.start(); [t.start() for t in da]; [t.start() for t in aw]; ag.start(); ap.start(); mr.start()
+        tf.start(); tb.start(); [t.start() for t in da]; [t.start() for t in aw]; ag.start(); ap.start(); mr.start(); rs.start()
         tf.join(); tb.join()
         announce_model_plan()
         with metrics_lock:
@@ -1455,6 +1599,16 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
         except Exception:
             pass
     [t.join() for t in aw]
+    # Requeue scheduler holds no accounting of its own; by natural completion
+    # its pending list is empty (workers only exit when backlog drains). The
+    # sentinel just flushes leftovers on failure paths so the run can end.
+    try:
+        retry_schedule_q.put(None, timeout=2)
+        rs.join(timeout=10)
+    except Exception:
+        pass
+    if rs.is_alive():
+        log("WARNING", "[REQUEUE] retry_scheduler did not stop cleanly")
     ag.join(timeout=30)
     if ag.is_alive():
         result_q.put(None)
