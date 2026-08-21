@@ -16,7 +16,7 @@ except Exception:
 import requests
 import ollama
 
-from evaluator_config import load_config
+from evaluator_config import configured_provider_names, load_config
 from logger import log, update_runtime_state
 from ollama_diagnostics import log_post_inference_gpu_probe_once
 from ollama_options import build_ollama_options
@@ -309,6 +309,30 @@ def _unavailable_model_label(role: str, requested_model: object) -> str:
 def _provider_schema(payload: Dict[str, object]) -> Optional[Dict[str, object]]:
     fmt = payload.get("format")
     return fmt if isinstance(fmt, dict) else None
+
+
+def _lane_request_metadata(
+    avoid_models: Optional[List[str]],
+    provider_hint: Optional[str],
+    batch_answer_count: Optional[int] = None,
+) -> Dict[str, object]:
+    """Build request metadata; a lane hint pins provider order for this call.
+
+    The hint becomes metadata["provider_priority"], which ProviderManager's
+    _provider_order() already honors, so each dual-lane worker routes to its
+    own provider first while keeping normal failover to the others.
+    """
+    meta: Dict[str, object] = {"avoid_models": list(avoid_models or [])}
+    if batch_answer_count is not None and int(batch_answer_count) > 1:
+        meta["batch_answer_count"] = int(batch_answer_count)
+    hint = str(provider_hint or "").strip().lower()
+    if hint:
+        try:
+            rest = [p for p in configured_provider_names(load_config()) if p != hint]
+        except Exception:
+            rest = [p for p in ("openrouter", "llamacpp", "ollama") if p != hint]
+        meta["provider_priority"] = [hint, *rest]
+    return meta
 
 
 def _ask_provider(
@@ -878,6 +902,7 @@ def call_judge_role_sync(
     rubric: Dict[str, object],
     retries: int = 3,
     avoid_models: Optional[List[str]] = None,
+    provider_hint: Optional[str] = None,
 ) -> Dict[str, object]:
     """Run one judge role for one answer.
 
@@ -930,7 +955,7 @@ def call_judge_role_sync(
                 payload,
                 TIMEOUT_SECONDS,
                 "judge",
-                metadata={"avoid_models": list(avoid_models or [])},
+                metadata=_lane_request_metadata(avoid_models, provider_hint),
             )
         except ProviderError as ex:
             category = getattr(ex, "category", "provider_error")
@@ -1090,6 +1115,7 @@ def call_judge_role_batch_sync(
     rubrics_by_answer: Dict[str, Dict[str, object]],
     retries: int = 3,
     avoid_models: Optional[List[str]] = None,
+    provider_hint: Optional[str] = None,
 ) -> Dict[str, Dict[str, object]]:
     """Run one judge role for a small batch of answers in one Ollama call.
 
@@ -1146,8 +1172,8 @@ def call_judge_role_batch_sync(
                 role,
                 payload,
                 TIMEOUT_SECONDS,
-                "judge-batch",
-                metadata={"batch_answer_count": len(answers), "avoid_models": list(avoid_models or [])},
+                "judge",
+                metadata=_lane_request_metadata(avoid_models, provider_hint, len(answers)),
             )
             raw = response.get("message", {}).get("content", "")
             parsed = parse_batch_judge_response(raw, [idx for idx, _ in indexed_answers])
@@ -1253,14 +1279,20 @@ def run_judges_model_first(
     expected: str,
     rubrics_by_answer: Dict[str, Dict[str, object]],
     retries: int = 3,
+    provider_hint: Optional[str] = None,
 ) -> Dict[str, List[Dict[str, object]]]:
-    """Run judges by model/role across all answers for one question."""
+    """Run judges by model/role across all answers for one question.
+
+    ``provider_hint`` pins routing for dual-lane dispatch: chunk sizing uses
+    the hinted provider's batch size and every judge call prefers that
+    provider first (normal failover to the others still applies).
+    """
     cfg = load_config()
     roles = _selected_roles(cfg)
     out: Dict[str, List[Dict[str, object]]] = {answer: [] for answer in answers}
     used_openrouter_models_by_answer: Dict[str, List[str]] = {answer: [] for answer in answers}
     adaptive_cfg = cfg.get("adaptive_math_jury", {})
-    initial_batch_provider = _preferred_batch_provider(cfg)
+    initial_batch_provider = str(provider_hint).strip().lower() if provider_hint else _preferred_batch_provider(cfg)
     initial_batch_size = _judge_answer_batch_size(cfg, initial_batch_provider)
 
     def avoid_models_for_chunk(role_answers: List[str]) -> List[str]:
@@ -1280,7 +1312,7 @@ def run_judges_model_first(
             return 0
         completed_units = 0
         runtime_cfg = load_config()
-        batch_provider = _preferred_batch_provider(runtime_cfg)
+        batch_provider = str(provider_hint).strip().lower() if provider_hint else _preferred_batch_provider(runtime_cfg)
         batch_size = _judge_answer_batch_size(runtime_cfg, batch_provider)
         planned_units = len(role_answers)
         actual_units = len(role_answers)
@@ -1297,6 +1329,7 @@ def run_judges_model_first(
                     rubrics_by_answer.get(answer, {}),
                     retries,
                     avoid_models=avoid_models,
+                    provider_hint=provider_hint,
                 )
                 out[answer].append(result)
                 remember_used_model(answer, result)
@@ -1314,6 +1347,7 @@ def run_judges_model_first(
                 rubrics_by_answer,
                 retries,
                 avoid_models=avoid_models,
+                provider_hint=provider_hint,
             )
             for answer in chunk:
                 result = batch_results[answer]
@@ -1450,7 +1484,8 @@ def _run_judges_sync(
     expected: str,
     rubric: Dict[str, object],
     jury_models: Dict[str, str],
-    retries: int
+    retries: int,
+    provider_hint: Optional[str] = None
 ) -> List[Dict[str, object]]:
     """Synchronous judge execution (fallback when aiohttp unavailable)."""
     cfg = load_config()
@@ -1500,7 +1535,7 @@ def _run_judges_sync(
                 payload,
                 TIMEOUT_SECONDS,
                 "judge",
-                metadata={"avoid_models": list(avoid_models or [])},
+                metadata=_lane_request_metadata(avoid_models, provider_hint),
             )
         except ProviderError as ex:
             category = getattr(ex, "category", "provider_error")
@@ -1656,7 +1691,8 @@ def run_judges(
     question: str,
     expected: str,
     rubric: Dict[str, object],
-    retries: int = 3
+    retries: int = 3,
+    provider_hint: Optional[str] = None
 ) -> List[Dict[str, object]]:
     """Public API - run all judges with asyncio support.
     
@@ -1673,7 +1709,7 @@ def run_judges(
         # Fallback to synchronous execution
         log("INFO", "Running judges synchronously (async disabled or aiohttp unavailable)")
         jury_models = cfg.get("jury_models", {})
-        return _run_judges_sync(answer, question, expected, rubric, jury_models, retries)
+        return _run_judges_sync(answer, question, expected, rubric, jury_models, retries, provider_hint)
     
     try:
         # Try to get the existing event loop first

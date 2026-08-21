@@ -167,6 +167,7 @@ def evaluate_answer(
     expected: Union[str, List[str]],
     question: str,
     precomputed_judges: Optional[List[Dict[str, object]]] = None,
+    provider_hint: Optional[str] = None,
 ) -> EvaluationResult:
     global JURY_DISABLED_UNTIL_TS
     cfg = load_config()
@@ -305,7 +306,14 @@ def evaluate_answer(
             err = {}
             def _runner():
                 try:
-                    holder["judges"] = run_judges(answer, question, exp_text, comparison_evidence, retries=int(cfg.get("retry_attempts", 3)))
+                    holder["judges"] = run_judges(
+                        answer,
+                        question,
+                        exp_text,
+                        comparison_evidence,
+                        retries=int(cfg.get("retry_attempts", 3)),
+                        provider_hint=provider_hint,
+                    )
                 except Exception as ex:
                     err["ex"] = ex
             t = threading.Thread(target=_runner, daemon=True)
@@ -567,7 +575,12 @@ def evaluate_answers(answers: List[str], expected: Union[str, List[str]], questi
     return out
 
 
-def evaluate_answers_model_first(answers: List[str], expected: Union[str, List[str]], question: str) -> List[EvaluationResult]:
+def evaluate_answers_model_first(
+    answers: List[str],
+    expected: Union[str, List[str]],
+    question: str,
+    provider_hint: Optional[str] = None,
+) -> List[EvaluationResult]:
     """Evaluate one question's answers by running each judge role across the whole answer set."""
     if not answers:
         return []
@@ -600,6 +613,7 @@ def evaluate_answers_model_first(answers: List[str], expected: Union[str, List[s
             exp_text,
             rubrics_by_answer,
             retries=int(cfg.get("retry_attempts", 3)),
+            provider_hint=provider_hint,
         )
 
     results: List[EvaluationResult] = []
@@ -607,5 +621,9 @@ def evaluate_answers_model_first(answers: List[str], expected: Union[str, List[s
         if answer in cached:
             results.append(cached[answer])
         else:
-            results.append(evaluate_answer(answer, expected, question, precomputed_judges=judged.get(answer, [])))
+            results.append(evaluate_answer(
+                answer, expected, question,
+                precomputed_judges=judged.get(answer, []),
+                provider_hint=provider_hint,
+            ))
     return results

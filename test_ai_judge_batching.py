@@ -104,7 +104,7 @@ def test_call_judge_role_batch_sync_falls_back_for_missing_answer(monkeypatch):
         lambda *_args, **_kwargs: _FakeResponse(_batch_payload([_judge_result(1), _judge_result(3)])),
     )
 
-    def fake_single(role, answer, question, expected, rubric, retries, avoid_models=None):
+    def fake_single(role, answer, question, expected, rubric, retries, avoid_models=None, provider_hint=None):
         single_calls.append((answer, list(avoid_models or [])))
         return {
             "role": role,
@@ -310,7 +310,7 @@ def test_model_first_judging_refreshes_answer_batch_size_between_roles(monkeypat
     monkeypatch.setattr(ai_judges, "load_config", fake_load_config)
     monkeypatch.setattr(ai_judges, "_selected_roles", lambda _cfg: ["semantic_judge", "factual_judge"])
 
-    def fake_batch(role, answers, question, expected, rubrics_by_answer, retries, avoid_models=None):
+    def fake_batch(role, answers, question, expected, rubrics_by_answer, retries, avoid_models=None, provider_hint=None):
         batch_calls.append((role, list(answers)))
         return {
             answer: {
@@ -331,7 +331,7 @@ def test_model_first_judging_refreshes_answer_batch_size_between_roles(monkeypat
 
     single_calls = []
 
-    def fake_single(role, answer, question, expected, rubric, retries, avoid_models=None):
+    def fake_single(role, answer, question, expected, rubric, retries, avoid_models=None, provider_hint=None):
         single_calls.append((role, answer))
         return {
             "role": role,
@@ -428,7 +428,7 @@ def test_model_first_avoid_models_are_scoped_to_answer_chunk(monkeypatch):
     )
     monkeypatch.setattr(ai_judges, "_selected_roles", lambda _cfg: ["semantic_judge", "factual_judge"])
 
-    def fake_batch(role, answers, question, expected, rubrics_by_answer, retries, avoid_models=None):
+    def fake_batch(role, answers, question, expected, rubrics_by_answer, retries, avoid_models=None, provider_hint=None):
         batch_calls.append((role, list(answers), list(avoid_models or [])))
         model = "model-x" if answers == ["a", "b"] else "model-y"
         if role == "factual_judge":
@@ -465,6 +465,100 @@ def test_model_first_avoid_models_are_scoped_to_answer_chunk(monkeypatch):
         ("factual_judge", ["a", "b"], ["model-x"]),
         ("factual_judge", ["c", "d"], ["model-y"]),
     ]
+
+
+def test_model_first_provider_hint_controls_chunking_and_routing(monkeypatch):
+    batch_calls = []
+    single_calls = []
+
+    monkeypatch.setattr(
+        ai_judges,
+        "load_config",
+        lambda: {
+            "jury_models": {"semantic_judge": "model-a"},
+            "active_judge_roles": ["semantic_judge"],
+            "adaptive_math_jury": {"enabled": False},
+            "provider_manager_enabled": True,
+            "provider_priority": ["openrouter", "llamacpp", "ollama"],
+            "judge_answer_batch_size": 25,
+            "openrouter_judge_answer_batch_size": 25,
+            "llamacpp_judge_answer_batch_size": 1,
+        },
+    )
+    monkeypatch.setattr(ai_judges, "_selected_roles", lambda _cfg: ["semantic_judge"])
+
+    def fake_batch(role, answers, question, expected, rubrics_by_answer, retries, avoid_models=None, provider_hint=None):
+        batch_calls.append((role, list(answers), provider_hint))
+        return {
+            answer: {
+                "role": role,
+                "provider": provider_hint or "openrouter",
+                "model": "model-a",
+                "decision": "YES",
+                "confidence": 0.99,
+                "reason_short": "ok",
+                "requirements_met": [],
+                "requirements_missing": [],
+                "contradictions": [],
+                "calculation_check": "ok",
+            }
+            for answer in answers
+        }
+
+    def fake_single(role, answer, question, expected, rubric, retries, avoid_models=None, provider_hint=None):
+        single_calls.append((answer, provider_hint))
+        return {
+            "role": role,
+            "provider": provider_hint or "openrouter",
+            "model": "model-a",
+            "decision": "YES",
+            "confidence": 0.99,
+            "reason_short": "ok",
+            "requirements_met": [],
+            "requirements_missing": [],
+            "contradictions": [],
+            "calculation_check": "ok",
+        }
+
+    monkeypatch.setattr(ai_judges, "call_judge_role_batch_sync", fake_batch)
+    monkeypatch.setattr(ai_judges, "call_judge_role_sync", fake_single)
+
+    # llamacpp hint -> per-answer chunking (batch size 1) routed with the hint.
+    ai_judges.run_judges_model_first(
+        ["a", "b"],
+        "question",
+        "expected",
+        {"a": {}, "b": {}},
+        retries=1,
+        provider_hint="llamacpp",
+    )
+    assert single_calls == [("a", "llamacpp"), ("b", "llamacpp")]
+    assert batch_calls == []
+
+    # openrouter hint -> whole-set chunk (batch size 25) routed with the hint.
+    ai_judges.run_judges_model_first(
+        ["a", "b"],
+        "question",
+        "expected",
+        {"a": {}, "b": {}},
+        retries=1,
+        provider_hint="openrouter",
+    )
+    assert batch_calls == [("semantic_judge", ["a", "b"], "openrouter")]
+
+
+def test_lane_request_metadata_pins_provider_priority(monkeypatch):
+    monkeypatch.setattr(
+        ai_judges,
+        "load_config",
+        lambda: {"provider_priority": ["openrouter", "llamacpp", "ollama"]},
+    )
+    meta = ai_judges._lane_request_metadata(["used-model"], "llamacpp")
+    assert meta["avoid_models"] == ["used-model"]
+    assert meta["provider_priority"] == ["llamacpp", "openrouter", "ollama"]
+    # No hint -> no priority override; normal strategy routing applies.
+    plain = ai_judges._lane_request_metadata([], None)
+    assert "provider_priority" not in plain
 
 
 def test_preferred_batch_provider_falls_back_when_openrouter_unavailable(monkeypatch):
