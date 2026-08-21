@@ -211,6 +211,36 @@ otherwise            → Reasoning fallback
 4. **Embedding Thresholds**: Auto-accept/reject before judges
 5. **Parallel Processing**: Judge calls run concurrently (async)
 
+## Provider Strategies
+
+`provider_strategy` selects routing. All strategies are failover chains except
+`dual_lane`, which is the only parallel mode:
+
+- `openrouter_only`, `llamacpp_only`, `ollama_only`: single provider
+- `openrouter_llamacpp`, `llamacpp_openrouter`, `all_providers`, ...:
+  sequential failover in listed order
+- `dual_lane`: per-provider AI worker pools (sizes from
+  `openrouter_ai_worker_count` / `llamacpp_ai_worker_count`) pull question
+  batches from one shared queue, so both providers grade concurrently at their
+  own speed with no duplicated calls. Each call pins its lane via
+  `metadata["provider_priority"]`; the other provider remains the in-request
+  fallback. `effective_jury_concurrency()` auto-bumps
+  `max_concurrent_jury_answers` to at least the total worker count so lanes
+  never serialize on the jury semaphore.
+
+## Failed-Answer Requeue
+
+With `requeue_failed_answers` enabled, an answer whose grading ends in ERROR
+(after judge retries) is re-scheduled by a dedicated retry scheduler thread
+with exponential backoff (`requeue_base_delay_seconds * 2^attempt`) up to
+`requeue_max_attempts` extra passes, instead of being silently dropped.
+While requeued, the result is withheld from progress accounting and from the
+per-question apply trigger, so Google Form writes only ever see final
+verdicts. Exhausted attempts fall back to the legacy behavior: the answer is
+logged as failed and excluded from Forms and teacher review. In non-batched
+mode the deterministic workers hold their shutdown sentinel until the requeue
+scheduler is empty, guaranteeing retried tasks always find a live worker.
+
 ## Logging Structure
 
 ```
