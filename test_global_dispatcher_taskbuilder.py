@@ -289,7 +289,7 @@ def test_model_first_batching_evaluates_question_answers_together(monkeypatch, c
     monkeypatch.setattr(gd, "enqueue_review", lambda *args, **kwargs: None)
     monkeypatch.setattr(gd, "log", lambda *args, **kwargs: None)
 
-    def fake_evaluate_answers_model_first(answers, expected, question):
+    def fake_evaluate_answers_model_first(answers, expected, question, provider_hint=None):
         calls.append((list(answers), list(expected), question))
         return [
             gd.EvaluationResult(
@@ -374,7 +374,7 @@ def test_model_first_batching_raw_mode_keeps_duplicate_form_answers(monkeypatch,
     monkeypatch.setattr(gd, "enqueue_review", lambda *args, **kwargs: None)
     monkeypatch.setattr(gd, "log", lambda *args, **kwargs: None)
 
-    def fake_evaluate_answers_model_first(answers, expected, question):
+    def fake_evaluate_answers_model_first(answers, expected, question, provider_hint=None):
         calls.append((list(answers), list(expected), question))
         return [
             gd.EvaluationResult(
@@ -529,7 +529,7 @@ def test_non_short_answer_questions_are_skipped_from_grading(monkeypatch, capsys
     monkeypatch.setattr(gd, "update_correct_answers", lambda *args, **kwargs: update_calls.append(args))
     monkeypatch.setattr(gd, "log", lambda level, msg: logs.append((level, msg)))
 
-    def fake_evaluate_answers_model_first(answers, expected, question):
+    def fake_evaluate_answers_model_first(answers, expected, question, provider_hint=None):
         calls.append((list(answers), list(expected), question))
         return [
             gd.EvaluationResult(

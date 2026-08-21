@@ -16,7 +16,13 @@ from ai_judges import (
 )
 from deterministic_checks import run_deterministic_checks
 from evaluation_pipeline import EvaluationResult, evaluate_answer, evaluate_answers_model_first
-from evaluator_config import effective_ai_worker_count, load_config
+from evaluator_config import (
+    effective_ai_worker_count,
+    effective_jury_concurrency,
+    effective_lane_workers,
+    is_dual_lane,
+    load_config,
+)
 from feedback import generate_form_feedback
 from form_context_builder import (
     apply_question_context,
@@ -122,7 +128,15 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
     staged_startup = bool(cfg.get("staged_thread_startup", True))
     fetch_workers = max(1, int(cfg.get("global_prefetch_workers", 4)))
     det_workers = max(1, int(cfg.get("deterministic_worker_count", 5)))
-    ai_workers = effective_ai_worker_count(cfg)
+    # Dual-lane strategy: dedicated per-provider worker pools pulling from one
+    # shared queue; every other strategy keeps the single generic pool.
+    lane_specs: List[tuple[str, int]] = [
+        (name, count) for name, count in effective_lane_workers(cfg).items() if count > 0
+    ]
+    total_ai_workers = (
+        sum(count for _, count in lane_specs) if lane_specs else effective_ai_worker_count(cfg)
+    )
+    ai_workers = total_ai_workers
     model_first_batching = (
         bool(cfg.get("model_first_question_batching", False))
         and bool(cfg.get("force_ai_jury_for_all_answers", False))
@@ -669,7 +683,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                 return memory, "teacher_memory_similar"
         return None, ""
 
-    def evaluate_answer_bounded(t: Task) -> EvaluationResult:
+    def evaluate_answer_bounded(t: Task, provider_hint: Optional[str] = None) -> EvaluationResult:
         hard_timeout_s = max(
             float(cfg.get("max_latency_per_answer_seconds", 45.0)) + 45.0,
             float(cfg.get("answer_hard_timeout_seconds", 120.0)),
@@ -684,7 +698,12 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                     return
                 result_holder.put((
                     "ok",
-                    evaluate_answer(t.answer, t.expected, get_question_context_with_learning(t.form_id, t.question)),
+                    evaluate_answer(
+                        t.answer,
+                        t.expected,
+                        get_question_context_with_learning(t.form_id, t.question),
+                        provider_hint=provider_hint,
+                    ),
                 ))
             except Exception as ex:
                 result_holder.put(("error", ex))
@@ -721,7 +740,10 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
             return payload
         raise payload
 
-    def evaluate_question_batch_bounded(batch: QuestionBatch) -> List[tuple[Task, EvaluationResult]]:
+    def evaluate_question_batch_bounded(
+        batch: QuestionBatch,
+        provider_hint: Optional[str] = None,
+    ) -> List[tuple[Task, EvaluationResult]]:
         hard_timeout_s = max(
             (float(cfg.get("answer_hard_timeout_seconds", 120.0)) * max(1, len(batch.tasks))),
             float(cfg.get("question_batch_hard_timeout_seconds", 3600.0)),
@@ -744,6 +766,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                         [task.answer for task in ai_tasks],
                         ai_tasks[0].expected,
                         get_question_context_with_learning(batch.form_id, batch.question),
+                        provider_hint=provider_hint,
                     )
                     ai_results_by_task = {
                         id(task): result
@@ -833,8 +856,8 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                 except Exception:
                     pass
 
-    def ai_worker(worker_id: str):
-        log("INFO", f"[Worker: AI] START ai_worker id={worker_id}")
+    def ai_worker(worker_id: str, lane_provider: Optional[str] = None):
+        log("INFO", f"[Worker: AI] START ai_worker id={worker_id} lane={lane_provider or 'generic'}")
         log("INFO", f"[APP WORKER] id={worker_id} type=ai status=idle current=- answers=0 latency_ms=0 queue_wait_ms=0")
         if model_first_batching:
             while not stop.is_set():
@@ -878,7 +901,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                 )
                 started = time.perf_counter()
                 try:
-                    batch_results = evaluate_question_batch_bounded(batch)
+                    batch_results = evaluate_question_batch_bounded(batch, provider_hint=lane_provider)
                 except Exception as exx:
                     log("ERROR", f"[DISPATCH] batch ai worker error: {exx}")
                     batch_results = []
@@ -955,7 +978,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                 f"answer={answer_for_log!r} expected={safe_text((t.expected or [''])[0])!r}",
             )
             try:
-                r = evaluate_answer_bounded(t)
+                r = evaluate_answer_bounded(t, provider_hint=lane_provider)
             except Exception as exx:
                 log("ERROR", f"[DISPATCH] ai worker error: {exx}")
                 r = EvaluationResult(
@@ -1340,10 +1363,30 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
     tf = threading.Thread(target=fetch_stage, daemon=False)
     tb = threading.Thread(target=task_builder, daemon=False)
     da = [] if model_first_batching else [threading.Thread(target=det_worker, daemon=False) for _ in range(det_workers)]
-    aw = [
-        threading.Thread(target=ai_worker, args=(f"ai-{i + 1}",), daemon=False, name=f"ai-{i + 1}")
-        for i in range(ai_workers)
-    ]
+    aw: List[threading.Thread] = []
+    for provider_name, lane_count in (lane_specs or [("", total_ai_workers)]):
+        for i in range(lane_count):
+            wid = f"ai-{provider_name}-{i + 1}" if provider_name else f"ai-{i + 1}"
+            aw.append(threading.Thread(
+                target=ai_worker,
+                args=(wid, provider_name or None),
+                daemon=False,
+                name=wid,
+            ))
+    if lane_specs:
+        jury_now = effective_jury_concurrency(cfg)
+        if jury_now < total_ai_workers:
+            log(
+                "WARNING",
+                f"[DISPATCH] dual_lane jury concurrency {jury_now} < total workers {total_ai_workers}; "
+                f"lanes may serialize on the jury semaphore",
+            )
+        else:
+            log(
+                "INFO",
+                f"[DISPATCH] dual_lane lanes={dict(lane_specs)} "
+                f"total_ai_workers={total_ai_workers} jury_concurrency={jury_now}",
+            )
     ag = threading.Thread(target=result_aggregator, daemon=False)
     ap = threading.Thread(target=incremental_apply_worker, daemon=False)
     mr = threading.Thread(target=metrics_reporter, daemon=False)
