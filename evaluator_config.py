@@ -243,6 +243,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "execution_mode": "Maximum accuracy: independent unanimous jury + review",
     "concurrent_forms": 1,
+    "requeue_failed_answers": False,
+    "requeue_max_attempts": 2,
+    "requeue_base_delay_seconds": 30,
     "active_judge_roles": [
         "semantic_judge", "factual_judge", "concept_judge", "strict_judge",
     ],
@@ -284,6 +287,8 @@ def configured_provider_names(cfg: Dict[str, Any]) -> list[str]:
         return ["openrouter", "llamacpp"]
     if strategy in {"llamacpp_openrouter", "llamacpp_then_openrouter"}:
         return ["llamacpp", "openrouter"]
+    if strategy == "dual_lane":
+        return ["openrouter", "llamacpp"]
     if strategy in {"openrouter_ollama", "openrouter_then_ollama", "free_first_ollama_fallback"}:
         return ["openrouter", "ollama"]
     if strategy in {"ollama_openrouter", "ollama_then_openrouter"}:
@@ -307,11 +312,58 @@ def is_llamacpp_only(cfg: Dict[str, Any]) -> bool:
     return configured_provider_names(cfg) == ["llamacpp"]
 
 
+def is_dual_lane(cfg: Dict[str, Any]) -> bool:
+    """True when the dual-lane dispatcher strategy (parallel providers) is selected."""
+    return str(cfg.get("provider_strategy", "") or "").strip().lower() == "dual_lane"
+
+
+def effective_lane_workers(cfg: Dict[str, Any]) -> Dict[str, int]:
+    """Per-lane AI worker counts for the dual_lane strategy; empty for other strategies.
+
+    Lane counts come from the existing per-provider worker keys so no new config
+    surface is required. Providers not active under the strategy are omitted.
+    """
+    if not is_dual_lane(cfg):
+        return {}
+    legacy_count = max(1, int(cfg.get("ai_worker_count", 4) or 4))
+    counts = {
+        "openrouter": max(1, int(cfg.get("openrouter_ai_worker_count", legacy_count) or legacy_count)),
+        "llamacpp": max(1, int(cfg.get("llamacpp_ai_worker_count", 1) or 1)),
+    }
+    active = set(configured_provider_names(cfg))
+    return {name: count for name, count in counts.items() if name in active}
+
+
+def effective_jury_concurrency(cfg: Dict[str, Any]) -> int:
+    """Jury semaphore permits; never below the dual-lane worker total.
+
+    An explicit ``max_concurrent_jury_answers`` wins unless it would serialize
+    the dual-lane pools, in which case it is auto-bumped to the lane total.
+    """
+    lanes = effective_lane_workers(cfg)
+    minimum = sum(lanes.values())
+    try:
+        explicit = int(cfg.get("max_concurrent_jury_answers") or 0)
+    except (TypeError, ValueError):
+        explicit = 0
+    if explicit > 0:
+        if minimum and explicit < minimum:
+            return minimum
+        return explicit
+    if minimum:
+        return minimum
+    return max(1, int(cfg.get("ai_worker_count", 4) or 4))
+
+
 def effective_ai_worker_count(cfg: Dict[str, Any]) -> int:
     """Application AI workers for the active provider strategy."""
     legacy_count = max(1, int(cfg.get("ai_worker_count", 4) or 4))
     if is_llamacpp_only(cfg):
         return 1
+
+    if is_dual_lane(cfg):
+        lanes = effective_lane_workers(cfg)
+        return sum(lanes.values()) or legacy_count
 
     active = configured_provider_names(cfg)
     counts = {

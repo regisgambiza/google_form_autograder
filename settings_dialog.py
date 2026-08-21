@@ -12,6 +12,7 @@ import ollama
 from evaluator_config import (
     DEFAULT_CONFIG,
     effective_ai_worker_count,
+    effective_jury_concurrency,
     is_llamacpp_only,
 )
 from cache_manager import clear_grading_cache
@@ -397,6 +398,7 @@ def show_settings_dialog(owner):
         "openrouter_llamacpp_ollama",
         "openrouter_llamacpp",
         "llamacpp_openrouter",
+        "dual_lane",
         "local_all",
         "custom_priority",
         "free_first_paid_fallback",
@@ -406,7 +408,9 @@ def show_settings_dialog(owner):
         "ollama_only",
     ])
     provider_strategy_combo.setToolTip(
-        "Controls provider routing. Paid strategies use the cheap paid fallback model list and respect the spend cap."
+        "Controls provider routing. Paid strategies use the cheap paid fallback model list and respect the spend cap. "
+        "dual_lane grades with OpenRouter and llama.cpp worker pools pulling from one shared queue in parallel; "
+        "each lane falls back to the other provider on failure."
     )
     provider_priority_edit = QLineEdit(dialog)
     provider_priority_edit.setText("openrouter,llamacpp,ollama")
@@ -662,10 +666,13 @@ def show_settings_dialog(owner):
         "Changes apply to the next grading run."
     )
     llamacpp_ai_worker_count_spin = QSpinBox(dialog)
-    llamacpp_ai_worker_count_spin.setRange(1, 1)
-    llamacpp_ai_worker_count_spin.setValue(1)
+    llamacpp_ai_worker_count_spin.setRange(1, 2)
+    llamacpp_ai_worker_count_spin.setValue(
+        max(1, int(cfg.get("llamacpp_ai_worker_count", 1) or 1))
+    )
     llamacpp_ai_worker_count_spin.setToolTip(
-        "llama.cpp is capped at 1 application AI worker so local GGUF grading stays serial and reliable."
+        "llama.cpp application AI workers. 1 keeps local GGUF grading serial; "
+        "2 is useful with the dual_lane strategy when llama-server parallel slots allow it."
     )
     openrouter_worker_count_spin = QSpinBox(dialog)
     openrouter_worker_count_spin.setRange(1, 12)
@@ -1162,7 +1169,7 @@ def show_settings_dialog(owner):
         for key, value in preset.items():
             config_data[key] = value
         config_data["openrouter_ai_worker_count"] = int(openrouter_ai_worker_count_spin.value())
-        config_data["llamacpp_ai_worker_count"] = 1
+        config_data["llamacpp_ai_worker_count"] = int(llamacpp_ai_worker_count_spin.value())
         config_data["ollama_ai_worker_count"] = int(ollama_ai_worker_count_spin.value())
         config_data["openrouter_worker_count"] = int(openrouter_worker_count_spin.value())
         config_data["llamacpp_worker_count"] = 1
@@ -1210,7 +1217,7 @@ def show_settings_dialog(owner):
         config_data["max_concurrent_judge_http"] = 1
         config_data["max_concurrent_jury_answers"] = max(
             1,
-            effective_ai_worker_count(config_data),
+            effective_jury_concurrency(config_data),
         )
         config_data["enable_async_judges"] = False
         config_data["sync_judge_parallelism"] = 1

@@ -11,7 +11,7 @@ from typing import Dict, List, Optional, Union
 from ai_judges import run_judges, run_judges_model_first
 from consensus_engine import combine_scores
 from deterministic_checks import run_deterministic_checks
-from evaluator_config import load_config
+from evaluator_config import effective_jury_concurrency, load_config
 from logger import log
 from normalization import normalize, semantic_deduplicate
 from accuracy_policy import adaptive_math_jury_decision, conservative_jury_decision, strictness_profile
@@ -52,8 +52,7 @@ def _get_jury_semaphore() -> threading.Semaphore:
         return JURY_SEMAPHORE
     with JURY_SEMAPHORE_LOCK:
         if JURY_SEMAPHORE is None:
-            cfg = load_config()
-            max_jury = max(1, int(cfg.get("max_concurrent_jury_answers", 1)))
+            max_jury = effective_jury_concurrency(load_config())
             JURY_SEMAPHORE = threading.Semaphore(max_jury)
             log("INFO", f"[PIPELINE] Jury concurrency limit enabled (max_concurrent_jury_answers={max_jury})")
     return JURY_SEMAPHORE

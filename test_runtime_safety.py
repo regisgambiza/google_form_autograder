@@ -2,7 +2,14 @@ import json
 from pathlib import Path
 
 import grader_thread
-from evaluator_config import configured_provider_names, effective_ai_worker_count, effective_provider_worker_counts
+from evaluator_config import (
+    configured_provider_names,
+    effective_ai_worker_count,
+    effective_jury_concurrency,
+    effective_lane_workers,
+    effective_provider_worker_counts,
+    is_dual_lane,
+)
 
 
 def test_current_jury_models_use_configured_fast_local_roles():
@@ -83,13 +90,35 @@ def test_provider_specific_ai_worker_counts_drive_effective_count():
     ) == 6
 
 
+def test_dual_lane_strategy_helpers():
+    dual = {
+        "provider_strategy": "dual_lane",
+        "ai_worker_count": 10,
+        "openrouter_ai_worker_count": 10,
+        "llamacpp_ai_worker_count": 2,
+    }
+    assert is_dual_lane(dual) is True
+    assert configured_provider_names(dual) == ["openrouter", "llamacpp"]
+    assert effective_lane_workers(dual) == {"openrouter": 10, "llamacpp": 2}
+    assert effective_ai_worker_count(dual) == 12
+    # Semaphore auto-bumps to lane total when set too low; explicit higher wins.
+    assert effective_jury_concurrency({**dual, "max_concurrent_jury_answers": 3}) == 12
+    assert effective_jury_concurrency({**dual, "max_concurrent_jury_answers": 20}) == 20
+    # Legacy strategies never see lanes.
+    legacy = {"provider_strategy": "openrouter_only", "max_concurrent_jury_answers": 5}
+    assert is_dual_lane(legacy) is False
+    assert effective_lane_workers(legacy) == {}
+    assert effective_jury_concurrency(legacy) == 5
+
+
 def test_patient_ai_mode_avoids_short_timeout_fallbacks():
     cfg = json.loads(Path("config.json").read_text(encoding="utf-8"))
     assert cfg["patient_ai_mode"] is True
     assert cfg["enable_jury_circuit_breaker"] is False
-    assert cfg["judge_timeout_seconds"] >= 7200
-    assert cfg["judge_total_hard_timeout_seconds"] >= 21600
-    assert cfg["answer_hard_timeout_seconds"] >= 21600
+    # Judge HTTP calls fail fast (hang protection); patience comes from
+    # dispatcher-level requeue of failed answers, not multi-hour timeouts.
+    assert 10 <= cfg["judge_timeout_seconds"] <= 60
+    assert 30 <= cfg["judge_http_timeout_seconds"] <= 120
     assert cfg["jury_semaphore_acquire_timeout_seconds"] >= 21600
     assert cfg["retry_attempts"] >= 5
 
