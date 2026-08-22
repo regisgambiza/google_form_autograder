@@ -588,12 +588,16 @@ class ProvidersPage(QWidget):
         workers_head.addSpacing(14)
         workers_head.addWidget(self.provider_summary)
         workers_layout.addLayout(workers_head)
-        self.worker_grid = QGridLayout()
-        self.worker_grid.setSpacing(8)
-        workers_layout.addLayout(self.worker_grid)
+        # Worker chips are grouped into per-provider sections (provider pools
+        # first, then app lanes) instead of one flat grid, so different worker
+        # families never interleave regardless of telemetry arrival order.
+        self._worker_sections_host = QVBoxLayout()
+        self._worker_sections_host.setSpacing(10)
+        workers_layout.addLayout(self._worker_sections_host)
         self._worker_columns = 3
-        self._worker_index = 0
         self._worker_chips = {}
+        self._worker_groups = {}
+        self._sections = {}
         layout.addWidget(workers_card)
 
         health_card, health_layout = _card((18, 14, 18, 14), 6)
@@ -623,6 +627,75 @@ class ProvidersPage(QWidget):
         layout.addWidget(health_card)
         layout.addStretch()
 
+    # Worker sections in fixed display order; empty sections stay hidden.
+    WORKER_GROUP_ORDER = (
+        ("openrouter", "OpenRouter"),
+        ("llamacpp", "llama.cpp"),
+        ("ollama", "Ollama"),
+        ("app_openrouter", "App · OpenRouter lane"),
+        ("app_llamacpp", "App · llama.cpp lane"),
+        ("app_generic", "App AI workers"),
+        ("other", "Other"),
+    )
+
+    @staticmethod
+    def _group_for(worker_id):
+        wid = str(worker_id)
+        for lane in ("openrouter", "llamacpp", "ollama"):
+            if wid.startswith(f"ai-{lane}-"):
+                return f"app_{lane}"
+        if wid.startswith("ai-"):
+            return "app_generic"
+        for provider in ("openrouter", "llamacpp", "ollama"):
+            if wid.startswith(f"{provider}-"):
+                return provider
+        return "other"
+
+    @staticmethod
+    def _worker_sort_key(worker_id):
+        try:
+            return (0, int(str(worker_id).rsplit("-", 1)[-1]))
+        except (TypeError, ValueError):
+            return (1, str(worker_id))
+
+    def _section_title(self, group):
+        return dict(self.WORKER_GROUP_ORDER).get(group, str(group).title())
+
+    def _ensure_section(self, group):
+        section = self._sections.get(group)
+        if section:
+            return section
+        host = QWidget()
+        inner = QVBoxLayout(host)
+        inner.setContentsMargins(0, 0, 0, 0)
+        inner.setSpacing(6)
+        caption = _caption(self._section_title(group))
+        grid = QGridLayout()
+        grid.setSpacing(8)
+        inner.addWidget(caption)
+        inner.addLayout(grid)
+        self._worker_sections_host.addWidget(host)
+        section = {"caption": caption, "grid": grid, "host": host}
+        self._sections[group] = section
+        # Keep sections in WORKER_GROUP_ORDER even when created lazily.
+        ordered = sorted(
+            self._sections.items(),
+            key=lambda kv: [name for name, _ in self.WORKER_GROUP_ORDER].index(kv[0]),
+        )
+        for _, other in ordered:
+            self._worker_sections_host.removeWidget(other["host"])
+        for _, other in ordered:
+            self._worker_sections_host.addWidget(other["host"])
+        return section
+
+    def _refresh_group_caption(self, group):
+        section = self._sections.get(group)
+        if not section:
+            return
+        count = sum(1 for g in self._worker_groups.values() if g == group)
+        suffix = f" · {count}" if count else ""
+        section["caption"].setText(f"{self._section_title(group)}{suffix}".upper())
+
     # -- API --------------------------------------------------------------
     def set_provider(self, name, info):
         card = self.provider_cards.get(name)
@@ -639,12 +712,15 @@ class ProvidersPage(QWidget):
     def add_worker_chip(self, worker_id, title):
         if worker_id in self._worker_chips:
             return self._worker_chips[worker_id]
+        group = self._group_for(worker_id)
+        section = self._ensure_section(group)
         chip = WorkerChip(title)
-        row = self._worker_index // self._worker_columns
-        col = self._worker_index % self._worker_columns
-        self.worker_grid.addWidget(chip, row, col)
-        self._worker_index += 1
+        row, col = divmod(section["grid"].count(), self._worker_columns)
+        section["grid"].addWidget(chip, row, col)
+        section["host"].setVisible(True)
         self._worker_chips[worker_id] = chip
+        self._worker_groups[worker_id] = group
+        self._refresh_group_caption(group)
         return chip
 
     def set_worker_chip(self, worker_id, status, detail, tooltip=""):
@@ -654,25 +730,34 @@ class ProvidersPage(QWidget):
 
     def remove_worker_chip(self, worker_id):
         chip = self._worker_chips.pop(worker_id, None)
+        group = self._worker_groups.pop(worker_id, None)
         if not chip:
             return
-        self.worker_grid.removeWidget(chip)
+        section = self._sections.get(group or "")
+        if section:
+            section["grid"].removeWidget(chip)
         chip.setParent(None)
         chip.deleteLater()
         self._rebuild_worker_grid()
 
     def _rebuild_worker_grid(self):
-        chips = list(self._worker_chips.values())
-        while self.worker_grid.count():
-            item = self.worker_grid.takeAt(0)
-            if item.widget():
-                self.worker_grid.removeWidget(item.widget())
-        self._worker_index = 0
-        for chip in chips:
-            row = self._worker_index // self._worker_columns
-            col = self._worker_index % self._worker_columns
-            self.worker_grid.addWidget(chip, row, col)
-            self._worker_index += 1
+        for group, section in list(self._sections.items()):
+            members = sorted(
+                (wid for wid, g in self._worker_groups.items() if g == group),
+                key=self._worker_sort_key,
+            )
+            grid = section["grid"]
+            while grid.count():
+                item = grid.takeAt(0)
+                widget = item.widget()
+                if widget is not None:
+                    grid.removeWidget(widget)
+                    widget.setParent(None)
+            for index, wid in enumerate(members):
+                row, col = divmod(index, self._worker_columns)
+                grid.addWidget(self._worker_chips[wid], row, col)
+            section["host"].setVisible(bool(members))
+            self._refresh_group_caption(group)
 
     def set_worker_summaries(self, app_text, provider_text):
         self.app_summary.setText(app_text)
