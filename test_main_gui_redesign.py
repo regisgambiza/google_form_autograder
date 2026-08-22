@@ -259,20 +259,99 @@ def test_live_dashboard_updates_ai_backlog_and_current_model():
     assert window.providers_page.active_model.text() == "gemma3:12b"
 
 
-def test_model_progress_clamps_stale_overflow_in_running_queue():
+def test_model_progress_never_touches_queue_rows():
+    """ModelProgress is run-wide; it must only move the dashboard ring."""
     window = _make_window()
     _clear_queue(window)
     item = _add_form(window, "https://docs.google.com/forms/d/form-1/edit", "Algebra")
     window.current_form_url = item.data(Qt.UserRole)
     window._set_form_status(item, "running", "Grading now")
 
-    window.update_model_progress(24, 21)
+    window.update_model_progress(24, 21)  # stale overflow clamps for ring
 
     meta = item.data(Qt.UserRole + 1)
-    assert meta["model_done"] == 21
-    assert meta["model_total"] == 21
-    assert window_status_cell(window, item.row(), 3) == "21/21"
-    assert window._row_bars[item.data(Qt.UserRole)].value() == 100
+    assert "model_done" not in meta
+    assert "model_total" not in meta
+    # No verified per-form total yet: no borrowed denominator may render.
+    assert window_status_cell(window, item.row(), 3) == "--"
+    assert window._row_bars[item.data(Qt.UserRole)].value() == 0
+    assert window.dashboard.ring.fraction == 1.0
+
+
+def test_form_totals_arrive_before_results_show_zero_over_n():
+    """Build-time FormTotals give each row its own verified total immediately."""
+    window = _make_window()
+    _clear_queue(window)
+    item = _add_form(window, "https://docs.google.com/forms/d/form-9/edit", "CH9.Quiz")
+    meta = item.data(Qt.UserRole + 1) or {}
+    meta["form_id"] = "form-9"
+    item.setData(Qt.UserRole + 1, meta)
+
+    window.update_form_totals("form-9", 437)
+
+    row = item.row()
+    assert window_status_cell(window, row, 3) == "0/437"
+    assert window._row_bars[item.data(Qt.UserRole)].value() == 0
+    assert window_status_cell(window, row, 1) == "QUEUED"
+
+    # A run-wide ModelProgress stream must not touch the row.
+    window.current_form_url = item.data(Qt.UserRole)
+    window.update_model_progress(120, 1748)
+    assert window_status_cell(window, row, 3) == "0/437"
+
+    # Live per-form progress then takes over.
+    window.update_form_row_progress("form-9", 5, 437)
+    assert window_status_cell(window, row, 3) == "5/437"
+
+
+def test_concurrent_forms_keep_independent_totals_in_queue():
+    """Three forms graded simultaneously must each show their own totals."""
+    window = _make_window()
+    _clear_queue(window)
+    rows = {}
+    for form_id, title in (
+        ("form-ch9", "CH9.Quiz"),
+        ("form-ch8", "CH8.Quiz"),
+        ("form-tables", "8.1 Two way tables"),
+    ):
+        item = _add_form(window, f"https://docs.google.com/forms/d/{form_id}/edit", title)
+        meta = item.data(Qt.UserRole + 1) or {}
+        meta["form_id"] = form_id
+        item.setData(Qt.UserRole + 1, meta)
+        window._set_form_status(item, "running", "Grading now")
+        rows[form_id] = item
+
+    # Interleaved per-form progress with deliberately different totals.
+    window.update_form_row_progress("form-ch9", 100, 921)
+    window.update_form_row_progress("form-ch8", 263, 263)
+    window.update_form_row_progress("form-tables", 137, 137)
+    window.update_form_row_progress("form-ch9", 500, 921)
+    window.update_form_row_progress("form-ch8", 200, 263)
+    window.update_form_row_progress("form-tables", 50, 137)
+
+    def answers_text(item):
+        return window_status_cell(window, item.row(), 3)
+
+    assert answers_text(rows["form-ch9"]) == "500/921"
+    assert answers_text(rows["form-ch8"]) == "200/263"
+    assert answers_text(rows["form-tables"]) == "50/137"
+    assert window._row_bars[rows["form-ch9"].data(Qt.UserRole)].value() == int(round(500 / 921 * 100))
+    assert window._row_bars[rows["form-ch8"].data(Qt.UserRole)].value() == int(round(200 / 263 * 100))
+    assert window._row_bars[rows["form-tables"].data(Qt.UserRole)].value() == int(round(50 / 137 * 100))
+
+    # Completing one form leaves other running forms untouched.
+    window.update_form_row_progress("form-ch9", 921, 921)
+    window.update_form_done("form-ch8", 263, 180, 40, 43)
+    window.update_form_row_progress("form-tables", 137, 137)
+    assert answers_text(rows["form-ch9"]) == "921/921"
+    assert answers_text(rows["form-ch8"]) == "263/263"
+    assert answers_text(rows["form-tables"]) == "137/137"
+
+    # Full UI refresh re-renders every row from its OWN meta only.
+    window._refresh_queue_positions()
+    assert answers_text(rows["form-ch9"]) == "921/921"
+    assert answers_text(rows["form-ch8"]) == "263/263"
+    assert answers_text(rows["form-tables"]) == "137/137"
 
 
 def test_stage_stepper_reflects_queue_depths():

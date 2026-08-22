@@ -20,6 +20,8 @@ class GraderThread(QThread):
     finished_form = Signal(str)
     skipped_form = Signal(str, str, str, str)
     form_done = Signal(str, int, int, int, int)
+    form_row_progress = Signal(str, int, int)
+    form_totals = Signal(str, int)
 
     def __init__(self, grade_recent_only=False, form_urls=None):
         super().__init__()
@@ -345,6 +347,26 @@ class GraderThread(QThread):
             try:
                 current, total = map(int, ls.split(":")[1].strip().split("/"))
                 self.progress.emit(current, total)
+            except:
+                pass
+
+        if ls.startswith("FormRowProgress:"):
+            try:
+                parts = ls.split(":", 1)[1].strip().split()
+                form_id = parts[0]
+                done, total = map(int, parts[1].split("/", 1))
+                if form_id:
+                    self.form_row_progress.emit(form_id, done, total)
+            except:
+                pass
+
+        if ls.startswith("FormTotals:"):
+            try:
+                parts = ls.split(":", 1)[1].strip().split()
+                form_id = parts[0]
+                total = int(parts[1])
+                if form_id and total >= 0:
+                    self.form_totals.emit(form_id, total)
             except:
                 pass
 

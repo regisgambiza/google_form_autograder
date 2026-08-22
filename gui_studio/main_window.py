@@ -941,12 +941,6 @@ class AutograderWindow(QMainWindow):
             return 0
         total = int(meta.get("total", 0) or 0)
         completed = int(meta.get("completed", 0) or 0)
-        model_total = int(meta.get("model_total", 0) or 0)
-        model_done = int(meta.get("model_done", 0) or 0)
-        if model_total > 0:
-            if status == "queued" and model_done <= 0:
-                return 0
-            return max(0, min(100, int(round((model_done / model_total) * 100))))
         if total <= 0:
             return 0
         if status == "queued" and completed <= 0:
@@ -954,10 +948,19 @@ class AutograderWindow(QMainWindow):
         return max(0, min(100, int(round((completed / total) * 100))))
 
     def _queue_progress_text(self, meta):
-        model_total = int(meta.get("model_total", 0) or 0)
-        if model_total > 0:
-            return f"{int(meta.get('model_done', 0) or 0)}/{model_total}"
-        return f"{int(meta.get('completed', 0) or 0)}/{int(meta.get('total', 0) or 0)}"
+        """Answers cell shows THIS form's graded/total, nothing else.
+
+        Run-wide ModelProgress aggregates span every form in the run; using
+        them here displayed one form another form's total (the /1748 bug).
+        """
+        total = int(meta.get("total", 0) or 0)
+        completed = int(meta.get("completed", 0) or 0)
+        if total <= 0:
+            # No verified per-form total yet: never display a borrowed one.
+            if str(meta.get("status", "")) == "done":
+                return f"{max(0, completed)}/0"
+            return "--"
+        return f"{max(0, completed)}/{total}"
 
     def _queue_eta_text(self, meta):
         status = str(meta.get("status", "queued"))
@@ -1013,6 +1016,12 @@ class AutograderWindow(QMainWindow):
         row = item.row()
         meta = item.data(Qt.UserRole + 1) or {}
         url = item.data(Qt.UserRole) or meta.get("url") or ""
+        # Legacy builds cached run-wide model totals on row state; drop any
+        # such keys so a borrowed denominator can never render again.
+        if "model_total" in meta or "model_done" in meta:
+            meta.pop("model_total", None)
+            meta.pop("model_done", None)
+            item.setData(Qt.UserRole + 1, meta)
         status = str(meta.get("status", "queued"))
 
         title_item = self.queue_table.item(row, 0)
@@ -1813,6 +1822,8 @@ class AutograderWindow(QMainWindow):
         self.grader_thread.finished_form.connect(self.update_finished_form)
         self.grader_thread.skipped_form.connect(self.update_skipped_form)
         self.grader_thread.form_done.connect(self.update_form_done)
+        self.grader_thread.form_row_progress.connect(self.update_form_row_progress)
+        self.grader_thread.form_totals.connect(self.update_form_totals)
         self.grader_thread.start()
 
     def _format_duration(self, seconds):
@@ -1945,17 +1956,43 @@ class AutograderWindow(QMainWindow):
         self._update_stage_stepper(done=cur, total=tot)
 
     def update_model_progress(self, done, total):
+        """Feed ONLY the dashboard ring with run-wide model progress.
+
+        ModelProgress totals are combined across every form in the current
+        grading run, so writing them onto a queue row would show one form
+        another form's answer count. Per-row progress arrives exclusively
+        via update_form_row_progress / update_form_totals.
+        """
         self._model_progress_seen = True
         total = max(0, int(total or 0))
         done = max(0, min(int(done or 0), total))
         self.dashboard.set_answer_progress(done, total)
-        item = self._find_form_item_by_url(self.current_form_url)
-        if item:
-            meta = item.data(Qt.UserRole + 1) or {}
-            meta["model_done"] = done
-            meta["model_total"] = total
-            item.setData(Qt.UserRole + 1, meta)
-            self._refresh_form_row(item)
+
+    def update_form_row_progress(self, form_id, done, total):
+        """Update a single queue row's progress bar with ITS OWN form totals."""
+        item = self._find_form_item_by_id(form_id) if form_id else None
+        if not item:
+            return
+        meta = item.data(Qt.UserRole + 1) or {}
+        meta["completed"] = int(done)
+        meta["total"] = int(total)
+        item.setData(Qt.UserRole + 1, meta)
+        self._refresh_form_row(item)
+
+    def update_form_totals(self, form_id, total):
+        """Record THIS form's verified total as soon as its tasks are built,
+        so the row shows "0/N" (never a borrowed denominator) before any
+        grading results arrive."""
+        item = self._find_form_item_by_id(form_id) if form_id else None
+        if not item:
+            return
+        total = max(0, int(total or 0))
+        if total <= 0:
+            return
+        meta = item.data(Qt.UserRole + 1) or {}
+        meta["total"] = total
+        item.setData(Qt.UserRole + 1, meta)
+        self._refresh_form_row(item)
 
     def update_overall_progress(self, cur, tot):
         if not tot:

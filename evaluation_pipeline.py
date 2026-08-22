@@ -1,4 +1,4 @@
-﻿import hashlib
+import hashlib
 import json
 import os
 import time
@@ -580,6 +580,7 @@ def evaluate_answers_model_first(
     expected: Union[str, List[str]],
     question: str,
     provider_hint: Optional[str] = None,
+    progress_callback: Optional[object] = None,
 ) -> List[EvaluationResult]:
     """Evaluate one question's answers by running each judge role across the whole answer set."""
     if not answers:
@@ -605,6 +606,13 @@ def evaluate_answers_model_first(
         }
         uncached.append(answer)
 
+    if callable(progress_callback) and cached:
+        roles_count = max(1, len(_selected_roles(cfg)))
+        try:
+            progress_callback(len(cached) * roles_count)
+        except Exception:
+            pass
+
     judged: Dict[str, List[Dict[str, object]]] = {}
     if uncached:
         judged = run_judges_model_first(
@@ -614,6 +622,7 @@ def evaluate_answers_model_first(
             rubrics_by_answer,
             retries=int(cfg.get("retry_attempts", 3)),
             provider_hint=provider_hint,
+            progress_callback=progress_callback,
         )
 
     results: List[EvaluationResult] = []

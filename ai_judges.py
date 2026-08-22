@@ -452,6 +452,9 @@ def _map_response_to_required_fields(obj: Dict[str, object]) -> Dict[str, object
     Map various JSON response formats to the required fields.
     Returns a dict with at least the 'decision' field set, others may remain defaults.
     """
+    if isinstance(obj.get("results"), list) and obj["results"] and isinstance(obj["results"][0], dict):
+        obj = obj["results"][0]
+
     # Start with defaults, but preserve any existing confidence
     result = _abstain("partial_mapping")
     # Preserve any confidence that might have been set
@@ -1246,6 +1249,7 @@ def call_judge_role_batch_sync(
                     rubrics_by_answer,
                     retries=1,
                     avoid_models=avoid_models,
+                    provider_hint=provider_hint,
                 )
                 for index, answer in indexed_chunk:
                     if answer in chunk_results:
@@ -1268,6 +1272,7 @@ def call_judge_role_batch_sync(
                 rubrics_by_answer.get(answer, {}),
                 retries,
                 avoid_models=avoid_models,
+                provider_hint=provider_hint,
             )
         out[answer] = result
     return out
@@ -1280,6 +1285,7 @@ def run_judges_model_first(
     rubrics_by_answer: Dict[str, Dict[str, object]],
     retries: int = 3,
     provider_hint: Optional[str] = None,
+    progress_callback: Optional[object] = None,
 ) -> Dict[str, List[Dict[str, object]]]:
     """Run judges by model/role across all answers for one question.
 
@@ -1314,6 +1320,19 @@ def run_judges_model_first(
         runtime_cfg = load_config()
         batch_provider = str(provider_hint).strip().lower() if provider_hint else _preferred_batch_provider(runtime_cfg)
         batch_size = _judge_answer_batch_size(runtime_cfg, batch_provider)
+        # A chunk can fail over to ANY other configured provider mid-flight.
+        # The effective chunk must fit the smallest limit in that chain, or
+        # the fallback provider receives oversized batches it cannot fulfill
+        # (llama.cpp returned only answer_index=1 for 25-answer chunks).
+        try:
+            chain_limits = [
+                _judge_answer_batch_size(runtime_cfg, provider_name)
+                for provider_name in configured_provider_names(runtime_cfg)
+            ]
+            if chain_limits:
+                batch_size = min([batch_size, *chain_limits])
+        except Exception:
+            pass
         planned_units = len(role_answers)
         actual_units = len(role_answers)
         if actual_units > planned_units:
@@ -1335,7 +1354,18 @@ def run_judges_model_first(
                 remember_used_model(answer, result)
                 completed_units += 1
                 _model_progress_tick()
-            _model_progress_tick(max(0, planned_units - completed_units))
+                if callable(progress_callback):
+                    try:
+                        progress_callback(1)
+                    except Exception:
+                        pass
+            remaining = max(0, planned_units - completed_units)
+            _model_progress_tick(remaining)
+            if callable(progress_callback) and remaining > 0:
+                try:
+                    progress_callback(remaining)
+                except Exception:
+                    pass
             return completed_units
         for chunk in _chunked(role_answers, batch_size):
             avoid_models = avoid_models_for_chunk(chunk)
@@ -1355,7 +1385,18 @@ def run_judges_model_first(
                 remember_used_model(answer, result)
             completed_units += len(chunk)
             _model_progress_tick(len(chunk))
-        _model_progress_tick(max(0, planned_units - completed_units))
+            if callable(progress_callback):
+                try:
+                    progress_callback(len(chunk))
+                except Exception:
+                    pass
+        remaining = max(0, planned_units - completed_units)
+        _model_progress_tick(remaining)
+        if callable(progress_callback) and remaining > 0:
+            try:
+                progress_callback(remaining)
+            except Exception:
+                pass
         return completed_units
 
     log(

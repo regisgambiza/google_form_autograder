@@ -291,12 +291,11 @@ def test_oversized_provider_batch_splits_to_single_ollama_calls_after_validation
 
 
 def test_model_first_judging_refreshes_answer_batch_size_between_roles(monkeypatch):
-    config_calls = []
+    state = {"legacy_batch_size": 2}
     batch_calls = []
+    single_calls = []
 
     def fake_load_config():
-        config_calls.append(len(config_calls))
-        batch_size = 2 if len(config_calls) <= 2 else 1
         return {
             "jury_models": {
                 "semantic_judge": "model-a",
@@ -304,7 +303,8 @@ def test_model_first_judging_refreshes_answer_batch_size_between_roles(monkeypat
             },
             "active_judge_roles": ["semantic_judge", "factual_judge"],
             "adaptive_math_jury": {"enabled": False},
-            "judge_answer_batch_size": batch_size,
+            "provider_priority": ["openrouter", "ollama"],
+            "judge_answer_batch_size": state["legacy_batch_size"],
         }
 
     monkeypatch.setattr(ai_judges, "load_config", fake_load_config)
@@ -312,6 +312,9 @@ def test_model_first_judging_refreshes_answer_batch_size_between_roles(monkeypat
 
     def fake_batch(role, answers, question, expected, rubrics_by_answer, retries, avoid_models=None, provider_hint=None):
         batch_calls.append((role, list(answers)))
+        # Simulate a Settings save lowering the batch size after the first
+        # role finishes; the next role must pick it up.
+        state["legacy_batch_size"] = 1
         return {
             answer: {
                 "role": role,
@@ -536,6 +539,7 @@ def test_model_first_provider_hint_controls_chunking_and_routing(monkeypatch):
     assert batch_calls == []
 
     # openrouter hint -> whole-set chunk (batch size 25) routed with the hint.
+    single_calls.clear()
     ai_judges.run_judges_model_first(
         ["a", "b"],
         "question",
@@ -544,6 +548,38 @@ def test_model_first_provider_hint_controls_chunking_and_routing(monkeypatch):
         retries=1,
         provider_hint="openrouter",
     )
+    # The chunk must fit EVERY provider in the failover chain; llamacpp is
+    # pinned to 1 answer per call, so even an OR-hint call degrades to
+    # singles instead of shipping llama an oversized batch.
+    assert sorted(single_calls) == [("a", "openrouter"), ("b", "openrouter")]
+    assert batch_calls == []
+
+    # When every provider allows it, the hint still controls batching.
+    batch_calls.clear()
+    single_calls.clear()
+    monkeypatch.setattr(
+        ai_judges,
+        "load_config",
+        lambda: {
+            "jury_models": {"semantic_judge": "model-a"},
+            "active_judge_roles": ["semantic_judge"],
+            "adaptive_math_jury": {"enabled": False},
+            "provider_manager_enabled": True,
+            "provider_priority": ["openrouter", "ollama"],
+            "judge_answer_batch_size": 25,
+            "openrouter_judge_answer_batch_size": 25,
+            "ollama_judge_answer_batch_size": 25,
+        },
+    )
+    ai_judges.run_judges_model_first(
+        ["a", "b"],
+        "question",
+        "expected",
+        {"a": {}, "b": {}},
+        retries=1,
+        provider_hint="openrouter",
+    )
+    assert single_calls == []
     assert batch_calls == [("semantic_judge", ["a", "b"], "openrouter")]
 
 

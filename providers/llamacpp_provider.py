@@ -42,6 +42,32 @@ LLAMACPP_JUDGE_CONTRACT = (
 )
 
 
+LLAMACPP_BATCH_JUDGE_CONTRACT = (
+    "LLAMA.CPP LOCAL BATCH JUDGE RESPONSE CONTRACT\n"
+    "Return exactly one JSON object with a single \"results\" array. "
+    "Do not return Markdown fences. Do not return <think> tags. "
+    "Do not write commentary before or after the JSON.\n"
+    "Each results[] item needs these keys and exact value types:\n"
+    "- answer_index: integer >= 1\n"
+    "- decision: string, exactly \"YES\" or \"NO\"\n"
+    "- confidence: number from 0.0 to 1.0\n"
+    "- reason_short: short string\n"
+    "- requirements_met: array of strings\n"
+    "- requirements_missing: array of strings\n"
+    "- contradictions: array of strings\n"
+    "- calculation_check: string\n"
+    "Valid example for two answers:\n"
+    "{\"results\":[{\"answer_index\":1,\"decision\":\"YES\",\"confidence\":1.0,"
+    "\"reason_short\":\"exact match\",\"requirements_met\":[],"
+    "\"requirements_missing\":[],\"contradictions\":[],"
+    "\"calculation_check\":\"not applicable\"},"
+    "{\"answer_index\":2,\"decision\":\"NO\",\"confidence\":0.95,"
+    "\"reason_short\":\"wrong value\",\"requirements_met\":[],"
+    "\"requirements_missing\":[\"correct value 3\"],"
+    "\"contradictions\":[],\"calculation_check\":\"not applicable\"}]}\n"
+)
+
+
 class LlamaCppProvider(BaseProvider):
     name = "llamacpp"
 
@@ -232,7 +258,11 @@ class LlamaCppProvider(BaseProvider):
         cfg: Dict[str, Any],
         repair_prompt: Optional[str],
     ) -> Dict[str, Any]:
-        prompt = repair_prompt if repair_prompt is not None else self._messages_to_prompt(payload.get("messages", []), bool(payload.get("format")))
+        prompt = repair_prompt if repair_prompt is not None else self._messages_to_prompt(
+            payload.get("messages", []),
+            bool(payload.get("format")),
+            is_batch=self._payload_is_batch(payload),
+        )
         body = {
             "prompt": prompt,
             "temperature": float(options.get("temperature", 0.0) or 0.0),
@@ -365,18 +395,140 @@ class LlamaCppProvider(BaseProvider):
         if not isinstance(parsed, dict):
             raise ProviderError("llama.cpp parsed response is not a JSON object", "llama_schema_mismatch")
         if payload.get("format"):
-            parsed = self._fill_harmless_judge_defaults(parsed)
-            self._validate_judge_contract(parsed, mode)
+            if self._payload_is_batch(payload):
+                parsed = self._fill_harmless_batch_defaults(parsed)
+                self._validate_batch_judge_contract(parsed, mode)
+            else:
+                parsed = self._fill_harmless_judge_defaults(parsed)
+                self._validate_judge_contract(parsed, mode)
         return json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
+
+    @staticmethod
+    def _payload_is_batch(payload: Dict[str, Any]) -> bool:
+        """Whether the payload's format describes a batch (results[]) contract.
+
+        The judge layer sends single contracts for one answer and a
+        ``results``-array contract for batched calls; the provider must
+        validate against the same contract it was handed, otherwise every
+        successful batch response is rejected as schema-mismatched.
+        """
+        fmt = payload.get("format")
+        if not isinstance(fmt, dict):
+            return False
+        properties = fmt.get("properties")
+        return isinstance(properties, dict) and "results" in properties
+
+    @staticmethod
+    def _fill_harmless_batch_defaults(parsed: Dict[str, Any]) -> Dict[str, Any]:
+        out = dict(parsed)
+        results = out.get("results")
+        if not isinstance(results, list):
+            return out
+        filled: List[Any] = []
+        for item in results:
+            if not isinstance(item, dict):
+                filled.append(item)
+                continue
+            decision = str(item.get("decision", "")).strip().upper()
+            if decision in {"0", "FALSE", "INCORRECT", "FAIL", "WRONG", "NO"}:
+                decision = "NO"
+            elif decision in {"1", "TRUE", "CORRECT", "PASS", "YES"}:
+                decision = "YES"
+            raw_conf = item.get("confidence")
+            conf_val = None
+            if raw_conf is not None and not isinstance(raw_conf, bool):
+                try:
+                    conf_val = float(raw_conf)
+                except (TypeError, ValueError):
+                    pass
+            has_core_verdict = (
+                decision in {"YES", "NO"}
+                and conf_val is not None
+                and isinstance(item.get("reason_short"), str)
+            )
+            if not has_core_verdict:
+                filled.append(item)
+                continue
+            entry = dict(item)
+            entry["decision"] = decision
+            entry["confidence"] = conf_val
+            entry.setdefault("requirements_met", [])
+            entry.setdefault("requirements_missing", [])
+            entry.setdefault("contradictions", [])
+            entry.setdefault("calculation_check", "not applicable")
+            filled.append(entry)
+        out["results"] = filled
+        return out
+
+    def _validate_batch_judge_contract(self, parsed: Dict[str, Any], mode: str) -> None:
+        results = parsed.get("results")
+        if not isinstance(results, list) or not results:
+            raise ProviderError(
+                f"llama.cpp {mode} batch JSON missing non-empty results array",
+                "llama_schema_mismatch",
+            )
+        for index, item in enumerate(results):
+            if not isinstance(item, dict):
+                raise ProviderError(
+                    f"llama.cpp {mode} batch results[{index}] is not an object",
+                    "llama_schema_mismatch",
+                )
+            answer_index = item.get("answer_index")
+            if not isinstance(answer_index, int) or isinstance(answer_index, bool) or answer_index < 1:
+                raise ProviderError(
+                    f"llama.cpp {mode} batch results[{index}].answer_index must be an integer >= 1",
+                    "llama_schema_mismatch",
+                )
+            for key in ("decision", "reason_short", "calculation_check"):
+                if key not in item or not isinstance(item[key], str):
+                    raise ProviderError(
+                        f"llama.cpp {mode} batch results[{index}] field {key} missing/not string",
+                        "llama_schema_mismatch",
+                    )
+            confidence = item.get("confidence")
+            if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
+                raise ProviderError(
+                    f"llama.cpp {mode} batch results[{index}] field confidence has wrong type",
+                    "llama_schema_mismatch",
+                )
+            if float(confidence) < 0.0 or float(confidence) > 1.0:
+                raise ProviderError(
+                    f"llama.cpp {mode} batch results[{index}] confidence outside 0..1",
+                    "llama_schema_mismatch",
+                )
+            if item.get("decision") not in {"YES", "NO"}:
+                raise ProviderError(
+                    f"llama.cpp {mode} batch results[{index}] decision is not YES/NO: {item.get('decision')!r}",
+                    "llama_schema_mismatch",
+                )
+            for key in ("requirements_met", "requirements_missing", "contradictions"):
+                value = item.get(key, [])
+                if not isinstance(value, list) or any(not isinstance(x, str) for x in value):
+                    raise ProviderError(
+                        f"llama.cpp {mode} batch results[{index}] field {key} must be string array",
+                        "llama_schema_mismatch",
+                    )
 
     @staticmethod
     def _fill_harmless_judge_defaults(parsed: Dict[str, Any]) -> Dict[str, Any]:
         out = dict(parsed)
         decision = str(out.get("decision", "")).strip().upper()
-        has_core_verdict = decision in {"YES", "NO"} and "confidence" in out and isinstance(out.get("reason_short"), str)
+        if decision in {"0", "FALSE", "INCORRECT", "FAIL", "WRONG", "NO"}:
+            decision = "NO"
+        elif decision in {"1", "TRUE", "CORRECT", "PASS", "YES"}:
+            decision = "YES"
+        raw_conf = out.get("confidence")
+        conf_val = None
+        if raw_conf is not None and not isinstance(raw_conf, bool):
+            try:
+                conf_val = float(raw_conf)
+            except (TypeError, ValueError):
+                pass
+        has_core_verdict = decision in {"YES", "NO"} and conf_val is not None and isinstance(out.get("reason_short"), str)
         if not has_core_verdict:
             return out
         out["decision"] = decision
+        out["confidence"] = conf_val
         out.setdefault("requirements_met", [])
         out.setdefault("requirements_missing", [])
         out.setdefault("contradictions", [])
@@ -408,8 +560,13 @@ class LlamaCppProvider(BaseProvider):
                 raise ProviderError(f"llama.cpp {mode} JSON field {key} contains non-string item", "llama_schema_mismatch")
 
     def _make_repair_prompt(self, payload: Dict[str, Any], malformed: str, error: ProviderError) -> str:
+        contract = (
+            LLAMACPP_BATCH_JUDGE_CONTRACT
+            if self._payload_is_batch(payload)
+            else LLAMACPP_JUDGE_CONTRACT
+        )
         return (
-            LLAMACPP_JUDGE_CONTRACT
+            contract
             + "\nRepair the following malformed llama.cpp judge output.\n"
             + f"Validation error: {error.category}: {str(error)[:500]}\n"
             + "Return only the corrected JSON object. Do not explain the repair.\n\n"
@@ -460,10 +617,10 @@ class LlamaCppProvider(BaseProvider):
     def _has_complete_json_object(cls, text: str) -> bool:
         return bool(cls._first_balanced_json_object(str(text or "")))
 
-    def _messages_to_prompt(self, messages: Any, strict_json: bool = False) -> str:
+    def _messages_to_prompt(self, messages: Any, strict_json: bool = False, is_batch: bool = False) -> str:
         lines: List[str] = []
         if strict_json:
-            lines.append(LLAMACPP_JUDGE_CONTRACT)
+            lines.append(LLAMACPP_BATCH_JUDGE_CONTRACT if is_batch else LLAMACPP_JUDGE_CONTRACT)
         for message in messages or []:
             if not isinstance(message, dict):
                 continue

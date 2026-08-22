@@ -940,7 +940,7 @@ class ProviderManager:
         cfg = load_config()
         legacy = int(cfg.get("judge_answer_batch_size", 1) or 1)
         if provider_name == "llamacpp":
-            local_limit = 1
+            local_limit = max(1, int(cfg.get("llamacpp_judge_answer_batch_size", legacy) or legacy))
         else:
             local_limit = max(1, int(cfg.get("ollama_judge_answer_batch_size", legacy) or legacy))
         if batch_count <= local_limit:

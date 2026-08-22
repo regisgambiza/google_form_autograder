@@ -375,7 +375,7 @@ class DashboardPage(QWidget):
 # ---------------------------------------------------------------------------
 # Queue (dense classic table)
 # ---------------------------------------------------------------------------
-QUEUE_COLUMNS = ["Form", "Status", "Progress", "Answers", "Accepted",
+QUEUE_COLUMNS = ["Form", "Status", "Progress", "Calls", "Accepted",
                  "Rejected", "Review", "Time Left", "Last Activity", "Source"]
 
 

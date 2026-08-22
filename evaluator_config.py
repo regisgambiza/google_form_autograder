@@ -376,11 +376,24 @@ def effective_ai_worker_count(cfg: Dict[str, Any]) -> int:
 
 
 def effective_provider_worker_counts(cfg: Dict[str, Any]) -> Dict[str, int]:
-    """Provider worker counts after strategy and local-provider safety caps."""
+    """Provider worker counts after strategy and local-provider safety caps.
+
+    llamacpp honors its configured worker count (capped at the server's
+    parallel slots when provided) so failover traffic is not served by a
+    single serialized worker while every other lane is down.
+    """
     active = set(configured_provider_names(cfg))
+    try:
+        llamacpp_workers = max(1, int(cfg.get("llamacpp_worker_count", 1) or 1))
+    except (TypeError, ValueError):
+        llamacpp_workers = 1
+    try:
+        server_slots = max(1, int(cfg.get("llamacpp_server_parallel", 1) or 1))
+    except (TypeError, ValueError):
+        server_slots = 1
     counts = {
         "openrouter": max(1, int(cfg.get("openrouter_worker_count", 4) or 4)),
-        "llamacpp": 1,
+        "llamacpp": min(llamacpp_workers, max(1, server_slots * 2)),
         "ollama": max(1, int(cfg.get("ollama_worker_count", 1) or 1)),
     }
     return {

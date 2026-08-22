@@ -43,6 +43,21 @@ from answer_key_manager import (
 )
 
 
+def _progress_print(text: str) -> None:
+    """Emit a machine-readable progress line without ever raising.
+
+    On Windows a dead GUI-side stdout pipe surfaces as OSError [Errno 22]
+    Invalid argument instead of BrokenPipeError; an unguarded print() here
+    turned that into batch_worker_error results (whole question batches
+    requeued) and metrics-reporter crashes. Protocol lines must tolerate a
+    dead console.
+    """
+    try:
+        print(text, flush=True)
+    except Exception:
+        pass
+
+
 @dataclass
 class Task:
     form_idx: int
@@ -160,11 +175,16 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
     )
 
     fetch_out: "queue.Queue[Optional[dict]]" = queue.Queue(maxsize=max(100, min(1000, queue_size // 2)))
-    # In staged startup mode we intentionally allow task_builder to enqueue all work
-    # before consumers start.
+    # In staged startup mode we intentionally allow task_builder to enqueue all
+    # work before consumers start, so the whole-queue run never overflows the
+    # batch slots mid-build — and requeue injections can always land.
     det_q: "queue.Queue[Optional[Task]]" = queue.Queue(maxsize=0 if staged_startup else queue_size)
-    ai_q: "queue.Queue[Optional[Task]]" = queue.Queue(maxsize=max(200, int(queue_size * 0.5)))
-    ai_batch_q: "queue.Queue[Optional[QuestionBatch]]" = queue.Queue(maxsize=max(50, int(queue_size * 0.1)))
+    ai_q: "queue.Queue[Optional[Task]]" = queue.Queue(
+        maxsize=0 if staged_startup else max(200, int(queue_size * 0.5))
+    )
+    ai_batch_q: "queue.Queue[Optional[QuestionBatch]]" = queue.Queue(
+        maxsize=0 if staged_startup else max(50, int(queue_size * 0.1))
+    )
     result_q: "queue.Queue[Optional[tuple[Task, EvaluationResult]]]" = queue.Queue(maxsize=max(200, int(queue_size * 0.75)))
     apply_q: "queue.Queue[Optional[tuple[int, str]]]" = queue.Queue()
     stop = threading.Event()
@@ -191,6 +211,10 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
     requeue_state = {"scheduled": 0}
 
     forms_results: Dict[int, Dict] = {}
+    # Independent per-form progress slots: {form_idx: {"total": int, "done": int}}.
+    # Populated by task_builder (total) and incremented by result_aggregator
+    # (done); no code path reads another form's slot.
+    form_progress: Dict[int, Dict[str, int]] = {}
     forms_total = len(form_urls)
     model_plan_answers: Dict[str, List[str]] = {}
 
@@ -481,6 +505,10 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                 form_data = item["form_data"] or {"items": []}
                 all_responses = item["responses"] or []
                 forms_results[i] = {"meta": item, "question_answers": {}, "question_reviews": {}, "question_rejected": {}, "counts": {}}
+                # Per-form progress slot: totals come solely from THIS form's
+                # own question loop; no other form can touch it.
+                form_total_answers = 0
+                form_plan_answers: Dict[str, List[str]] = {}
 
                 # Build per-question answer buckets once to avoid O(questions * responses) scans.
                 answers_by_qid: Dict[str, List[str]] = {}
@@ -581,8 +609,10 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                             f"[DEDUP] disabled; question_id={qid} using {len(answers)} raw form responses",
                         )
                     if str(qid or "") not in missing_qids and answers:
+                        form_plan_answers[str(qid)] = list(answers)
                         model_plan_answers[f"{i}:{qid}"] = list(answers)
                     forms_results[i]["counts"][qid] = len(answers)
+                    form_total_answers += len(answers)
                     question_tasks: List[Task] = []
                     for ai, ans in enumerate(answers):
                         task = Task(i, form_id, title, q, ai, ans, expected)
@@ -609,6 +639,26 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                     with metrics_lock:
                         progress["pending_buffer"] = len(pending_tasks)
                     emit_task_builder_metric(event="form_chunk")
+
+                # Close out THIS form's independent progress slot, announce it,
+                # and publish its verified per-form total calls so queue rows show
+                # real "0/N" calls state instead of waiting for the first result.
+                form_model_calls = estimate_form_model_calls(
+                    form_plan_answers,
+                    cfg=cfg,
+                    model_first_batching=model_first_batching,
+                )
+                form_total_units = max(0, int(form_model_calls if form_model_calls > 0 else form_total_answers))
+                with metrics_lock:
+                    form_progress[i] = {"total": form_total_units, "done": 0, "form_id": form_id}
+                log(
+                    "INFO",
+                    f"[FORM TOTALS] form_id={form_id} title={title!r} answers={form_total_answers} calls={form_total_units}",
+                )
+                _progress_print(
+                    f"Processing form ID: {form_id} from URL: {item.get('url', '')}"
+                )
+                _progress_print(f"FormTotals: {form_id} {form_total_units}")
 
             # Drain any remaining buffered tasks before shutdown sentinels.
             while (not model_first_batching) and pending_tasks and not stop.is_set():
@@ -772,6 +822,18 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
 
         def _runner():
             try:
+                def on_model_progress(units: int = 1):
+                    with metrics_lock:
+                        fi_slot = form_progress.get(batch.form_idx)
+                        if fi_slot is not None:
+                            fi_slot["done"] = min(int(fi_slot["total"]), int(fi_slot["done"]) + max(0, int(units)))
+                            row_done = int(fi_slot["done"])
+                            row_total = int(fi_slot["total"])
+                            if row_total > 0:
+                                _progress_print(
+                                    f"FormRowProgress: {batch.form_id} {row_done}/{row_total}"
+                                )
+
                 remembered: Dict[int, EvaluationResult] = {}
                 ai_tasks: List[Task] = []
                 for index, task in enumerate(batch.tasks):
@@ -780,14 +842,28 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                         remembered[index] = teacher_memory_result(task, memory, memory_stage)
                     else:
                         ai_tasks.append(task)
+
+                if remembered:
+                    roles_count = max(1, len(_selected_roles(cfg)))
+                    on_model_progress(len(remembered) * roles_count)
+
                 ai_results_by_task: Dict[int, EvaluationResult] = {}
                 if ai_tasks:
-                    results = evaluate_answers_model_first(
-                        [task.answer for task in ai_tasks],
-                        ai_tasks[0].expected,
-                        get_question_context_with_learning(batch.form_id, batch.question),
-                        provider_hint=provider_hint,
-                    )
+                    try:
+                        results = evaluate_answers_model_first(
+                            [task.answer for task in ai_tasks],
+                            ai_tasks[0].expected,
+                            get_question_context_with_learning(batch.form_id, batch.question),
+                            provider_hint=provider_hint,
+                            progress_callback=on_model_progress,
+                        )
+                    except TypeError:
+                        results = evaluate_answers_model_first(
+                            [task.answer for task in ai_tasks],
+                            ai_tasks[0].expected,
+                            get_question_context_with_learning(batch.form_id, batch.question),
+                            provider_hint=provider_hint,
+                        )
                     ai_results_by_task = {
                         id(task): result
                         for task, result in zip(ai_tasks, results)
@@ -1093,6 +1169,10 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
             )
         except Exception as ex:
             log("ERROR", f"[REQUEUE] injection failed task={task_id(t)}: {ex}; finalizing as ERROR")
+            # The ERROR result below will pass through the aggregator's requeue
+            # gate; exhaust this task's attempts first so a finalized task can
+            # never be scheduled for another retry.
+            requeue_attempts[task_id(t)] = requeue_max_attempts
             _finalize_requeue_error(t, "requeue_injection_failed")
         finally:
             with metrics_lock:
@@ -1231,8 +1311,20 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
             # Machine-readable real-time progress consumed by GraderThread.
             # In staged mode task construction is complete before this worker starts,
             # so the denominator is stable and the percentage cannot move backwards.
-            print(f"FormProgress: {completed_now}/{expected_now}", flush=True)
-            print(
+            _progress_print(f"FormProgress: {completed_now}/{expected_now}")
+            # Per-form row progress for the GUI queue: scoped to this form only.
+            fi_slot = form_progress.get(fi)
+            if fi_slot is not None:
+                with metrics_lock:
+                    if not model_first_batching:
+                        fi_slot["done"] += 1
+                    row_total = int(fi_slot["total"])
+                    row_done = int(fi_slot["done"])
+                if row_total > 0 and not model_first_batching:
+                    _progress_print(
+                        f"FormRowProgress: {t.form_id} {row_done}/{row_total}"
+                    )
+            _progress_print(
                 form_metrics_line(
                     completed_now,
                     expected_now,
@@ -1243,8 +1335,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                     det_now,
                     ai_now,
                     avg_latency_now,
-                ),
-                flush=True,
+                )
             )
             evidence = r.evidence or {}
             policy = evidence.get("policy", {}) if isinstance(evidence, dict) else {}
@@ -1370,7 +1461,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                         review_metric = len(review_question_ids)
                     # Refresh the GUI only after the review queue is durable,
                     # so clicking the badge cannot lead to an empty screen.
-                    print(
+                    _progress_print(
                         form_metrics_line(
                             completed_metric,
                             expected_metric,
@@ -1381,8 +1472,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                             det_metric,
                             ai_metric,
                             avg_latency_metric,
-                        ),
-                        flush=True,
+                        )
                     )
                 if categorized_candidates and question.get("type") == "SHORT_ANSWER":
                     update_correct_answers(
@@ -1391,7 +1481,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                     )
                 with metrics_lock:
                     counters["apply"] += 1
-                print(f"QuestionAvailableForReview: {form_id} {qid}", flush=True)
+                _progress_print(f"QuestionAvailableForReview: {form_id} {qid}")
                 log("INFO", f"[APPLY] Question ready for review form_id={form_id} question_id={qid}")
             except Exception as ex:
                 log("ERROR", f"[APPLY] Incremental question update failed fi={fi} qid={qid}: {ex}")
@@ -1422,7 +1512,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                     det_total = int(progress["det_decisions"])
                     ai_total = int(progress["ai_decisions"])
                     avg_latency_total = float(progress["latency_ms_total"]) / max(1, int(comp))
-                print(
+                _progress_print(
                     form_metrics_line(
                         int(comp),
                         int(exp),
@@ -1433,8 +1523,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                         det_total,
                         ai_total,
                         avg_latency_total,
-                    ),
-                    flush=True,
+                    )
                 )
                 log(
                     "INFO",
@@ -1559,7 +1648,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
         announce_stage(3, "Run Deterministic + AI + Aggregation", "START")
         with metrics_lock:
             expected_at_start = int(progress["expected_tasks"])
-        print(f"FormProgress: 0/{expected_at_start}", flush=True)
+        _progress_print(f"FormProgress: 0/{expected_at_start}")
         first_meta = next((data.get("meta", {}) for data in forms_results.values()), {})
         gui_event(
             "run_start", form_title=first_meta.get("title", "Google Form"), total=expected_at_start,
@@ -1590,6 +1679,17 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
             result_q.put(None)
 
     [t.join() for t in da]
+    # Flush requeue leftovers BEFORE releasing the AI sentinels. Injecting a
+    # retried task after an AI worker consumed its None sentinel strands that
+    # task in the queue forever and can silently end the run with work
+    # unprocessed (observed: run "finished" at 69/225 with 120 queued).
+    try:
+        retry_schedule_q.put(None, timeout=2)
+        rs.join(timeout=15)
+    except Exception:
+        pass
+    if rs.is_alive():
+        log("WARNING", "[REQUEUE] retry_scheduler did not stop cleanly")
     for _ in range(ai_workers):
         try:
             if model_first_batching:
@@ -1599,16 +1699,6 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
         except Exception:
             pass
     [t.join() for t in aw]
-    # Requeue scheduler holds no accounting of its own; by natural completion
-    # its pending list is empty (workers only exit when backlog drains). The
-    # sentinel just flushes leftovers on failure paths so the run can end.
-    try:
-        retry_schedule_q.put(None, timeout=2)
-        rs.join(timeout=10)
-    except Exception:
-        pass
-    if rs.is_alive():
-        log("WARNING", "[REQUEUE] retry_scheduler did not stop cleanly")
     ag.join(timeout=30)
     if ag.is_alive():
         result_q.put(None)
@@ -1622,10 +1712,26 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
     if failed.is_set():
         raise RuntimeError("Global dispatcher failed due to stall/crash")
 
+    # Surface incomplete accounting loudly instead of reporting success while
+    # answers were dropped or stranded.
     with metrics_lock:
+        final_completed = int(progress["completed"])
+        final_expected = int(progress["expected_tasks"])
         gui_accepted = int(progress["accepted"])
         gui_review = int(progress["review_answers"])
         gui_rejected = int(progress["rejected"])
+    if final_expected > 0 and final_completed < final_expected:
+        log(
+            "ERROR",
+            f"[DISPATCH] Run finished INCOMPLETE: {final_completed}/{final_expected} answers "
+            "accounted for; check [REQUEUE]/judge errors above.",
+        )
+        gui_event(
+            "run_incomplete",
+            completed=final_completed,
+            expected=final_expected,
+            elapsed=elapsed_text(time.time() - form_started_ts),
+        )
     gui_event(
         "run_complete", accepted=gui_accepted, review=gui_review, rejected=gui_rejected,
         elapsed=elapsed_text(time.time() - form_started_ts),
@@ -1659,8 +1765,14 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
         )
         review = int(sum(1 for (fi, qid) in review_question_ids if fi == i))
         rejected_count = int(sum(len(rejected.get(qid, [])) for qid in rejected))
-        print(
+        fi_slot = form_progress.get(i)
+        if fi_slot is not None:
+            with metrics_lock:
+                row_total = int(fi_slot["total"])
+                fi_slot["done"] = row_total
+            if row_total > 0:
+                _progress_print(f"FormRowProgress: {form_id} {row_total}/{row_total}")
+        _progress_print(
             f"FormDone: {form_id} total={total} accepted={accepted} "
-            f"review={review} rejected={rejected_count}",
-            flush=True,
+            f"review={review} rejected={rejected_count}"
         )

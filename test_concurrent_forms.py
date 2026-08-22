@@ -106,3 +106,76 @@ def test_main_window_wires_form_done_signal():
     source = Path("gui_studio/main_window.py").read_text(encoding="utf-8")
     assert "self.grader_thread.form_done.connect(self.update_form_done)" in source
     assert "def update_form_done(self, form_id, total, accepted, review, rejected):" in source
+
+
+def test_grader_thread_parses_form_row_progress():
+    from PySide6.QtCore import QCoreApplication
+
+    QCoreApplication.instance() or QCoreApplication([])
+    received = []
+
+    thread = grader_thread.GraderThread()
+    thread.form_row_progress.connect(lambda fid, done, total: received.append((fid, done, total)))
+    thread.parse_line("FormRowProgress: abc123 42/96")
+    thread.parse_line("FormRowProgress:  0/0")  # missing form id ignored
+    thread.parse_line("garbage")
+
+    assert received == [("abc123", 42, 96)]
+
+
+def test_grader_thread_parses_form_totals():
+    from PySide6.QtCore import QCoreApplication
+
+    QCoreApplication.instance() or QCoreApplication([])
+    received = []
+
+    thread = grader_thread.GraderThread()
+    thread.form_totals.connect(lambda fid, total: received.append((fid, total)))
+    thread.parse_line("FormTotals: abc123 263")
+    thread.parse_line("FormTotals: abc123 -5")  # negative totals ignored
+    thread.parse_line("FormTotals: 0")          # missing id ignored
+
+    assert received == [("abc123", 263)]
+
+
+def test_main_window_wires_per_form_progress_signals():
+    source = Path("gui_studio/main_window.py").read_text(encoding="utf-8")
+    assert "form_row_progress.connect(self.update_form_row_progress)" in source
+    assert "form_totals.connect(self.update_form_totals)" in source
+    assert "def update_form_row_progress(self, form_id, done, total):" in source
+    assert "def update_form_totals(self, form_id, total):" in source
+
+
+def test_dispatcher_emits_per_form_build_totals_and_row_progress():
+    dispatcher_source = Path("global_dispatcher.py").read_text(encoding="utf-8")
+    assert "FormTotals:" in dispatcher_source
+    assert "FormRowProgress:" in dispatcher_source
+    assert "form_progress[i] = " in dispatcher_source
+
+
+def test_protocol_lines_are_guarded_against_dead_stdout_pipe():
+    """Windows raises OSError [Errno 22] on a closed pipe; protocol prints
+    must never crash grading workers."""
+    import re
+
+    dispatcher_source = Path("global_dispatcher.py").read_text(encoding="utf-8")
+    assert "def _progress_print(" in dispatcher_source
+    for marker in (
+        "FormProgress:", "FormRowProgress:", "FormTotals:",
+        "FormDone:", "QuestionAvailableForReview:",
+    ):
+        assert marker in dispatcher_source
+        assert not re.search(
+            rf"(?<!_progress_)print\((f?['\"]|f?\n\s*){marker}", dispatcher_source
+        )
+
+
+def test_requeue_injection_failure_exhausts_task_attempts():
+    """A task finalized via injection failure must never be rescheduled."""
+    dispatcher_source = Path("global_dispatcher.py").read_text(encoding="utf-8")
+    assert "requeue_attempts[task_id(t)] = requeue_max_attempts" in dispatcher_source
+
+
+def test_staged_queues_are_unbounded_so_requeues_never_blocked():
+    dispatcher_source = Path("global_dispatcher.py").read_text(encoding="utf-8")
+    assert 'ai_batch_q: "queue.Queue[Optional[QuestionBatch]]" = queue.Queue(\n        maxsize=0 if staged_startup' in dispatcher_source
