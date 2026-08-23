@@ -3,6 +3,7 @@ import threading
 import time
 import json
 import re
+import sys
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError, as_completed
 from collections import deque
 from dataclasses import dataclass, field
@@ -41,6 +42,62 @@ from answer_key_manager import (
     lookup_teacher_memory,
     question_learning_profile,
 )
+
+
+def _install_safe_stdio() -> None:
+    """Make every print() anywhere survive a dead GUI pipe (Windows Errno 22).
+
+    When the GUI parent process dies mid-run, the grader subprocess's
+    inherited stdout/stderr pipes break. On Windows the next write raises
+    ``OSError [Errno 22] Invalid argument`` instead of BrokenPipeError.
+    Unguarded print() calls in ai_judges.py / logger.py then poisoned judge
+    batches (batch_worker_error -> whole batches requeued) and killed worker
+    threads, ending runs INCOMPLETE even though grading itself was fine.
+
+    Wrapping stdio once here makes every existing AND future print() degrade
+    to a silent no-op on write failure — no per-call try/except needed.
+    """
+    import sys as _sys
+
+    class _SafeWriter:
+        def __init__(self, wrapped):
+            self._wrapped = wrapped
+
+        def write(self, data):
+            try:
+                return self._wrapped.write(data)
+            except Exception:
+                try:
+                    return len(data)
+                except Exception:
+                    return 0
+
+        def flush(self):
+            try:
+                self._wrapped.flush()
+            except Exception:
+                pass
+
+        def isatty(self):
+            try:
+                return self._wrapped.isatty()
+            except Exception:
+                return False
+
+        def __getattr__(self, name):
+            return getattr(self._wrapped, name)
+
+    for _name in ("stdout", "stderr"):
+        try:
+            _cur = getattr(_sys, _name, None)
+            if _cur is None or isinstance(_cur, _SafeWriter):
+                continue
+            setattr(_sys, _name, _SafeWriter(_cur))
+        except Exception:
+            pass
+
+
+_install_safe_stdio()
 
 
 def _progress_print(text: str) -> None:
