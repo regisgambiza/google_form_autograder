@@ -713,12 +713,21 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
         return [(None, list(question_tasks))]
 
     def _enqueue_question_batches(form_idx: int, form_id: str, title: str, q: Dict, question_tasks: List[Task]) -> None:
-        # One QuestionBatch per question -> shared queue
-        batch = QuestionBatch(form_idx, form_id, title, q, list(question_tasks))
-        try:
-            ai_batch_q.put(batch, timeout=2)
-        except Exception:
-            ai_batch_q.put(batch, timeout=2)
+        # Chunk large questions to avoid head-of-line blocking: one llama worker
+        # holding 35 answers (35×4 judges @3s = 7 min) blocks the other llama
+        # worker. Cap at 8 answers per QuestionBatch — 8×4×3s ≈ 96s max hold,
+        # openrouter still does 8 in one 25-batch call.
+        _CHUNK = 8
+        tasks = list(question_tasks)
+        for i in range(0, len(tasks), _CHUNK):
+            chunk = tasks[i:i+_CHUNK]
+            batch = QuestionBatch(form_idx, form_id, title, q, chunk)
+            try:
+                ai_batch_q.put(batch, timeout=2)
+            except Exception:
+                ai_batch_q.put(batch, timeout=2)
+            if len(tasks) > _CHUNK:
+                log("INFO", f"[ENQUEUE CHUNK] q={q.get('questionId')} total={len(tasks)} chunk={i//_CHUNK+1}/{(len(tasks)+_CHUNK-1)//_CHUNK} answers={len(chunk)}")
 
     def enqueue_ai_task(t: Task):
         # Count logical AI backlog separately from the bounded queue buffer so
@@ -1015,7 +1024,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                         from provider_manager import is_provider_available
 
                         if not is_provider_available(lane_provider):
-                            time.sleep(0.5)
+                            time.sleep(0.2)
                             with metrics_lock:
                                 _exp = int(progress.get("expected_tasks", 0))
                                 _comp = int(progress.get("completed", 0))
@@ -1025,11 +1034,11 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                                 return
                             # Also drain sentinel if it arrived while sleeping
                             try:
-                                _peek = my_q.get(timeout=0.1)
+                                _peek = my_q.get(timeout=0.05)
                                 if _peek is None:
-                                    log("INFO", f"[Worker: AI] DONE ai_worker id={worker_id}")
+                                    log("INFO", f"[Worker: AI] DONE ai_worker id={worker_id} (sentinel while unavailable)")
                                     return
-                                # Put back real work for healthy workers
+                                # Put back real work for healthy workers (preserve order best effort)
                                 my_q.put(_peek, timeout=1)
                             except queue.Empty:
                                 pass
@@ -1044,12 +1053,16 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                         completed = int(progress.get("completed", 0))
                         backlog = int(progress.get("ai_backlog", 0))
                     if expected > 0 and completed >= expected and backlog <= 0:
-                        log("INFO", f"[Worker: AI] DONE ai_worker id={worker_id} (all batched work complete)")
+                        log("INFO", f"[Worker: AI] DONE ai_worker id={worker_id} (all batched work complete) exp={expected} comp={completed} back={backlog} q_ai={my_q.qsize()}")
                         log("INFO", f"[APP WORKER] id={worker_id} type=ai status=done current=- answers=0 latency_ms=0 queue_wait_ms=0")
                         return
                     continue
                 if batch is None:
-                    log("INFO", f"[Worker: AI] DONE ai_worker id={worker_id}")
+                    with metrics_lock:
+                        _exp2 = int(progress.get("expected_tasks", 0))
+                        _comp2 = int(progress.get("completed", 0))
+                        _back2 = int(progress.get("ai_backlog", 0))
+                    log("INFO", f"[Worker: AI] DONE ai_worker id={worker_id} (sentinel) exp={_exp2} comp={_comp2} back={_back2} q_ai={my_q.qsize()}")
                     log("INFO", f"[APP WORKER] id={worker_id} type=ai status=done current=- answers=0 latency_ms=0 queue_wait_ms=0")
                     return
 
@@ -1073,7 +1086,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                 )
                 log(
                     "INFO",
-                    f"[BATCH START] form_id={batch.form_id} question_id={qid} "
+                    f"[BATCH START] worker={worker_id} lane={lane_provider or 'generic'} form_id={batch.form_id} question_id={qid} "
                     f"answers={len(batch.tasks)} queue_wait_s={queue_wait_s:.2f}",
                 )
                 started = time.perf_counter()
@@ -1104,7 +1117,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                 latency_ms = int(elapsed_s * 1000)
                 log(
                     "INFO",
-                    f"[BATCH END] form_id={batch.form_id} question_id={qid} "
+                    f"[BATCH END] worker={worker_id} lane={lane_provider or 'generic'} form_id={batch.form_id} question_id={qid} "
                     f"answers={len(batch.tasks)} duration_s={elapsed_s:.2f}",
                 )
                 log(
@@ -1762,6 +1775,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
         pass
     if rs.is_alive():
         log("WARNING", "[REQUEUE] retry_scheduler did not stop cleanly")
+    log("INFO", f"[SENTINEL INJECT] model_first={model_first_batching} q_ai={ai_batch_q.qsize() if model_first_batching else ai_q.qsize()} backlog={progress.get('ai_backlog',0)} exp={progress.get('expected_tasks',0)} comp={progress.get('completed',0)} workers={ai_workers}")
     if model_first_batching and lane_batch_qs:
         # Per-lane sentinels: each lane's workers exit on their OWN queue.
         for _lane_name, _lane_count in lane_specs:
