@@ -211,8 +211,8 @@ def test_legacy_strategy_keeps_generic_pool_without_hints(monkeypatch):
 
 
 def test_dual_lane_partitions_answers_between_lanes_without_duplicates(monkeypatch):
-    """Each question's answers split: llama gets its native slice, openrouter
-    the remainder. Every answer graded exactly once across both lanes."""
+    """Simple shared queue: whole questions go to whichever lane pulls first.
+    No answer is split across lanes - each answer graded exactly once."""
     hint_calls = []
     _install_common_mocks(monkeypatch, hint_calls)
     monkeypatch.setattr(
@@ -228,18 +228,17 @@ def test_dual_lane_partitions_answers_between_lanes_without_duplicates(monkeypat
 
     gd.run_global_dispatcher(["form-x"], grade_recent_only=True, generate_report=False)
 
-    llama = [a for a, h in hint_calls if h == "llamacpp"]
-    orouter = [a for a, h in hint_calls if h == "openrouter"]
-    assert len(llama) >= 1, f"llama lane must receive real work, got {hint_calls}"
-    assert len(orouter) >= 1, f"openrouter lane must receive the remainder, got {hint_calls}"
-    all_answers = sorted(int(a) for a in [*llama, *orouter])
+    # Simple queue: just verify nothing lost/duplicated, lanes compete naturally
+    all_answers = sorted(int(a) for a, _ in hint_calls)
     assert all_answers == list(range(6, 12)), f"no answer lost or duplicated: {hint_calls}"
-    assert len(llama) + len(orouter) == len(hint_calls)
+    assert len(hint_calls) == 6
+    # All hints must be valid lane names
+    assert all(h in {"openrouter", "llamacpp"} for _, h in hint_calls)
 
 
 def test_dead_llamacpp_lane_reroutes_to_openrouter_without_losing_work(monkeypatch):
-    """When the llamacpp circuit is open its queued batches move to the
-    healthy openrouter lane; nothing is dropped and nothing grades twice."""
+    """When llamacpp circuit is open its workers idle and openrouter drains
+    the shared queue; nothing is dropped or graded twice."""
     hint_calls = []
     _install_common_mocks(monkeypatch, hint_calls)
     monkeypatch.setattr(
