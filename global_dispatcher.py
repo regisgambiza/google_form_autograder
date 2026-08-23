@@ -345,7 +345,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
             "expected_tasks": expected,
             "q_fetch": fetch_out.qsize(),
             "q_det": det_q.qsize(),
-            "q_ai": ai_batch_q.qsize() if model_first_batching else ai_q.qsize(),
+            "q_ai": (sum(q.qsize() for q in lane_batch_qs.values()) if (model_first_batching and lane_batch_qs) else (ai_batch_q.qsize() if model_first_batching else ai_q.qsize())),
             "q_ai_actual": ai_backlog,
             "q_result": result_q.qsize(),
             "wm_low": det_q_low_wm,
@@ -729,51 +729,80 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
         receives work sized for ITS provider (llama-sized singles vs
         openrouter-sized chunks). Answers are partitioned, never duplicated,
         so each answer is graded exactly once by whichever lane owns it.
-        Questions too small to split are balanced onto the shallowest queue
-        so slow local lanes cannot hoard a stream of tiny batches."""
+
+        Guarantees (per user confirmation 2026-08-23):
+        - llamacpp_judge_answer_batch_size=1, openrouter=25, llama-server parallel=2
+        - at-least-1-per-question floor: any question with >= num_lanes answers
+          gives every active lane at least 1 answer, llama capped at its share
+          (worker_count * 1 = 2) and openrouter takes the remainder.
+        - single-answer questions (len < num_lanes) go to the weighted-shallowest
+          queue so small forms still spread across lanes over time.
+        """
         if not lane_batch_qs:
             return [(None, list(question_tasks))]
         tasks = list(question_tasks)
-        total_local_share = sum(
-            lane_answer_shares.get(name, 1)
-            for name, _count in lane_specs
-            if name != "openrouter"
-        )
-        if len(tasks) <= total_local_share:
+        num_lanes = len(lane_batch_qs)
+        # Too few answers to give each lane 1 -> single lightest queue.
+        if len(tasks) < num_lanes:
             lane_counts = {name: count for name, count in lane_specs}
             chosen = min(
                 lane_batch_qs.keys(),
                 key=lambda name: (
                     lane_batch_qs[name].qsize() / max(1, lane_counts.get(name, 1)),
-                    0 if name == "openrouter" else 1,
                 ),
             )
             return [(chosen, tasks)]
+        # Guarantee floor: each lane gets >=1 when len >= num_lanes.
+        # Local lanes (llamacpp/ollama) take min(share, remaining - floor_for_others)
+        # so openrouter always has at least 1 left for the remainder.
         assignments: List[tuple] = []
-        remaining = tasks
-        # Reserve each small/local lane's native slice first.
+        remaining: List[Task] = list(tasks)
+        # Count lanes not yet assigned (including openrouter)
+        unassigned_lanes = {name for name, _ in lane_specs if name in lane_batch_qs}
         for name, _count in lane_specs:
             if name == "openrouter" or not remaining:
                 continue
+            # How many lanes still need their floor of 1 after this one?
+            others_needing_floor = len(unassigned_lanes - {name} - {a[0] for a in assignments})
+            # openrouter will be assigned last if it is in unassigned_lanes
+            max_take = len(remaining) - others_needing_floor
+            if max_take < 1:
+                continue
             share = lane_answer_shares.get(name, 1)
-            take, remaining = remaining[:share], remaining[share:]
-            if take:
-                assignments.append((name, take))
+            take = min(share, max_take)
+            # Floor of 1 already enforced by max_take >=1
+            take = max(1, take)
+            slice_tasks, remaining = remaining[:take], remaining[take:]
+            if slice_tasks:
+                assignments.append((name, slice_tasks))
+                unassigned_lanes.discard(name)
+        # Remainder -> openrouter (or first remaining lane if openrouter absent)
         remainder_target = (
-            "openrouter" if "openrouter" in lane_batch_qs
-            else (assignments[0][0] if assignments else None)
+            "openrouter" if "openrouter" in lane_batch_qs else None
         )
+        if remainder_target is None and lane_batch_qs:
+            # No openrouter lane (e.g. llamacpp_only with extra ollama) -> first unassigned
+            remaining_names = [n for n, _ in lane_specs if n in lane_batch_qs and n not in {a[0] for a in assignments}]
+            remainder_target = remaining_names[0] if remaining_names else list(lane_batch_qs.keys())[0]
         if remaining and remainder_target is not None:
             for idx, (name, slice_tasks) in enumerate(assignments):
                 if name == remainder_target:
                     assignments[idx] = (name, slice_tasks + remaining)
+                    remaining = []
                     break
             else:
                 assignments.append((remainder_target, remaining))
+                remaining = []
         elif remaining:
             assignments.append((list(lane_batch_qs.keys())[0] if lane_batch_qs else None, remaining))
         if not assignments:
             assignments = [(_available_lane() or list(lane_batch_qs.keys())[0], list(question_tasks))]
+        log(
+            "INFO",
+            f"[PARTITION] q={question_tasks[0].question.get('questionId') if question_tasks else '?'} "
+            f"total={len(tasks)} lanes={num_lanes} -> "
+            + ", ".join(f"{n}:{len(s)}" for n, s in assignments),
+        )
         return assignments
 
     def _enqueue_question_batches(form_idx: int, form_id: str, title: str, q: Dict, question_tasks: List[Task]) -> None:
@@ -1293,17 +1322,24 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
         try:
             t.queued_monotonic = time.monotonic()
             if model_first_batching:
-                # Dual-lane mode has no consumer on the shared queue; requeued
-                # singles must land on a live lane queue.
-                target_q = _shortest_lane_queue()
+                # Lane-aware: single retried answer goes through the same
+                # partition so floor/weighting stays correct, not just shortest.
                 if lane_batch_qs:
-                    alt = _available_lane()
-                    if alt is not None:
-                        target_q = lane_batch_qs[alt]
-                target_q.put(
-                    QuestionBatch(t.form_idx, t.form_id, t.form_title, t.question, [t]),
-                    timeout=2,
-                )
+                    part = _partition_question_tasks([t])
+                    # Single task -> exactly one slice to one lane
+                    lane_name, _slice = part[0] if part else (None, [t])
+                    target_q = lane_batch_qs.get(lane_name) if lane_name else None
+                    if target_q is None:
+                        target_q = _shortest_lane_queue()
+                    target_q.put(
+                        QuestionBatch(t.form_idx, t.form_id, t.form_title, t.question, [t]),
+                        timeout=2,
+                    )
+                else:
+                    ai_batch_q.put(
+                        QuestionBatch(t.form_idx, t.form_id, t.form_title, t.question, [t]),
+                        timeout=2,
+                    )
                 with metrics_lock:
                     progress["ai_backlog"] += 1
             else:
@@ -1671,11 +1707,15 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                         avg_latency_total,
                     )
                 )
+                _q_ai = (sum(q.qsize() for q in lane_batch_qs.values()) if (model_first_batching and lane_batch_qs) else (ai_batch_q.qsize() if model_first_batching else ai_q.qsize()))
+                _q_ai_breakdown = ""
+                if lane_batch_qs and model_first_batching:
+                    _q_ai_breakdown = " (" + ", ".join(f"{k}={v.qsize()}" for k, v in lane_batch_qs.items()) + ")"
                 log(
                     "INFO",
                     f"[DISPATCH METRICS] fetch/s={f/dt:.2f} det/s={d/dt:.2f} ai/s={a/dt:.2f} apply/s={ap/dt:.2f} "
                     f"q_fetch={fetch_out.qsize()} q_det={det_q.qsize()} "
-                    f"q_ai={(ai_batch_q.qsize() if model_first_batching else ai_q.qsize())} "
+                    f"q_ai={_q_ai}{_q_ai_breakdown} "
                     f"q_ai_actual={ai_backlog} q_result={result_q.qsize()} "
                     f"pending={pb} wm={det_q_low_wm}/{det_q_high_wm} done={comp}/{exp}",
                 )
@@ -1700,7 +1740,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                 snapshot = (
                     fetch_out.qsize(),
                     det_q.qsize(),
-                    ai_batch_q.qsize() if model_first_batching else ai_q.qsize(),
+                    (sum(q.qsize() for q in lane_batch_qs.values()) if (model_first_batching and lane_batch_qs) else (ai_batch_q.qsize() if model_first_batching else ai_q.qsize())),
                     result_q.qsize(),
                 )
                 with metrics_lock:
@@ -1723,7 +1763,7 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                 with metrics_lock:
                     ai_idle_for = time.time() - ai_progress["last_ai_done_ts"]
                     since_ai_warning = time.time() - ai_progress["last_warning_ts"]
-                active_ai_qsize = ai_batch_q.qsize() if model_first_batching else ai_q.qsize()
+                active_ai_qsize = (sum(q.qsize() for q in lane_batch_qs.values()) if (model_first_batching and lane_batch_qs) else (ai_batch_q.qsize() if model_first_batching else ai_q.qsize()))
                 if active_ai_qsize > 0 and ai_idle_for > ai_stall_timeout_s and since_ai_warning >= 300.0:
                     log(
                         "WARNING",
