@@ -163,8 +163,8 @@ def test_judge_answer_batch_size_respects_provider_strategy():
     }
 
     assert ai_judges._preferred_batch_provider(cfg) == "llamacpp"
-    assert ai_judges._judge_answer_batch_size(cfg) == 1
-    assert ai_judges._judge_answer_batch_size(cfg, "llamacpp") == 1
+    assert ai_judges._judge_answer_batch_size(cfg) == 20
+    assert ai_judges._judge_answer_batch_size(cfg, "llamacpp") == 20
 
 
 def test_provider_manager_start_label_does_not_claim_requested_model(monkeypatch):
@@ -548,11 +548,11 @@ def test_model_first_provider_hint_controls_chunking_and_routing(monkeypatch):
         retries=1,
         provider_hint="openrouter",
     )
-    # The chunk must fit EVERY provider in the failover chain; llamacpp is
-    # pinned to 1 answer per call, so even an OR-hint call degrades to
-    # singles instead of shipping llama an oversized batch.
-    assert sorted(single_calls) == [("a", "openrouter"), ("b", "openrouter")]
-    assert batch_calls == []
+    # The openrouter lane sizes chunks for its OWN provider limit (25). A
+    # mid-flight failover to llamacpp is handled by re-splitting inside
+    # call_judge_role_batch_sync, not by shrinking every lane to singles.
+    assert batch_calls == [("semantic_judge", ["a", "b"], "openrouter")]
+    assert single_calls == []
 
     # When every provider allows it, the hint still controls batching.
     batch_calls.clear()

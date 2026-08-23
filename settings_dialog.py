@@ -23,10 +23,14 @@ EXECUTION_MODE_PRESETS = {
     "Maximum accuracy: independent unanimous jury + review": {
         "deterministic_worker_count": 4,
         "ai_worker_count": 4,
-        "max_concurrent_judge_http": 1,
+        # Fail fast per call; patience comes from dispatcher-level requeue of
+        # failed answers plus the multi-hour hard timeouts below. A single
+        # global HTTP slot or multi-hour per-call timeouts starve both
+        # dual-lane providers (see test_runtime_safety policy).
+        "max_concurrent_judge_http": 4,
         "max_concurrent_jury_answers": 4,
         "enable_async_judges": False,
-        "sync_judge_parallelism": 1,
+        "sync_judge_parallelism": 4,
         "active_judge_roles": ["semantic_judge", "factual_judge", "concept_judge", "strict_judge"],
         "adaptive_math_jury": {
             "enabled": True,
@@ -47,15 +51,15 @@ EXECUTION_MODE_PRESETS = {
         "answer_key_auto_add_proven_equivalents": True,
         "patient_ai_mode": True,
         "enable_jury_circuit_breaker": False,
-        "judge_timeout_seconds": 7200,
-        "judge_http_timeout_seconds": 7200,
+        "judge_timeout_seconds": 60,
+        "judge_http_timeout_seconds": 120,
         "judge_total_hard_timeout_seconds": 21600,
         "answer_hard_timeout_seconds": 21600,
         "jury_semaphore_acquire_timeout_seconds": 21600,
-        "max_latency_per_answer_seconds": 21600,
+        "max_latency_per_answer_seconds": 120,
         "embedding_timeout_seconds": 1800,
         "rubric_timeout_seconds": 3600,
-        "dispatcher_stall_timeout_seconds": 7200,
+        "dispatcher_stall_timeout_seconds": 3600,
         "ai_stall_timeout_seconds": 900,
         "jury_circuit_break_seconds": 0,
     },
@@ -643,10 +647,14 @@ def show_settings_dialog(owner):
         "Higher values can improve throughput but may increase malformed JSON risk."
     )
     llamacpp_judge_answer_batch_size_spin = QSpinBox(dialog)
-    llamacpp_judge_answer_batch_size_spin.setRange(1, 1)
-    llamacpp_judge_answer_batch_size_spin.setValue(1)
+    llamacpp_judge_answer_batch_size_spin.setRange(1, 25)
+    llamacpp_judge_answer_batch_size_spin.setValue(
+        max(1, int(cfg.get("llamacpp_judge_answer_batch_size", legacy_judge_answer_batch_size)))
+    )
     llamacpp_judge_answer_batch_size_spin.setToolTip(
-        "llama.cpp is capped at 1 answer per judge call to avoid malformed local batch JSON."
+        "How many student answers are sent to each llama.cpp judge call. "
+        "The OpenRouter lane keeps its own separate limit; oversized chunks are "
+        "re-split automatically when a call fails over between providers."
     )
     legacy_ai_worker_count = max(1, int(cfg.get("ai_worker_count", 4) or 4))
     openrouter_ai_worker_count_spin = QSpinBox(dialog)
@@ -689,10 +697,13 @@ def show_settings_dialog(owner):
         "Changes apply to the next grading run."
     )
     llamacpp_worker_count_spin = QSpinBox(dialog)
-    llamacpp_worker_count_spin.setRange(1, 1)
-    llamacpp_worker_count_spin.setValue(1)
+    llamacpp_worker_count_spin.setRange(1, 4)
+    llamacpp_worker_count_spin.setValue(
+        max(1, int(cfg.get("llamacpp_worker_count", 1) or 1))
+    )
     llamacpp_worker_count_spin.setToolTip(
-        "llama.cpp is capped at 1 provider worker because local GGUF models share one server/hardware lane."
+        "llama.cpp provider worker threads. Effective concurrency is clamped to "
+        "the llama-server parallel slot count; match it to use both slots."
     )
     llamacpp_enabled_checkbox = QCheckBox("Enable llama.cpp provider", dialog)
     llamacpp_enabled_checkbox.setChecked(bool(cfg.get("llamacpp_enabled", True)))
@@ -1172,7 +1183,7 @@ def show_settings_dialog(owner):
         config_data["llamacpp_ai_worker_count"] = int(llamacpp_ai_worker_count_spin.value())
         config_data["ollama_ai_worker_count"] = int(ollama_ai_worker_count_spin.value())
         config_data["openrouter_worker_count"] = int(openrouter_worker_count_spin.value())
-        config_data["llamacpp_worker_count"] = 1
+        config_data["llamacpp_worker_count"] = int(llamacpp_worker_count_spin.value())
         config_data["ollama_worker_count"] = int(ollama_worker_count_spin.value())
         config_data["llamacpp_enabled"] = llamacpp_enabled_checkbox.isChecked()
         config_data["llamacpp_require_server"] = llamacpp_require_server_checkbox.isChecked()
@@ -1212,15 +1223,15 @@ def show_settings_dialog(owner):
         config_data["llamacpp_models"] = selected_llamacpp
         if supervisor_model_combo.currentText():
             config_data["openrouter_supervisor_ollama_model"] = supervisor_model_combo.currentText()
-        # Keep provider-level capacity in ProviderManager; application workers may
-        # process multiple questions while Ollama remains capped by ollama_worker_count.
-        config_data["max_concurrent_judge_http"] = 1
+        # Provider-level HTTP capacity and jury parallelism come from the
+        # execution-mode preset (fail-fast per call; lanes stay independent).
+        # Do NOT hardcode them to 1 here — that serialized every judge call
+        # through one global slot and starved the dual-lane providers.
         config_data["max_concurrent_jury_answers"] = max(
             1,
             effective_jury_concurrency(config_data),
         )
         config_data["enable_async_judges"] = False
-        config_data["sync_judge_parallelism"] = 1
         # User-facing accuracy controls override the preset defaults.
         config_data["accuracy_policy"]["minimum_judge_confidence"] = float(minimum_judge_confidence_spin.value())
         config_data["accuracy_policy"]["require_distinct_models"] = distinct_models_checkbox.isChecked()
@@ -1247,7 +1258,7 @@ def show_settings_dialog(owner):
         config_data["enable_deduplication"] = dedup_checkbox.isChecked()
         config_data["ollama_judge_answer_batch_size"] = int(ollama_judge_answer_batch_size_spin.value())
         config_data["openrouter_judge_answer_batch_size"] = int(openrouter_judge_answer_batch_size_spin.value())
-        config_data["llamacpp_judge_answer_batch_size"] = 1
+        config_data["llamacpp_judge_answer_batch_size"] = int(llamacpp_judge_answer_batch_size_spin.value())
         config_data["judge_answer_batch_size"] = int(openrouter_judge_answer_batch_size_spin.value())
         config_data["ai_worker_count"] = effective_ai_worker_count(config_data)
         if is_llamacpp_only(config_data):

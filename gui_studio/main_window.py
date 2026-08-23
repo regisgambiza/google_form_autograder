@@ -2036,8 +2036,12 @@ class AutograderWindow(QMainWindow):
         )
         if item:
             meta = item.data(Qt.UserRole + 1) or {}
-            meta["completed"] = completed
-            meta["total"] = total
+            # Answer-based metrics must NOT own the queue-row progress bar:
+            # the bar's unit is individual judge calls (owned exclusively by
+            # update_form_totals / update_form_row_progress). Keep the answer
+            # counts under separate keys for tooltips/status text only.
+            meta["metrics_completed"] = completed
+            meta["metrics_total"] = total
             meta["accepted"] = accepted
             meta["rejected"] = rejected
             meta["review_questions"] = review_questions
@@ -2100,8 +2104,14 @@ class AutograderWindow(QMainWindow):
         if not item:
             return
         meta = item.data(Qt.UserRole + 1) or {}
-        meta["completed"] = int(total)
-        meta["total"] = int(total)
+        # The bar's unit is judge calls: fill to the call-total already set by
+        # update_form_totals instead of overwriting the denominator with the
+        # answer count. Fall back to answers only when no call total exists.
+        call_total = int(meta.get("total") or 0)
+        meta["completed"] = call_total if call_total > 0 else int(total)
+        meta["total"] = call_total if call_total > 0 else int(total)
+        meta["metrics_completed"] = int(total)
+        meta["metrics_total"] = int(total)
         meta["accepted"] = int(accepted)
         meta["rejected"] = int(rejected)
         meta["review_questions"] = int(review)

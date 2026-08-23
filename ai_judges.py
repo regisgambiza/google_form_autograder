@@ -1085,7 +1085,7 @@ def _judge_answer_batch_size(cfg: Optional[Dict[str, object]] = None, provider: 
     if provider_name == "openrouter":
         return max(1, int(cfg.get("openrouter_judge_answer_batch_size", legacy)))
     if provider_name in {"llamacpp", "llama.cpp", "llama_cpp"}:
-        return 1
+        return max(1, int(cfg.get("llamacpp_judge_answer_batch_size", legacy)))
     return max(1, legacy)
 
 
@@ -1319,20 +1319,13 @@ def run_judges_model_first(
         completed_units = 0
         runtime_cfg = load_config()
         batch_provider = str(provider_hint).strip().lower() if provider_hint else _preferred_batch_provider(runtime_cfg)
+        # Size chunks for the lane's OWN provider. Cross-provider compatibility
+        # is handled at call time: call_judge_role_batch_sync re-splits an
+        # oversized chunk into local-provider-sized pieces when a call fails
+        # over to a smaller-limit provider (e.g. OpenRouter -> llama.cpp), so
+        # taking a min() across the whole chain here is unnecessary and would
+        # degrade every lane to the smallest provider's limit.
         batch_size = _judge_answer_batch_size(runtime_cfg, batch_provider)
-        # A chunk can fail over to ANY other configured provider mid-flight.
-        # The effective chunk must fit the smallest limit in that chain, or
-        # the fallback provider receives oversized batches it cannot fulfill
-        # (llama.cpp returned only answer_index=1 for 25-answer chunks).
-        try:
-            chain_limits = [
-                _judge_answer_batch_size(runtime_cfg, provider_name)
-                for provider_name in configured_provider_names(runtime_cfg)
-            ]
-            if chain_limits:
-                batch_size = min([batch_size, *chain_limits])
-        except Exception:
-            pass
         planned_units = len(role_answers)
         actual_units = len(role_answers)
         if actual_units > planned_units:

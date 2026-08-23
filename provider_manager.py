@@ -1084,6 +1084,16 @@ class ProviderManager:
             elif state.failures == 1:
                 state.health = HealthState.DEGRADED
             failure_threshold = max(1, int(load_config().get("provider_circuit_failure_threshold", 3)))
+            if ex.category == "timeout":
+                # Saturation timeouts are self-healing (queued requests behind
+                # a busy local slot), unlike real outages which fail fast with
+                # transport errors. Require many more of them before cutting
+                # the whole lane off, otherwise the provider flaps OFFLINE ->
+                # HEALTHY under every failover flood.
+                failure_threshold = max(
+                    failure_threshold,
+                    int(load_config().get("provider_timeout_circuit_failure_threshold", failure_threshold * 3)),
+                )
             if state.failures >= failure_threshold or ex.category in {"out_of_credits", "disabled"}:
                 state.circuit = CircuitState.OPEN
                 state.health = HealthState.OFFLINE if ex.category != "disabled" else HealthState.DISABLED

@@ -208,3 +208,55 @@ def test_legacy_strategy_keeps_generic_pool_without_hints(monkeypatch):
     starts = [m for m in worker_starts if "[Worker: AI] START" in m]
     assert any("id=ai-1 lane=generic" in m for m in starts)
     assert not any("ai-openrouter-" in m or "ai-llamacpp-" in m for m in starts)
+
+
+def test_dual_lane_partitions_answers_between_lanes_without_duplicates(monkeypatch):
+    """Each question's answers split: llama gets its native slice, openrouter
+    the remainder. Every answer graded exactly once across both lanes."""
+    hint_calls = []
+    _install_common_mocks(monkeypatch, hint_calls)
+    monkeypatch.setattr(
+        gd,
+        "load_config",
+        lambda: _base_config("dual_lane", {
+            "openrouter_ai_worker_count": 2,
+            "llamacpp_ai_worker_count": 1,
+            "llamacpp_judge_answer_batch_size": 1,
+            "openrouter_judge_answer_batch_size": 25,
+        }),
+    )
+
+    gd.run_global_dispatcher(["form-x"], grade_recent_only=True, generate_report=False)
+
+    llama = [a for a, h in hint_calls if h == "llamacpp"]
+    orouter = [a for a, h in hint_calls if h == "openrouter"]
+    assert len(llama) >= 1, f"llama lane must receive real work, got {hint_calls}"
+    assert len(orouter) >= 1, f"openrouter lane must receive the remainder, got {hint_calls}"
+    all_answers = sorted(int(a) for a in [*llama, *orouter])
+    assert all_answers == list(range(6, 12)), f"no answer lost or duplicated: {hint_calls}"
+    assert len(llama) + len(orouter) == len(hint_calls)
+
+
+def test_dead_llamacpp_lane_reroutes_to_openrouter_without_losing_work(monkeypatch):
+    """When the llamacpp circuit is open its queued batches move to the
+    healthy openrouter lane; nothing is dropped and nothing grades twice."""
+    hint_calls = []
+    _install_common_mocks(monkeypatch, hint_calls)
+    monkeypatch.setattr(
+        gd,
+        "load_config",
+        lambda: _base_config("dual_lane", {
+            "openrouter_ai_worker_count": 2,
+            "llamacpp_ai_worker_count": 1,
+            "llamacpp_judge_answer_batch_size": 1,
+        }),
+    )
+    import provider_manager as pm
+
+    monkeypatch.setattr(pm, "is_provider_available", lambda name: name != "llamacpp")
+
+    gd.run_global_dispatcher(["form-x"], grade_recent_only=True, generate_report=False)
+
+    assert hint_calls, "work must still be graded"
+    assert all(h != "llamacpp" for _, h in hint_calls), f"dead lane must not grade: {hint_calls}"
+    assert sorted(int(a) for a, _ in hint_calls) == list(range(6, 12))

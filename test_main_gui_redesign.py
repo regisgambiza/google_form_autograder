@@ -148,12 +148,20 @@ def test_form_table_rows_show_progress_eta_and_answers():
     url = first.data(Qt.UserRole)
     window.current_form_url = url
     window._set_form_status(first, "running", "Grading now")
+    # The queue-row bar is denominated in individual judge CALLS only;
+    # answer-based FormMetrics updates must not move or re-label it.
+    form_id = (first.data(Qt.UserRole + 1) or {}).get("form_id")
+    window.update_form_totals(form_id, 20)
+    window.update_form_row_progress(form_id, 10, 20)
     window.update_form_metrics(5, 10, 4, 1, 60, 0, 2, 3, 1200.0)
 
     row = first.row()
     assert window_status_cell(window, row, 1) == "RUNNING"
     assert window._row_bars[url].value() == 50
-    assert window_status_cell(window, row, 3) == "5/10"
+    assert window_status_cell(window, row, 3) == "10/20"
+    meta = first.data(Qt.UserRole + 1) or {}
+    assert meta["metrics_completed"] == 5
+    assert meta["metrics_total"] == 10
     assert window_status_cell(window, row, 4) == "4"
     assert window_status_cell(window, row, 5) == "0"
     assert window_status_cell(window, row, 6) == "1"

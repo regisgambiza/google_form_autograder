@@ -33,7 +33,9 @@ def test_llamacpp_server_launch_defaults_match_local_9b_profile():
     assert cfg["llamacpp_server_flash_attn"] == "auto"
     assert cfg["llamacpp_server_cache_type_k"] == "q8_0"
     assert cfg["llamacpp_server_cache_type_v"] == "q8_0"
-    assert cfg["llamacpp_server_parallel"] == 1
+    # 2 slots: benchmark-verified; a single slot saturates under failover
+    # floods and starves the llamacpp lane (client-side timeouts).
+    assert cfg["llamacpp_server_parallel"] == 2
     assert cfg["llamacpp_server_mmap"] is True
     assert cfg["llamacpp_server_jinja"] is True
 
