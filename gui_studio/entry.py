@@ -71,6 +71,18 @@ def _install_sleep_prevention():
 
 
 def main():
+    # Crash diagnostics must be live before Qt/PySide6 loads so native faults
+    # inside Qt are captured (minidump + watchdog report + faulthandler dump).
+    try:
+        import crash_diagnostics
+
+        crash_diagnostics.install(
+            app_name="GoogleFormAutograder",
+            context="grader-frozen" if os.environ.get("AUTOGRADER_GRADER") == "1" else "gui",
+        )
+    except Exception:
+        pass
+
     if sys.platform == "win32":
         try:
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_ID)

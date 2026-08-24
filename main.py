@@ -203,6 +203,13 @@ def chunked(items, n):
 
 
 def main():
+    # Native crash capture must be active before any heavy module imports.
+    try:
+        import crash_diagnostics
+
+        crash_diagnostics.install(app_name="GoogleFormAutograder", context="grader")
+    except Exception:
+        pass
     acquire_grader_lock()
     run_id = datetime.now(timezone.utc).strftime("run-%Y%m%dT%H%M%SZ") + f"-{os.getpid()}"
     config_hash = hashlib.sha256(json.dumps(config, sort_keys=True).encode("utf-8")).hexdigest()[:12]
@@ -245,6 +252,17 @@ def main():
         sys.exit(1)
 
     log("INFO", f"Found {total_forms} form(s) to process")
+    try:
+        import crash_diagnostics
+
+        crash_diagnostics.set_grading_state(
+            phase="grading",
+            mode=str(config.get("execution_mode", "unknown")),
+            forms_total=total_forms,
+            grade_recent_only=grade_recent_only,
+        )
+    except Exception:
+        pass
     reset_model_progress()
     print(f"Progress: 0/{total_forms}")
 

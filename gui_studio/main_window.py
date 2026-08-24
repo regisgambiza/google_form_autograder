@@ -314,6 +314,10 @@ class AutograderWindow(QMainWindow):
         self.provider_worker_cards = {}
         self.provider_worker_states = {}
 
+        # Retired QThreads kept alive until Qt confirms they finished, so
+        # replacing the active search thread can never destroy a running one.
+        self._retired_search_threads = []
+
         self._elapsed_ticker = QTimer(self)
         self._elapsed_ticker.setInterval(1000)
         self._elapsed_ticker.timeout.connect(self._tick_elapsed)
@@ -1811,6 +1815,29 @@ class AutograderWindow(QMainWindow):
                     self.append_debug(f"<font color='orange'>[GRADER] Failed to truncate answers for {fid}: {exc}</font>")
 
         grade_recent_only = force_recent_only or ((not force_whole_form) and self.grading_mode == "Recent Only")
+        # Park the previous grader thread before replacing its reference: a
+        # QThread destroyed while still finishing is fatal (qFatal -> fail-fast).
+        old_grader = self.grader_thread
+        if old_grader is not None:
+            try:
+                old_grader.finished.disconnect(self.on_grading_finished)
+            except Exception:
+                pass
+            old_grader.finished.connect(lambda *_a, _t=old_grader: self._retire_search_thread(_t))
+            self._retired_search_threads.append(old_grader)
+        try:
+            import crash_diagnostics
+
+            crash_diagnostics.set_grading_state(
+                phase="grading",
+                mode=self.grading_mode,
+                forms_total=int(self.overall_forms_total),
+                subprocess="starting",
+            )
+            crash_diagnostics.record("grading_started", mode=self.grading_mode,
+                                     forms_total=int(self.overall_forms_total))
+        except Exception:
+            pass
         self.grader_thread = GraderThread(grade_recent_only=grade_recent_only, form_urls=target_urls)
         self.grader_thread.finished.connect(self.on_grading_finished)
         self.grader_thread.progress.connect(self.update_progress)
@@ -2191,6 +2218,13 @@ class AutograderWindow(QMainWindow):
     def on_grading_finished(self, success, msg):
         self.is_grading = False
         self._elapsed_ticker.stop()
+        try:
+            import crash_diagnostics
+
+            crash_diagnostics.set_grading_state(phase="idle", subprocess="exited")
+            crash_diagnostics.record("grading_finished", success=success, msg=msg)
+        except Exception:
+            pass
         self._set_run_controls(False)
         if self.auto_mode:
             self._set_auto_status("Auto Run: Waiting", "active")
@@ -2322,6 +2356,43 @@ class AutograderWindow(QMainWindow):
             grade_recent_only=(self.grading_mode == "Recent Only"),
         )
 
+    def _start_auto_search_thread(self, from_dt, to_dt):
+        """Start a SearchThread without ever dropping the last reference to a
+        possibly-still-finishing QThread.
+
+        Replacing self.auto_search_thread directly garbage-collects the
+        previous cycle's QThread object; if its underlying C++ thread has not
+        fully exited yet, Qt destroys a running QThread, which is fatal
+        (qFatal -> abort -> 0xC0000409, the exact crash signature captured in
+        the Windows Event Log). Retired threads are parked until Qt reports
+        them finished, then released.
+        """
+        old = self.auto_search_thread
+        if old is not None:
+            try:
+                old.finished.disconnect(self.on_auto_search_finished)
+            except Exception:
+                pass
+            self._retired_search_threads.append(old)
+            if len(self._retired_search_threads) > 8:
+                self._retired_search_threads.pop(0)
+        thread = SearchThread(self.folders, from_dt, to_dt)
+        thread.progress.connect(
+            lambda msg: self.append_debug(f"<font color='gray'>[SEARCH] {msg}</font>")
+        )
+        thread.finished.connect(self.on_auto_search_finished)
+        thread.finished.connect(lambda t=thread: self._retire_search_thread(t))
+        self.auto_search_thread = thread
+        thread.start()
+
+    def _retire_search_thread(self, thread):
+        try:
+            self._retired_search_threads = [
+                t for t in self._retired_search_threads if t is not thread and t.isRunning()
+            ]
+        except Exception:
+            pass
+
     def auto_cycle(self):
         if not self.auto_mode or self.is_closing:
             return
@@ -2335,6 +2406,16 @@ class AutograderWindow(QMainWindow):
             return
         if self.is_searching:
             self.append_debug("<font color='orange'>[AUTO] Search already in progress, skipping cycle</font>")
+            self.schedule_next_cycle()
+            return
+        if self.is_grading or (self.grader_thread and self.grader_thread.isRunning()):
+            # A Drive scan fired during an active grading run is pure churn:
+            # anything it finds cannot start grading anyway (guarded), and the
+            # scan+grade overlap is exactly where every recorded native GUI
+            # abort happened. Defer the cycle until grading finishes.
+            self.append_debug(
+                "<font color='gray'>[AUTO] Grading in progress - deferring source scan to next cycle</font>"
+            )
             self.schedule_next_cycle()
             return
 
@@ -2361,12 +2442,7 @@ class AutograderWindow(QMainWindow):
         self.is_searching = True
         self._set_auto_status("Auto Run: Searching", "searching")
         self._set_activity("Searching sources for new submissions…", "busy")
-        self.auto_search_thread = SearchThread(self.folders, from_dt, to_dt)
-        self.auto_search_thread.progress.connect(
-            lambda msg: self.append_debug(f"<font color='gray'>[SEARCH] {msg}</font>")
-        )
-        self.auto_search_thread.finished.connect(self.on_auto_search_finished)
-        self.auto_search_thread.start()
+        self._start_auto_search_thread(from_dt, to_dt)
 
     def on_auto_search_finished(self, forms):
         self.is_searching = False
@@ -2637,6 +2713,13 @@ class AutograderWindow(QMainWindow):
         self.debug_lines.append(message)
         if len(self.debug_lines) > self.max_gui_log_lines:
             del self.debug_lines[: len(self.debug_lines) - self.max_gui_log_lines]
+        try:
+            import crash_diagnostics
+
+            plain = message if "<" not in message else re.sub(r"<[^>]+>", "", str(message))
+            crash_diagnostics.record("debug", text=plain)
+        except Exception:
+            pass
         if "<" not in message:
             self._ingest_telemetry(message)
             self.activity.route_raw(message)
@@ -3285,6 +3368,19 @@ class AutograderWindow(QMainWindow):
             if not self.drive_scan_thread.wait(3000):
                 self.drive_scan_thread.terminate()
                 self.drive_scan_thread.wait(2000)
+        # Drain every parked (retired) QThread: destroying or finalizing the
+        # process with a live QThread is a native fail-fast death.
+        for retired in list(getattr(self, "_retired_search_threads", []) or []):
+            try:
+                if retired.isRunning():
+                    if hasattr(retired, "stop_grading"):
+                        retired.stop_grading()
+                    if not retired.wait(3000):
+                        retired.terminate()
+                        retired.wait(2000)
+            except Exception:
+                pass
+        self._retired_search_threads = []
         self._terminate_project_python_processes()
         if self.tray_icon:
             self.tray_icon.hide()

@@ -7,6 +7,7 @@ import threading
 import time
 
 _LOG_LOCK = threading.Lock()
+_CRASH_RING_FEED = None
 _DIAG_INIT = False
 _DIAG_TEXT_FH = None
 _DIAG_JSON_FH = None
@@ -97,6 +98,19 @@ def log(level, message):
     lvl = str(level).upper()
     msg = str(message)
     log_message = f"[{ts}] [{lvl}] {msg}"
+
+    # Feed the crash-diagnostics rolling buffer so a native crash report shows
+    # exactly what was happening right before the process died. Kept
+    # exception-guarded and import-lazy; costs one deque append per line.
+    global _CRASH_RING_FEED
+    try:
+        if _CRASH_RING_FEED is None:
+            from crash_diagnostics import record as _record
+
+            _CRASH_RING_FEED = _record
+        _CRASH_RING_FEED(f"{lvl} {msg}")
+    except Exception:
+        pass
 
     # Write to diagnostic files first. Keep the lock scoped only to file writes so
     # blocked console I/O cannot freeze all logging threads.

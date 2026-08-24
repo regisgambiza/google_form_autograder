@@ -64,10 +64,8 @@ def _execute_with_retries(request, context="", progress_callback=None, max_retri
             time.sleep(delay)
 
 
-def parse_folder_identifier(identifier):
+def parse_folder_identifier(identifier, drive_service=None):
     identifier = identifier.strip()
-    drive_service = get_drive_service()
-
     if identifier.startswith('http'):
         if '/folders/' in identifier:
             folder_id = identifier.split('/folders/')[1].split('?')[0]
@@ -78,6 +76,13 @@ def parse_folder_identifier(identifier):
 
     if len(identifier) > 20 and all(c.isalnum() or c in '-_' for c in identifier):
         return [identifier]
+
+    # Only URL-shaped/plain-id identifiers short-circuit above without any
+    # Drive access. Building an API client here used to happen for EVERY
+    # identifier (even those that need no Drive lookup), producing multi-build
+    # bursts on GUI worker threads at each auto-run cycle.
+    if drive_service is None:
+        drive_service = get_drive_service()
 
     query = (
         f"name='{identifier}' and "
@@ -100,8 +105,9 @@ def parse_folder_identifier(identifier):
     return [f['id'] for f in folders]
 
 
-def get_form_title(form_id, progress_callback=None, fallback_title="Untitled"):
-    forms_service = get_service()
+def get_form_title(form_id, progress_callback=None, fallback_title="Untitled", forms_service=None):
+    if forms_service is None:
+        forms_service = get_service()
     try:
         form = _execute_with_retries(
             forms_service.forms().get(formId=form_id),
@@ -114,7 +120,7 @@ def get_form_title(form_id, progress_callback=None, fallback_title="Untitled"):
         return fallback_title
 
 
-def get_last_submission_time(form_id, from_dt=None, progress_callback=None):
+def get_last_submission_time(form_id, from_dt=None, progress_callback=None, forms_service=None):
     """
     Get the latest submission time.
     WARNING: Google Forms API filter support is unreliable.
@@ -123,7 +129,8 @@ def get_last_submission_time(form_id, from_dt=None, progress_callback=None):
     if progress_callback:
         progress_callback(f"Checking submissions for form {form_id}")
 
-    forms_service = get_service()
+    if forms_service is None:
+        forms_service = get_service()
 
     try:
         times = []
@@ -177,7 +184,8 @@ def get_last_submission_time(form_id, from_dt=None, progress_callback=None):
         return None
 
 
-def find_forms_in_folder(folder_id, from_dt, to_dt, visited=None, progress_callback=None, seen_forms=None):
+def find_forms_in_folder(folder_id, from_dt, to_dt, visited=None, progress_callback=None,
+                         seen_forms=None, drive_service=None, forms_service=None):
     if visited is None:
         visited = set()
     if seen_forms is None:
@@ -187,7 +195,13 @@ def find_forms_in_folder(folder_id, from_dt, to_dt, visited=None, progress_callb
 
     visited.add(folder_id)
 
-    drive_service = get_drive_service()
+    # One Drive client per scan (shared through recursion) instead of one per
+    # folder: repeated client construction on GUI worker threads was both
+    # wasteful and the dominant activity in every recorded GUI crash.
+    if drive_service is None:
+        drive_service = get_drive_service()
+    if forms_service is None:
+        forms_service = get_service()
 
     form_query = (
         f"'{folder_id}' in parents and "
@@ -214,12 +228,15 @@ def find_forms_in_folder(folder_id, from_dt, to_dt, visited=None, progress_callb
             continue
         seen_forms.add(form_id)
         drive_title = form.get('name', 'Untitled')
-        title = get_form_title(form_id, progress_callback=progress_callback, fallback_title=drive_title)
+        title = get_form_title(form_id, progress_callback=progress_callback,
+                               fallback_title=drive_title, forms_service=forms_service)
 
         if progress_callback:
             progress_callback(f"Checking form: {title}")
 
-        last_ts = get_last_submission_time(form_id, from_dt=from_dt, progress_callback=progress_callback)
+        last_ts = get_last_submission_time(form_id, from_dt=from_dt,
+                                           progress_callback=progress_callback,
+                                           forms_service=forms_service)
         if last_ts and from_dt <= last_ts <= to_dt:
             matching.append({
                 "url": f"https://docs.google.com/forms/d/{form_id}/edit",
@@ -245,14 +262,16 @@ def find_forms_in_folder(folder_id, from_dt, to_dt, visited=None, progress_callb
     for sub in subfolders:
         matching.extend(
             find_forms_in_folder(
-                sub['id'], from_dt, to_dt, visited, progress_callback, seen_forms
+                sub['id'], from_dt, to_dt, visited, progress_callback, seen_forms,
+                drive_service=drive_service, forms_service=forms_service,
             )
         )
 
     return matching
 
 
-def find_all_forms_in_folder(folder_id, visited=None, progress_callback=None, seen_forms=None):
+def find_all_forms_in_folder(folder_id, visited=None, progress_callback=None,
+                             seen_forms=None, drive_service=None, forms_service=None):
     if visited is None:
         visited = set()
     if seen_forms is None:
@@ -261,7 +280,8 @@ def find_all_forms_in_folder(folder_id, visited=None, progress_callback=None, se
         return []
 
     visited.add(folder_id)
-    drive_service = get_drive_service()
+    if drive_service is None:
+        drive_service = get_drive_service()
 
     form_query = (
         f"'{folder_id}' in parents and "
@@ -289,6 +309,7 @@ def find_all_forms_in_folder(folder_id, visited=None, progress_callback=None, se
                 form_id,
                 progress_callback=progress_callback,
                 fallback_title=form.get('name', 'Untitled'),
+                forms_service=forms_service,
             ),
             "last_submission": None,
         })
@@ -309,7 +330,8 @@ def find_all_forms_in_folder(folder_id, visited=None, progress_callback=None, se
 
     for sub in subfolders:
         matching.extend(
-            find_all_forms_in_folder(sub['id'], visited, progress_callback, seen_forms)
+            find_all_forms_in_folder(sub['id'], visited, progress_callback, seen_forms,
+                                     drive_service=drive_service, forms_service=forms_service)
         )
 
     return matching
@@ -318,12 +340,22 @@ def find_all_forms_in_folder(folder_id, visited=None, progress_callback=None, se
 def find_all_forms_in_sources(sources, progress_callback=None):
     all_folder_ids = set()
     all_form_ids = set()
+    # Build each service at most once for the whole scan.
+    drive_service = None
+    forms_service = None
     for ident in split_identifiers(sources):
         form_id = extract_form_id(ident)
         if form_id:
             all_form_ids.add(form_id)
             continue
-        all_folder_ids.update(parse_folder_identifier(ident))
+        if drive_service is None and not str(ident).strip().startswith('http'):
+            drive_service = get_drive_service()
+        all_folder_ids.update(parse_folder_identifier(ident, drive_service=drive_service))
+
+    if all_form_ids and forms_service is None:
+        forms_service = get_service()
+    if all_folder_ids and drive_service is None:
+        drive_service = get_drive_service()
 
     all_forms = []
     seen_forms = set()
@@ -335,7 +367,8 @@ def find_all_forms_in_sources(sources, progress_callback=None):
             progress_callback(f"Adding form URL {form_id}")
         all_forms.append({
             "url": normalize_form_url(form_id),
-            "title": get_form_title(form_id, progress_callback=progress_callback),
+            "title": get_form_title(form_id, progress_callback=progress_callback,
+                                    forms_service=forms_service),
             "last_submission": None,
         })
 
@@ -344,7 +377,8 @@ def find_all_forms_in_sources(sources, progress_callback=None):
             progress_callback(f"Finding forms in folder {folder_id}")
         all_forms.extend(
             find_all_forms_in_folder(
-                folder_id, progress_callback=progress_callback, seen_forms=seen_forms
+                folder_id, progress_callback=progress_callback, seen_forms=seen_forms,
+                drive_service=drive_service, forms_service=forms_service,
             )
         )
 
@@ -361,12 +395,25 @@ def find_forms_with_submissions_in_range(
 
     all_folder_ids = set()
     all_form_ids = set()
+    # Build each service at most once for the whole scan. Previously every
+    # identifier/folder/form constructed fresh API clients; on the GUI's auto
+    # -run worker thread this produced rapid client-construction bursts that
+    # correlated with every recorded native abort of the GUI process.
+    drive_service = None
+    forms_service = None
     for ident in split_identifiers(folder_identifiers):
         form_id = extract_form_id(ident)
         if form_id:
             all_form_ids.add(form_id)
             continue
-        all_folder_ids.update(parse_folder_identifier(ident))
+        if drive_service is None and not str(ident).strip().startswith('http'):
+            drive_service = get_drive_service()
+        all_folder_ids.update(parse_folder_identifier(ident, drive_service=drive_service))
+
+    if (all_form_ids or all_folder_ids) and forms_service is None:
+        forms_service = get_service()
+    if all_folder_ids and drive_service is None:
+        drive_service = get_drive_service()
 
     all_forms = []
     seen_forms = set()
@@ -378,9 +425,11 @@ def find_forms_with_submissions_in_range(
         if progress_callback:
             progress_callback(f"Checking form URL {form_id}")
 
-        title = get_form_title(form_id, progress_callback=progress_callback)
+        title = get_form_title(form_id, progress_callback=progress_callback,
+                               forms_service=forms_service)
         last_ts = get_last_submission_time(
-            form_id, from_dt=from_dt, progress_callback=progress_callback
+            form_id, from_dt=from_dt, progress_callback=progress_callback,
+            forms_service=forms_service,
         )
         if last_ts and from_dt <= last_ts <= to_dt:
             all_forms.append({
@@ -393,7 +442,9 @@ def find_forms_with_submissions_in_range(
         if progress_callback:
             progress_callback(f"Searching folder {folder_id}")
         all_forms.extend(
-            find_forms_in_folder(folder_id, from_dt, to_dt, progress_callback=progress_callback, seen_forms=seen_forms)
+            find_forms_in_folder(folder_id, from_dt, to_dt, progress_callback=progress_callback,
+                                 seen_forms=seen_forms, drive_service=drive_service,
+                                 forms_service=forms_service)
         )
 
     # Deduplicate (extra safety)

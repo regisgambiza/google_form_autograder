@@ -1128,6 +1128,20 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                 qid = batch.question.get("questionId")
                 queue_wait_s = max(0.0, time.monotonic() - batch.queued_monotonic)
                 queue_wait_ms = int(queue_wait_s * 1000)
+                try:
+                    import crash_diagnostics
+
+                    crash_diagnostics.set_grading_state(
+                        stage="ai_jury",
+                        form_id=batch.form_id,
+                        form_title=batch.form_title,
+                        question_id=qid,
+                        question_title=str(batch.question.get("title", "") or ""),
+                        answers_in_batch=len(batch.tasks),
+                        worker=worker_id,
+                    )
+                except Exception:
+                    pass
                 update_runtime_state(
                     active_task=f"f{batch.form_idx}:q{qid}:batch",
                     active_form=batch.form_id,
@@ -1207,6 +1221,20 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
             tid = task_id(t)
             queue_wait_s = max(0.0, time.monotonic() - t.queued_monotonic)
             queue_wait_ms = int(queue_wait_s * 1000)
+            try:
+                import crash_diagnostics
+
+                crash_diagnostics.set_grading_state(
+                    stage="ai_jury",
+                    form_id=t.form_id,
+                    form_title=t.form_title,
+                    question_id=t.question.get("questionId", ""),
+                    question_title=str(t.question.get("title", "") or ""),
+                    answer_index=t.answer_idx,
+                    answer_preview=safe_text(t.answer)[:60],
+                )
+            except Exception:
+                pass
             update_runtime_state(
                 active_task=tid, active_form=t.form_id,
                 active_question=t.question.get("questionId", ""),
