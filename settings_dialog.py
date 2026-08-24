@@ -917,6 +917,18 @@ def show_settings_dialog(owner):
     evaluator_combo.setCurrentIndex(0 if ev == "ai_evaluator" else (2 if ev == "ai_evaluator_semantic" else 1))
     strictness_combo.setCurrentText(cfg.get("grading_strictness", cfg.get("leniency", "balanced")))
     provider_strategy_combo.setCurrentText(cfg.get("provider_strategy", "free_first_ollama_fallback"))
+    # Dual Lane settings are namespaced (config["dual_lane"]) so editing them
+    # never touches the Single Local / Single OpenRouter keys. When the dialog
+    # opens in dual_lane mode, populate the lane fields from that namespace.
+    if provider_strategy_combo.currentText() == "dual_lane":
+        _dl = cfg.get("dual_lane") or {}
+        try:
+            if "openrouter_ai_worker_count" in _dl:
+                openrouter_ai_worker_count_spin.setValue(max(1, int(_dl["openrouter_ai_worker_count"])))
+            if "llamacpp_ai_worker_count" in _dl:
+                llamacpp_ai_worker_count_spin.setValue(max(1, int(_dl["llamacpp_ai_worker_count"])))
+        except Exception:
+            pass
     max_openrouter_spend_spin.setValue(float(cfg.get("max_openrouter_spend_usd_per_run", 0.0) or 0.0))
     if models:
         model_combo.setCurrentText(models[0])
@@ -1179,8 +1191,17 @@ def show_settings_dialog(owner):
         preset = EXECUTION_MODE_PRESETS.get(selected_mode, EXECUTION_MODE_PRESETS[DEFAULT_EXECUTION_MODE])
         for key, value in preset.items():
             config_data[key] = value
-        config_data["openrouter_ai_worker_count"] = int(openrouter_ai_worker_count_spin.value())
-        config_data["llamacpp_ai_worker_count"] = int(llamacpp_ai_worker_count_spin.value())
+        if config_data.get("provider_strategy") == "dual_lane":
+            # MODE ISOLATION: Dual Lane persists its lane settings in its own
+            # namespace; the Single Local / Single OpenRouter keys are left
+            # untouched so switching modes cannot leak configuration.
+            dual_lane_cfg = dict(config_data.get("dual_lane") or {})
+            dual_lane_cfg["openrouter_ai_worker_count"] = int(openrouter_ai_worker_count_spin.value())
+            dual_lane_cfg["llamacpp_ai_worker_count"] = int(llamacpp_ai_worker_count_spin.value())
+            config_data["dual_lane"] = dual_lane_cfg
+        else:
+            config_data["openrouter_ai_worker_count"] = int(openrouter_ai_worker_count_spin.value())
+            config_data["llamacpp_ai_worker_count"] = int(llamacpp_ai_worker_count_spin.value())
         config_data["ollama_ai_worker_count"] = int(ollama_ai_worker_count_spin.value())
         config_data["openrouter_worker_count"] = int(openrouter_worker_count_spin.value())
         config_data["llamacpp_worker_count"] = int(llamacpp_worker_count_spin.value())

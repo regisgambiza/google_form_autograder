@@ -266,10 +266,10 @@ def deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]
 
 
 def load_config(path: str = "config.json") -> Dict[str, Any]:
-    """Load config with defaults."""
+    """Load config with defaults (utf-8-sig tolerates editor/shell BOMs)."""
     cfg = copy.deepcopy(DEFAULT_CONFIG)
     if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8-sig") as f:
             cfg = deep_merge(cfg, json.load(f))
     return cfg
 
@@ -307,6 +307,20 @@ def configured_provider_names(cfg: Dict[str, Any]) -> list[str]:
     return out or ["openrouter", "llamacpp", "ollama"]
 
 
+def dual_lane_settings(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """Dual-lane-specific settings namespace (isolated from single modes).
+
+    Lives at ``config["dual_lane"]`` so editing Dual Lane settings never
+    touches the keys used by Single Local / Single OpenRouter modes:
+        dual_lane.openrouter_ai_worker_count
+        dual_lane.llamacpp_ai_worker_count
+        dual_lane.openrouter_models  {role: [models]}
+        dual_lane.llamacpp_models    {role: model}
+    """
+    ns = cfg.get("dual_lane")
+    return dict(ns) if isinstance(ns, dict) else {}
+
+
 def is_llamacpp_only(cfg: Dict[str, Any]) -> bool:
     """True when every AI model request should be routed only to llama.cpp."""
     return configured_provider_names(cfg) == ["llamacpp"]
@@ -320,18 +334,46 @@ def is_dual_lane(cfg: Dict[str, Any]) -> bool:
 def effective_lane_workers(cfg: Dict[str, Any]) -> Dict[str, int]:
     """Per-lane AI worker counts for the dual_lane strategy; empty for other strategies.
 
-    Lane counts come from the existing per-provider worker keys so no new config
-    surface is required. Providers not active under the strategy are omitted.
+    Counts come from the dual_lane namespace first (mode-isolated settings) and
+    fall back to the legacy per-provider keys so existing configs keep working.
+    Providers not active under the strategy are omitted.
     """
     if not is_dual_lane(cfg):
         return {}
     legacy_count = max(1, int(cfg.get("ai_worker_count", 4) or 4))
+    ns = dual_lane_settings(cfg)
+
+    def _count(provider: str, default: int) -> int:
+        for key in (f"{provider}_ai_worker_count", provider):
+            if key in ns:
+                try:
+                    return max(1, int(ns[key] or default))
+                except (TypeError, ValueError):
+                    continue
+        return max(1, int(cfg.get(f"{provider}_ai_worker_count", default) or default))
+
     counts = {
-        "openrouter": max(1, int(cfg.get("openrouter_ai_worker_count", legacy_count) or legacy_count)),
-        "llamacpp": max(1, int(cfg.get("llamacpp_ai_worker_count", 1) or 1)),
+        "openrouter": _count("openrouter", legacy_count),
+        "llamacpp": _count("llamacpp", 1),
     }
     active = set(configured_provider_names(cfg))
     return {name: count for name, count in counts.items() if name in active}
+
+
+def dual_lane_role_models(cfg: Dict[str, Any], provider_name: str, role: str) -> list:
+    """Dual-lane per-role model override list; [] when not overridden.
+
+    Lets Dual Lane use different models than Single Local / Single OpenRouter
+    without mutating the shared ``openrouter_models`` / ``llamacpp_models`` keys.
+    """
+    ns = dual_lane_settings(cfg)
+    models_map = ns.get(f"{provider_name}_models")
+    if not isinstance(models_map, dict):
+        return []
+    values = models_map.get(role) or []
+    if isinstance(values, str):
+        values = [values]
+    return [str(v).strip() for v in values if str(v).strip()]
 
 
 def effective_jury_concurrency(cfg: Dict[str, Any]) -> int:

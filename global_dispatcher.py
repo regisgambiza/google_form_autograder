@@ -210,6 +210,58 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
     lane_specs: List[tuple[str, int]] = [
         (name, count) for name, count in effective_lane_workers(cfg).items() if count > 0
     ]
+    # Independent per-lane failure domains for dual_lane. A lane being down
+    # NEVER sets the run-global stop/failed events; the session continues on
+    # whichever lanes remain operational.
+    _LANE_LABELS = {"llamacpp": "LOCAL LANE", "openrouter": "OPENROUTER LANE", "ollama": "OLLAMA LANE"}
+    lane_state: Dict[str, Dict] = {
+        name: {
+            "status": "starting",       # starting | active | unavailable | disabled
+            "reason": "",
+            "jobs_received": 0,
+            "jobs_done": 0,
+            "unavailable_since": None,
+            "disabled_logged": False,
+        }
+        for name, _c in lane_specs
+    }
+    dual_lane_enabled = bool(lane_specs)
+    all_lanes_down_announced = False
+
+    def _lane_label(name: Optional[str]) -> str:
+        return _LANE_LABELS.get(str(name or ""), f"LANE {name}")
+
+    def _lane_log(name: Optional[str], message: str, level: str = "INFO") -> None:
+        log(level, f"[{_lane_label(name)}] {message}")
+
+    def _set_lane_status(name: str, status: str, reason: str = "") -> None:
+        with metrics_lock:
+            state = lane_state.get(name)
+            if not state:
+                return
+            previous = state["status"]
+            state["status"] = status
+            if reason:
+                state["reason"] = reason
+        if previous != status:
+            _lane_log(
+                name,
+                f"Lane {status}" + (f" ({reason})" if reason else ""),
+                level="WARNING" if status in {"unavailable", "disabled"} else "INFO",
+            )
+
+    def _all_lanes_unavailable(exclude: Optional[str] = None) -> bool:
+        from provider_manager import is_provider_available
+
+        for name, _count in lane_specs:
+            if name == exclude:
+                continue
+            try:
+                if is_provider_available(name):
+                    return False
+            except Exception:
+                continue
+        return True
     total_ai_workers = (
         sum(count for _, count in lane_specs) if lane_specs else effective_ai_worker_count(cfg)
     )
@@ -1098,66 +1150,25 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                     pass
 
     def ai_worker(worker_id: str, lane_provider: Optional[str] = None):
+        nonlocal all_lanes_down_announced
         log("INFO", f"[Worker: AI] START ai_worker id={worker_id} lane={lane_provider or 'generic'}")
         log("INFO", f"[APP WORKER] id={worker_id} type=ai status=idle current=- answers=0 latency_ms=0 queue_wait_ms=0")
+        if lane_provider:
+            _set_lane_status(lane_provider, "active")
+            _lane_log(lane_provider, f"Worker created and started ({worker_id})")
         if model_first_batching:
             my_q = ai_batch_q
-            while not stop.is_set():
-                # If this lane's provider is down, don't steal work from healthy lanes,
-                # but still need to exit when shared work is done (otherwise sentinel
-                # never consumed and dispatcher hangs).
-                if lane_provider:
-                    try:
-                        from provider_manager import is_provider_available
 
-                        if not is_provider_available(lane_provider):
-                            time.sleep(0.2)
-                            with metrics_lock:
-                                _exp = int(progress.get("expected_tasks", 0))
-                                _comp = int(progress.get("completed", 0))
-                                _back = int(progress.get("ai_backlog", 0))
-                            if _exp > 0 and _comp >= _exp and _back <= 0:
-                                log("INFO", f"[Worker: AI] DONE ai_worker id={worker_id} (provider unavailable, work complete)")
-                                return
-                            # Also drain sentinel if it arrived while sleeping
-                            try:
-                                _peek = my_q.get(timeout=0.05)
-                                if _peek is None:
-                                    log("INFO", f"[Worker: AI] DONE ai_worker id={worker_id} (sentinel while unavailable)")
-                                    return
-                                # Put back real work for healthy workers (preserve order best effort)
-                                my_q.put(_peek, timeout=1)
-                            except queue.Empty:
-                                pass
-                            continue
-                    except Exception:
-                        pass
-                try:
-                    batch = my_q.get(timeout=1)
-                except queue.Empty:
-                    with metrics_lock:
-                        expected = int(progress.get("expected_tasks", 0))
-                        completed = int(progress.get("completed", 0))
-                        backlog = int(progress.get("ai_backlog", 0))
-                    if expected > 0 and completed >= expected and backlog <= 0:
-                        log("INFO", f"[Worker: AI] DONE ai_worker id={worker_id} (all batched work complete) exp={expected} comp={completed} back={backlog} q_ai={my_q.qsize()}")
-                        log("INFO", f"[APP WORKER] id={worker_id} type=ai status=done current=- answers=0 latency_ms=0 queue_wait_ms=0")
-                        return
-                    continue
-                if batch is None:
-                    with metrics_lock:
-                        _exp2 = int(progress.get("expected_tasks", 0))
-                        _comp2 = int(progress.get("completed", 0))
-                        _back2 = int(progress.get("ai_backlog", 0))
-                    log("INFO", f"[Worker: AI] DONE ai_worker id={worker_id} (sentinel) exp={_exp2} comp={_comp2} back={_back2} q_ai={my_q.qsize()}")
-                    log("INFO", f"[APP WORKER] id={worker_id} type=ai status=done current=- answers=0 latency_ms=0 queue_wait_ms=0")
-                    return
-
-                hint_for_run = lane_provider
-
-                qid = batch.question.get("questionId")
-                queue_wait_s = max(0.0, time.monotonic() - batch.queued_monotonic)
+            def _process_batch(batch, worker_id: str, hint_for_run, qid, queue_wait_s: float) -> None:
                 queue_wait_ms = int(queue_wait_s * 1000)
+                st = lane_state.get(lane_provider) if lane_provider else None
+                if st is not None:
+                    st["jobs_received"] += 1
+                    _lane_log(
+                        lane_provider,
+                        f"Job received q={qid} answers={len(batch.tasks)} "
+                        f"(lane jobs received={st['jobs_received']}, done={st['jobs_done']})",
+                    )
                 try:
                     import crash_diagnostics
 
@@ -1214,6 +1225,8 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                     counters["ai"] += len(batch_results)
                     ai_progress["last_ai_done_ts"] = time.time()
                     progress["ai_backlog"] = max(0, progress["ai_backlog"] - len(batch.tasks))
+                    if st is not None:
+                        st["jobs_done"] += len(batch_results)
                 elapsed_s = time.perf_counter() - started
                 latency_ms = int(elapsed_s * 1000)
                 log(
@@ -1221,12 +1234,139 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                     f"[BATCH END] worker={worker_id} lane={lane_provider or 'generic'} form_id={batch.form_id} question_id={qid} "
                     f"answers={len(batch.tasks)} duration_s={elapsed_s:.2f}",
                 )
+                if st is not None:
+                    _lane_log(
+                        lane_provider,
+                        f"Job completed q={qid} graded={len(batch_results)} "
+                        f"(lane totals received={st['jobs_received']}, done={st['jobs_done']}, status={st['status']})",
+                    )
                 log(
                     "INFO",
                     f"[APP WORKER] id={worker_id} type=ai status=idle current=f{batch.form_idx}:q{qid} "
                     f"answers={len(batch.tasks)} latency_ms={latency_ms} queue_wait_ms={queue_wait_ms}",
                 )
                 update_runtime_state(active_task="", active_model="idle", active_since=0.0)
+
+            while not stop.is_set():
+                # Independent failure domains: an unhealthy OWN lane waits for
+                # recovery instead of stealing work from healthy lanes, but a
+                # lane failure never touches other lanes or the run itself.
+                if lane_provider:
+                    lane_unavailable = False
+                    try:
+                        from provider_manager import is_provider_available
+
+                        lane_unavailable = not is_provider_available(lane_provider)
+                    except Exception:
+                        lane_unavailable = False
+
+                    if lane_unavailable:
+                        st = lane_state.get(lane_provider) or {}
+                        now_mono = time.monotonic()
+                        if st.get("unavailable_since") is None:
+                            st["unavailable_since"] = now_mono
+                            _set_lane_status(lane_provider, "unavailable",
+                                             "provider reports unavailable")
+                            _lane_log(
+                                lane_provider,
+                                "Provider unavailable - worker standing by; "
+                                "other lanes continue grading independently",
+                                level="WARNING",
+                            )
+                        disable_after = 240.0
+                        try:
+                            cfg_now = load_config()
+                            disable_after = max(30.0, float(cfg_now.get("dual_lane_lane_disable_seconds", 240) or 240))
+                        except Exception:
+                            pass
+                        if (not st.get("disabled_logged")) and (now_mono - st["unavailable_since"]) >= disable_after:
+                            st["disabled_logged"] = True
+                            _set_lane_status(lane_provider, "disabled",
+                                             f"unavailable for {disable_after:.0f}s")
+                            other_names = [_LANE_LABELS.get(n, n) for n, _c in lane_specs if n != lane_provider]
+                            _lane_log(
+                                lane_provider,
+                                ("Lane disabled for this run. "
+                                 + (f"{', '.join(other_names)} remain(s) active." if other_names else "No other lane configured.")),
+                                level="WARNING",
+                            )
+                        elif st.get("disabled_logged") and st["status"] == "disabled":
+                            pass
+                        with metrics_lock:
+                            _exp = int(progress.get("expected_tasks", 0))
+                            _comp = int(progress.get("completed", 0))
+                            _back = int(progress.get("ai_backlog", 0))
+                        if _exp > 0 and _comp >= _exp and _back <= 0:
+                            log("INFO", f"[Worker: AI] DONE ai_worker id={worker_id} (provider unavailable, work complete)")
+                            return
+                        # Both lanes down: best-effort attempt keeps the session
+                        # alive instead of two sleeping workers deadlocking on
+                        # queued work. Hint priority still tries own provider
+                        # first; ask() failover covers the rest.
+                        if _all_lanes_unavailable(exclude=lane_provider):
+                            if not all_lanes_down_announced:
+                                all_lanes_down_announced = True
+                                names = ", ".join(_LANE_LABELS.get(n, n) for n, _c in lane_specs)
+                                log("WARNING", f"[DUAL LANE] All lanes unavailable ({names}); best-effort attempts continue")
+                            try:
+                                _peek = my_q.get(timeout=0.2)
+                                if _peek is None:
+                                    log("INFO", f"[Worker: AI] DONE ai_worker id={worker_id} (sentinel while all lanes down)")
+                                    return
+                                hint_for_run = lane_provider
+                                qid = _peek.question.get("questionId")
+                                queue_wait_s = max(0.0, time.monotonic() - _peek.queued_monotonic)
+                                _process_batch(_peek, worker_id, hint_for_run, qid, queue_wait_s)
+                                continue
+                            except queue.Empty:
+                                pass
+                            time.sleep(1.0)
+                            continue
+                        # While OUR lane is down we deliberately do NOT touch the
+                        # shared queue: pulling and re-putting at the tail rotates
+                        # FIFO order and historically let a shutdown sentinel
+                        # surface ahead of real work (stranding batches).
+                        # Termination is handled by the work-complete check above
+                        # and the run-level stop event.
+                        time.sleep(0.5)
+                        continue
+                    else:
+                        st = lane_state.get(lane_provider) or {}
+                        was_down = st.get("unavailable_since") is not None or st.get("status") in {"unavailable", "disabled"}
+                        if was_down:
+                            st["unavailable_since"] = None
+                            st["disabled_logged"] = False
+                            _set_lane_status(lane_provider, "active")
+                            _lane_log(lane_provider, "Recovered - resuming grading", "WARNING")
+                        if all_lanes_down_announced:
+                            all_lanes_down_announced = False
+                            _lane_log(lane_provider, "At least one lane operational again - DUAL LANE resumed")
+                try:
+                    batch = my_q.get(timeout=1)
+                except queue.Empty:
+                    with metrics_lock:
+                        expected = int(progress.get("expected_tasks", 0))
+                        completed = int(progress.get("completed", 0))
+                        backlog = int(progress.get("ai_backlog", 0))
+                    if expected > 0 and completed >= expected and backlog <= 0:
+                        log("INFO", f"[Worker: AI] DONE ai_worker id={worker_id} (all batched work complete) exp={expected} comp={completed} back={backlog} q_ai={my_q.qsize()}")
+                        log("INFO", f"[APP WORKER] id={worker_id} type=ai status=done current=- answers=0 latency_ms=0 queue_wait_ms=0")
+                        return
+                    continue
+                if batch is None:
+                    with metrics_lock:
+                        _exp2 = int(progress.get("expected_tasks", 0))
+                        _comp2 = int(progress.get("completed", 0))
+                        _back2 = int(progress.get("ai_backlog", 0))
+                    log("INFO", f"[Worker: AI] DONE ai_worker id={worker_id} (sentinel) exp={_exp2} comp={_comp2} back={_back2} q_ai={my_q.qsize()}")
+                    log("INFO", f"[APP WORKER] id={worker_id} type=ai status=done current=- answers=0 latency_ms=0 queue_wait_ms=0")
+                    return
+
+                hint_for_run = lane_provider
+
+                qid = batch.question.get("questionId")
+                queue_wait_s = max(0.0, time.monotonic() - batch.queued_monotonic)
+                _process_batch(batch, worker_id, hint_for_run, qid, queue_wait_s)
             return
 
         while not stop.is_set():
@@ -1751,6 +1891,13 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                     f"apply={'idle' if apply_q.empty() else 'pending'} progress={comp}/{exp} q_ai={ai_backlog}"
                     f"{resource_text}",
                 )
+                if dual_lane_enabled and lane_state:
+                    lane_bits = []
+                    for _ln, lst in lane_state.items():
+                        lane_bits.append(f"{_LANE_LABELS.get(_ln, _ln)}={lst['status'].upper()}"
+                                         f"(jobs={lst['jobs_done']}" + (f",reason={lst['reason']})" if lst['reason'] else ")"))
+                    shared_q = ai_batch_q.qsize() if model_first_batching else ai_q.qsize()
+                    log("INFO", "[DUAL LANE STATUS] " + " | ".join(lane_bits) + f" | shared_queue={shared_q}")
                 snapshot = (
                     fetch_out.qsize(),
                     det_q.qsize(),
@@ -1938,6 +2085,14 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
             f"[DISPATCH] Run finished INCOMPLETE: {final_completed}/{final_expected} answers "
             "accounted for; check [REQUEUE]/judge errors above.",
         )
+        if dual_lane_enabled and lane_state:
+            for _ln, lst in lane_state.items():
+                log(
+                    "WARNING",
+                    f"[DUAL LANE SUMMARY] {_LANE_LABELS.get(_ln, _ln)}: status={lst['status']} "
+                    f"jobs_done={lst['jobs_done']}"
+                    + (f" reason={lst['reason']}" if lst["reason"] else ""),
+                )
         gui_event(
             "run_incomplete",
             completed=final_completed,

@@ -8,7 +8,11 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from evaluator_config import effective_provider_worker_counts, load_config
+from evaluator_config import (
+    dual_lane_role_models,
+    effective_provider_worker_counts,
+    load_config,
+)
 from logger import log, update_runtime_state
 from openrouter_model_registry import OpenRouterModelRegistry
 from provider_types import (
@@ -137,6 +141,8 @@ class _WorkItem:
     attempt: int
     result_q: "queue.Queue"
     queued_at: float = field(default_factory=time.monotonic)
+    started_at: float = 0.0
+    cancelled: bool = False
 
 
 @dataclass
@@ -249,7 +255,10 @@ class ProviderManager:
                     reason="no_models_after_filtering",
                     metadata=dict(request.metadata),
                 )
+            skip_provider = False
             for model in models:
+                if skip_provider:
+                    break
                 for attempt in range(attempts):
                     payload = dict(request.payload)
                     payload["model"] = model
@@ -301,6 +310,25 @@ class ProviderManager:
                         return response
                     except ProviderError as ex:
                         last_error = ex
+                        if ex.category == "lane_busy":
+                            # Congestion on this lane, not a provider fault:
+                            # reroute to the next lane WITHOUT poisoning the
+                            # circuit/cooldowns of the busy provider.
+                            log(
+                                "INFO",
+                                f"[PROVIDER REROUTE] from={provider_name} request={request.request_id} "
+                                f"judge={request.judge_name} reason={ex}",
+                            )
+                            _trace_model_selection(
+                                "model_rerouted",
+                                request_id=request.request_id,
+                                judge=request.judge_name,
+                                provider=provider_name,
+                                model=model,
+                                category=ex.category,
+                            )
+                            skip_provider = True
+                            break
                         self._record_failure(provider_name, ex)
                         self._record_model_failure(provider_name, model, ex, request.judge_name)
                         log(
@@ -327,7 +355,7 @@ class ProviderManager:
                             self._record_retry(provider_name)
                         if ex.category in {"rate_limited", "out_of_credits", "disabled"}:
                             break
-                if provider_name == "ollama":
+                if skip_provider or provider_name == "ollama":
                     break
 
         self._emit_metrics()
@@ -592,6 +620,11 @@ class ProviderManager:
         q = self._queues[provider_name]
         while True:
             item: _WorkItem = q.get()
+            if getattr(item, "cancelled", False):
+                # Rerouted to another lane while sitting in this backlog.
+                q.task_done()
+                continue
+            item.started_at = time.monotonic()
             start = time.perf_counter()
             queue_wait_ms = max(0.0, (time.monotonic() - item.queued_at) * 1000.0)
             self._set_worker_status(worker_id, "running", item.model, item.request.request_id, 0.0, queue_wait_ms)
@@ -625,6 +658,20 @@ class ProviderManager:
             finally:
                 q.task_done()
 
+    def _pickup_timeout_s(self, item: _WorkItem) -> float:
+        """How long a request may sit unstarted in a lane backlog before ask()
+        reroutes it to the next provider. Scaled with batch size so legitimate
+        long batches are not abandoned mid-queue."""
+        try:
+            base = float(load_config().get("provider_pickup_timeout_seconds", 45) or 45)
+        except Exception:
+            base = 45.0
+        try:
+            batch_n = int(item.request.metadata.get("batch_answer_count") or 1)
+        except Exception:
+            batch_n = 1
+        return max(base, min(240.0, base * max(1, batch_n // 4)))
+
     def _submit_and_wait(self, item: _WorkItem) -> ProviderResponse:
         with self._lock:
             self._metrics["submitted"] += 1
@@ -645,11 +692,29 @@ class ProviderManager:
         except queue.Full as ex:
             raise ProviderError(f"{item.provider_name} queue is full", "queue_full") from ex
         deadline = time.monotonic() + item.request.timeout_s + 15
+        pickup_timeout_s = self._pickup_timeout_s(item)
         while True:
             self._touch_provider_heartbeat(item)
-            remaining = deadline - time.monotonic()
+            now = time.monotonic()
+            remaining = deadline - now
             if remaining <= 0:
                 raise ProviderError("Provider worker timed out", "timeout")
+            # Lane-backlog rerouting: if this provider's workers have not even
+            # PICKED UP the item within the pickup window, cancel it here and
+            # let ask() fail over to the next lane instead of blocking this
+            # caller for the full (potentially hours-long) judge timeout.
+            if (
+                not item.started_at
+                and pickup_timeout_s > 0
+                and (now - item.queued_at) >= pickup_timeout_s
+                and self._queues[item.provider_name].qsize() > 0
+            ):
+                item.cancelled = True
+                raise ProviderError(
+                    f"{item.provider_name} lane backlog: no free worker picked up the "
+                    f"request within {pickup_timeout_s:.0f}s; rerouting",
+                    "lane_busy",
+                )
             try:
                 result = item.result_q.get(timeout=min(10.0, remaining))
                 break
@@ -738,7 +803,9 @@ class ProviderManager:
             )
             return models
         if provider_name == "llamacpp":
-            role_models = ((cfg.get("llamacpp_models") or {}).get(request.judge_name) or [])
+            dl_override = dual_lane_role_models(cfg, "llamacpp", request.judge_name) \
+                if str(cfg.get("provider_strategy", "")).casefold() == "dual_lane" else []
+            role_models = list(dl_override) or ((cfg.get("llamacpp_models") or {}).get(request.judge_name) or [])
             if isinstance(role_models, str):
                 role_models = [role_models]
             fallback_models = cfg.get("llamacpp_fallback_models") or []
@@ -781,7 +848,9 @@ class ProviderManager:
             )
             return deduped_models
         strategy = str(cfg.get("provider_strategy", "free_first_ollama_fallback") or "").strip().casefold()
-        role_models = ((cfg.get("openrouter_models") or {}).get(request.judge_name) or [])
+        dl_override = dual_lane_role_models(cfg, "openrouter", request.judge_name) \
+            if strategy == "dual_lane" else []
+        role_models = list(dl_override) or ((cfg.get("openrouter_models") or {}).get(request.judge_name) or [])
         free_fallback_models = self._rotate_models_for_role(cfg.get("openrouter_fallback_models") or [], request.judge_name)
         paid_fallback_models = self._rotate_models_for_role(cfg.get("openrouter_paid_fallback_models") or [], request.judge_name)
         request_fallback_models = self._rotate_models_for_role(request.fallback_models, request.judge_name)
