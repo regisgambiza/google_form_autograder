@@ -7,7 +7,11 @@ from typing import Dict, List
 from logger import log
 from form_utils import get_form_structure
 from form_context_builder import apply_question_context, build_form_context, get_effective_expected
-from response_utils import get_responses
+from response_utils import (
+    get_last_grading_time,
+    log_submission_selection,
+    select_responses_for_mode,
+)
 from auth import get_service
 
 
@@ -54,8 +58,15 @@ def _fetch_single_form(idx: int, total: int, form_url: str, grade_recent_only: b
         form_data = {"items": []}
         form_title = f"Form_{form_id}"
 
-    # Fetch all responses once per form to avoid quota blowups.
+    # Fetch all responses once per form to avoid quota blowups, then apply the
+    # MODE SELECTION contract: the filtered collection is the only thing the
+    # grading pipeline ever sees.
     all_responses = _fetch_all_form_responses_with_backoff(service, form_id)
+    cutoff = get_last_grading_time(form_id) if grade_recent_only else None
+    all_responses, selection = select_responses_for_mode(
+        all_responses, grade_recent_only, cutoff=cutoff, form_id=form_id,
+    )
+    log_submission_selection(form_id, selection)
 
     expected_by_item_id: Dict[str, List[str]] = {}
     try:
@@ -77,7 +88,6 @@ def _fetch_single_form(idx: int, total: int, form_url: str, grade_recent_only: b
         responses = _extract_answers_for_question(
             all_responses=all_responses,
             question_id=q["questionId"],
-            grade_recent_only=grade_recent_only,
         )
         expected = get_effective_expected(q, expected_by_item_id.get(q["itemId"], []))
         if q["type"] in text_types:
@@ -119,24 +129,19 @@ def _fetch_all_form_responses_with_backoff(service, form_id: str, max_retries: i
             return all_responses
 
 
-def _extract_answers_for_question(all_responses: List[Dict], question_id: str, grade_recent_only: bool) -> List[str]:
+def _extract_answers_for_question(
+    all_responses: List[Dict], question_id: str, grade_recent_only: bool = False
+) -> List[str]:
+    """Answer values for one question from an ALREADY mode-selected list.
+
+    ``grade_recent_only`` is accepted for backwards compatibility; selection
+    now happens once per form in ``_fetch_single_form``.
+    """
     answers: List[str] = []
     if not all_responses:
         return answers
 
-    # For recent-only mode here, keep a simple latest-submission-batch policy.
-    candidate_responses = all_responses
-    if grade_recent_only:
-        timestamps = []
-        for r in all_responses:
-            ts = r.get("submitTime") or r.get("lastSubmittedTime") or r.get("createTime")
-            if ts:
-                timestamps.append((r, ts))
-        if timestamps:
-            latest = max(ts for _, ts in timestamps)
-            candidate_responses = [r for r, ts in timestamps if ts == latest]
-
-    for resp in candidate_responses:
+    for resp in all_responses:
         ans_dict = resp.get("answers", {})
         if question_id not in ans_dict:
             continue

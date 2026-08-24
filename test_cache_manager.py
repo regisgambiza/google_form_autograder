@@ -43,13 +43,17 @@ def test_fresh_run_mode_automatically_discards_previous_run_cache(tmp_path):
     cached.parent.mkdir(parents=True)
     cached.write_text("{}", encoding="utf-8")
     history = tmp_path / ".grading_timestamps.json"
-    history.write_text("{}", encoding="utf-8")
+    history.write_text('{"formA": "2026-01-01T00:00:00+00:00"}', encoding="utf-8")
 
     result = prepare_fresh_grading_run({"ignore_grading_cache": True}, tmp_path)
 
     assert result["removed_files"] == 1
     assert not cached.exists()
-    assert not history.exists()
+    # The per-form "last graded" anchors define the RECENT_ONLY window and
+    # must survive automatic fresh-run cache cleanup (regression: wiping them
+    # silently degraded Recent Only mode into latest-batch-only grading).
+    assert history.exists()
+    assert result["history_removed"] == 0
 
 
 def test_cache_is_preserved_when_fresh_run_mode_is_disabled(tmp_path):

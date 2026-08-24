@@ -1815,6 +1815,11 @@ class AutograderWindow(QMainWindow):
                     self.append_debug(f"<font color='orange'>[GRADER] Failed to truncate answers for {fid}: {exc}</font>")
 
         grade_recent_only = force_recent_only or ((not force_whole_form) and self.grading_mode == "Recent Only")
+        self.append_debug(
+            f"<font color='blue'>[GRADER] Mode: {'RECENT_ONLY' if grade_recent_only else 'WHOLE_FORM'} · "
+            f"forms={len(target_urls) if target_urls is not None else 'all queued'} · "
+            f"recent_only={grade_recent_only} (recent window = since each form was last graded)</font>"
+        )
         # Park the previous grader thread before replacing its reference: a
         # QThread destroyed while still finishing is fatal (qFatal -> fail-fast).
         old_grader = self.grader_thread

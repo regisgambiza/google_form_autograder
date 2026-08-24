@@ -241,7 +241,12 @@ def main():
 
     grade_recent_only = os.environ.get("GRADE_RECENT_ONLY", "false").lower() == "true"
     if grade_recent_only:
-        log("INFO", "RUNNING IN RECENT SUBMISSIONS ONLY MODE - Only new submissions will be graded")
+        log(
+            "INFO",
+            "RUNNING IN RECENT SUBMISSIONS ONLY MODE - per form, only submissions newer "
+            "than its last-graded timestamp are selected (never-graded forms fall back "
+            "to their latest submission batch); AI calls run for those submissions only",
+        )
     else:
         log("INFO", "RUNNING IN WHOLE FORM MODE - All submissions will be graded")
 

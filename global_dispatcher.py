@@ -33,7 +33,12 @@ from form_context_builder import (
 )
 from form_utils import get_form_structure
 from logger import gui_event, log, runtime_snapshot, stage_banner, update_runtime_state
-from response_utils import save_grading_time
+from response_utils import (
+    get_last_grading_time,
+    log_submission_selection,
+    save_grading_time,
+    select_responses_for_mode,
+)
 from updater import update_correct_answers
 from answer_key_manager import (
     enqueue_review,
@@ -492,7 +497,23 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
             page = resp.get("nextPageToken")
             if not page:
                 break
-        return {"idx": i, "url": url, "form_id": form_id, "title": title, "structure": structure, "form_data": form, "responses": responses}
+        # MODE SELECTION: the filtered collection produced here is THE input to
+        # task building - totals, progress and AI calls all derive from it.
+        cutoff = get_last_grading_time(form_id) if grade_recent_only else None
+        responses, selection = select_responses_for_mode(
+            responses, grade_recent_only, cutoff=cutoff, form_id=form_id,
+        )
+        log_submission_selection(form_id, selection)
+        return {
+            "idx": i,
+            "url": url,
+            "form_id": form_id,
+            "title": title,
+            "structure": structure,
+            "form_data": form,
+            "responses": responses,
+            "selection": selection,
+        }
 
     def fetch_stage():
         log("INFO", "[Worker: Producer] START fetch_stage")
@@ -567,7 +588,16 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                 structure = item["structure"] or []
                 form_data = item["form_data"] or {"items": []}
                 all_responses = item["responses"] or []
+                selection = item.get("selection") or {}
                 forms_results[i] = {"meta": item, "question_answers": {}, "question_reviews": {}, "question_rejected": {}, "counts": {}}
+                log(
+                    "INFO",
+                    f"[TASK BUILD] form_id={form_id} mode={selection.get('mode', 'WHOLE_FORM')} "
+                    f"policy={selection.get('policy', 'all')} "
+                    f"submissions_selected={len(all_responses)} "
+                    f"(available={selection.get('total_available', len(all_responses))}, "
+                    f"filtered_out={selection.get('filtered_out', 0)})",
+                )
                 # Per-form progress slot: totals come solely from THIS form's
                 # own question loop; no other form can touch it.
                 form_total_answers = 0

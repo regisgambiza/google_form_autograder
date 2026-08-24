@@ -47,7 +47,11 @@ _FORM_PAYLOAD = {
 
 _RESPONSES_PAYLOAD = {
     "responses": [
-        {"answers": {"q1": {"textAnswers": {"answers": [{"value": "42"}]}}}},
+        {
+            # Real Forms API responses always carry a submission time; the
+            # RECENT_ONLY selector relies on it.
+            "submitTime": "2026-08-24T00:00:00Z",
+            "answers": {"q1": {"textAnswers": {"answers": [{"value": "42"}]}}}},
     ]
 }
 
