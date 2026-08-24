@@ -12,6 +12,7 @@ from typing import Dict, List
 
 from auth import get_service
 from feedback import generate_form_feedback
+import grading_session
 from form_context_builder import (
     apply_question_context,
     build_form_context,
@@ -210,6 +211,9 @@ def main():
         crash_diagnostics.install(app_name="GoogleFormAutograder", context="grader")
     except Exception:
         pass
+    # A fresh child session must not inherit stale pause/stop requests left
+    # by an earlier run; the GUI writes these while its own child is active.
+    grading_session.clear_all()
     acquire_grader_lock()
     run_id = datetime.now(timezone.utc).strftime("run-%Y%m%dT%H%M%SZ") + f"-{os.getpid()}"
     config_hash = hashlib.sha256(json.dumps(config, sort_keys=True).encode("utf-8")).hexdigest()[:12]
@@ -282,6 +286,10 @@ def main():
             f"[DISPATCH] Global form mode enabled: grading up to {concurrent_forms} form(s) at a time.",
         )
         for chunk in chunked(form_urls, concurrent_forms):
+            if grading_session.is_stop_requested():
+                log("WARNING", "[GRADING SESSION] Stop requested - remaining form chunks will not start")
+                break
+            grading_session.wait_if_paused()
             for form_url in chunk:
                 form_id = "unknown"
                 try:

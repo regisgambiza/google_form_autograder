@@ -289,6 +289,9 @@ class AutograderWindow(QMainWindow):
         self.tray_icon = None
         self.max_gui_log_lines = 2500
         self.debug_lines = []
+        # Grading session control (RUNNING / PAUSED / STOPPED).
+        self._session_stop = False
+        self._session_paused = False
         self.pipeline_stage_counts = {}
         self._row_bars = {}  # url -> QProgressBar cell widget in the form table
         self._category_status = "all"  # active tree category filter
@@ -392,6 +395,8 @@ class AutograderWindow(QMainWindow):
         # wire pages
         self.dashboard.run_clicked.connect(self.run_grader)
         self.dashboard.stop_clicked.connect(self.stop_grading)
+        self.dashboard.pause_clicked.connect(self.pause_grading)
+        self.dashboard.resume_clicked.connect(self.resume_grading)
         self.dashboard.add_sources_clicked.connect(self.open_manual_add_dialog)
         self.dashboard.scan_clicked.connect(self.open_quick_grade_dialog)
         self.dashboard.schedule_clicked.connect(self.open_auto_run_dialog)
@@ -483,6 +488,9 @@ class AutograderWindow(QMainWindow):
         self.stop_tool = tool("Stop", "stop", ACCENT_RED, self.stop_grading,
                               "Stop grading (Ctrl+Shift+S)")
         self.stop_tool.setEnabled(False)
+        # Permanent Pause/Continue toggle next to Stop: always visible.
+        self.pause_tool = tool("Pause", "pause", ACCENT_ORANGE, self._toggle_pause,
+                               "Pause or continue grading")
         tool("Grade All", "list", ACCENT_BLUE, self.grade_all_forms_in_all_folders,
              "Find and grade all forms from predefined sources")
         toolbar.addSeparator()
@@ -620,6 +628,9 @@ class AutograderWindow(QMainWindow):
         self.start_action.setEnabled(not running)
         self.stop_action.setEnabled(running)
         self.dashboard.set_running(running)
+        # Session buttons follow the RUNNING/PAUSED state machine.
+        self.dashboard.set_session_state(running, self._session_paused)
+        self._refresh_pause_button()
 
     # ------------------------------------------------------------------
     # Status helpers
@@ -1815,6 +1826,16 @@ class AutograderWindow(QMainWindow):
                     self.append_debug(f"<font color='orange'>[GRADER] Failed to truncate answers for {fid}: {exc}</font>")
 
         grade_recent_only = force_recent_only or ((not force_whole_form) and self.grading_mode == "Recent Only")
+        # New grading session: reset Pause/Stop controls and clear any flags
+        # left by a previous run so the child pipeline starts unblocked.
+        self._session_stop = False
+        self._session_paused = False
+        try:
+            import grading_session
+
+            grading_session.clear_all()
+        except Exception:
+            pass
         self.append_debug(
             f"<font color='blue'>[GRADER] Mode: {'RECENT_ONLY' if grade_recent_only else 'WHOLE_FORM'} · "
             f"forms={len(target_urls) if target_urls is not None else 'all queued'} · "
@@ -2199,10 +2220,23 @@ class AutograderWindow(QMainWindow):
                     }
                 self._save_auto_partial_forms()
 
+    def _should_continue_queued_forms(self) -> bool:
+        """Whether a finished run may be followed by another queued run.
+
+        False once the user pressed Stop: the whole grading session was
+        cancelled and no next form may start.
+        """
+        return not self._session_stop
+
     def _maybe_start_next_after_finish(self):
+        if self._session_stop:
+            self.append_debug("<font color='red'>[GRADING SESSION] Stop requested - next forms will not start</font>")
+            return
         if self.is_grading:
             return
         if self.grader_thread and self.grader_thread.isRunning():
+            return
+        if not self._should_continue_queued_forms():
             return
         queued_urls = []
         seen_ids = set()
@@ -2269,7 +2303,14 @@ class AutograderWindow(QMainWindow):
                     continue
                 seen_ids.add(fid)
                 queued_urls.append(url)
-        if queued_urls:
+        # SESSION GATE: after a user Stop the entire grading session is
+        # cancelled - never auto-start another form.
+        if not self._should_continue_queued_forms():
+            self.append_debug(
+                f"<font color='red'>[{now_str}] [GRADING SESSION] Stop requested - "
+                f"{len(queued_urls)} queued form(s) will NOT start</font>"
+            )
+        elif queued_urls:
             self.append_debug(
                 f"<font color='cyan'>[GRADER] Found {len(queued_urls)} queued form(s) added during execution. Starting next run…</font>"
             )
@@ -2684,7 +2725,72 @@ class AutograderWindow(QMainWindow):
         self.is_searching = False
         self.is_grading = False
 
+    def _toggle_pause(self):
+        if self._session_paused:
+            self.resume_grading()
+        else:
+            self.pause_grading()
+
+    def _refresh_pause_button(self):
+        """Toolbar Pause button: always visible; label follows session state."""
+        tool_btn = getattr(self, "pause_tool", None)
+        if not tool_btn:
+            return
+        if self._session_paused:
+            tool_btn.setText("Continue")
+            tool_btn.setToolTip("Continue grading")
+            tool_btn.setEnabled(True)
+        else:
+            tool_btn.setText("Pause")
+            tool_btn.setToolTip("Pause grading")
+            tool_btn.setEnabled(self.is_grading)
+
+    def pause_grading(self):
+        """Pause the whole grading session (current form + remaining forms)."""
+        if not self.is_grading or self._session_stop:
+            return
+        self._session_paused = True
+        try:
+            import grading_session
+
+            grading_session.request_pause()
+        except Exception:
+            pass
+        now_str = datetime.now().strftime("%H:%M:%S")
+        self.append_debug(f"<font color='orange'>[{now_str}] [GRADING SESSION] Paused - no new grading work will start</font>")
+        self._set_activity("Grading paused", "waiting")
+        self.dashboard.set_session_state(True, True)
+        self._refresh_pause_button()
+
+    def resume_grading(self):
+        """Continue the SAME paused grading session."""
+        if not self._session_paused or self._session_stop:
+            return
+        self._session_paused = False
+        try:
+            import grading_session
+
+            grading_session.clear_pause()
+        except Exception:
+            pass
+        now_str = datetime.now().strftime("%H:%M:%S")
+        self.append_debug(f"<font color='green'>[{now_str}] [GRADING SESSION] Resumed - continuing where we left off</font>")
+        self._set_activity("Grading running", "busy")
+        self.dashboard.set_session_state(True, False)
+        self._refresh_pause_button()
+
     def stop_grading(self):
+        # Session-level stop: prevents ANY follow-on form from starting.
+        self._session_stop = True
+        self._session_paused = False
+        try:
+            import grading_session
+
+            grading_session.request_stop()  # releases paused child workers too
+        except Exception:
+            pass
+        now_str = datetime.now().strftime("%H:%M:%S")
+        self.append_debug(f"<font color='red'>[{now_str}] [GRADING SESSION] Stop requested - cancellation propagating…</font>")
         self.auto_mode = False
         self.append_debug("<b><font color='red'>STOPPING GRADING…</font></b>")
         if self.auto_timer:
@@ -2706,10 +2812,13 @@ class AutograderWindow(QMainWindow):
         self.is_searching = False
         self.is_grading = False
         self._set_run_controls(False)
+        self.dashboard.set_session_state(False, False)
+        self._refresh_pause_button()
         self._set_run_state("Stopped")
         if not self.auto_mode:
             self._set_auto_status("Auto Run: Off", "off")
             self._set_activity("Stopped", "idle")
+        self.append_debug("<font color='red'>[GRADING SESSION] Stopped - remaining forms will not start</font>")
 
     # ------------------------------------------------------------------
     # Telemetry ingestion (console lines -> structured state)

@@ -73,6 +73,8 @@ class DashboardPage(QWidget):
     review_clicked = Signal()
     run_clicked = Signal()
     stop_clicked = Signal()
+    pause_clicked = Signal()
+    resume_clicked = Signal()
     add_sources_clicked = Signal()
     scan_clicked = Signal()
     schedule_clicked = Signal()
@@ -185,11 +187,19 @@ class DashboardPage(QWidget):
         self.stop_button = QPushButton("Stop")
         self.stop_button.setObjectName("Danger")
         self.stop_button.hide()
+        self.pause_button = QPushButton("Pause")
+        self.pause_button.setObjectName("Secondary")
+        self.pause_button.hide()
+        self.continue_button = QPushButton("Continue")
+        self.continue_button.setObjectName("Primary")
+        self.continue_button.hide()
         self.add_button = QPushButton("Add sources")
         self.scan_button = QPushButton("Scan source")
         self.schedule_button = QPushButton("Schedule runs")
         controls.addWidget(self.run_button)
         controls.addWidget(self.stop_button)
+        controls.addWidget(self.pause_button)
+        controls.addWidget(self.continue_button)
         controls.addWidget(self.add_button)
         controls.addWidget(self.scan_button)
         controls.addWidget(self.schedule_button)
@@ -198,6 +208,8 @@ class DashboardPage(QWidget):
 
         self.run_button.clicked.connect(self.run_clicked)
         self.stop_button.clicked.connect(self.stop_clicked)
+        self.pause_button.clicked.connect(self.pause_clicked)
+        self.continue_button.clicked.connect(self.resume_clicked)
         self.add_button.clicked.connect(self.add_sources_clicked)
         self.scan_button.clicked.connect(self.scan_clicked)
         self.schedule_button.clicked.connect(self.schedule_clicked)
@@ -361,6 +373,19 @@ class DashboardPage(QWidget):
     def set_running(self, running):
         self.run_button.setVisible(not running)
         self.stop_button.setVisible(running)
+
+    def set_session_state(self, running: bool, paused: bool):
+        """Button states for RUNNING / PAUSED / idle.
+
+        RUNNING: Stop+Pause enabled, Continue hidden
+        PAUSED:  Stop+Continue enabled, Pause disabled
+        idle:    only Start visible
+        """
+        self.set_running(running)
+        self.pause_button.setVisible(running and not paused)
+        self.pause_button.setEnabled(running and not paused)
+        self.continue_button.setVisible(running and paused)
+        self.continue_button.setEnabled(running and paused)
 
     def append_console(self, html):
         self.console.append(html)

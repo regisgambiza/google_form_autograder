@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
+import grading_session
+
 from auth import get_service
 from ai_judges import (
     configure_model_progress,
@@ -634,6 +636,19 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                 if item is None:
                     fetch_done = True
                     continue
+                # Session control at the FORM boundary: a stop here prevents
+                # every remaining form in this run from starting.
+                if grading_session.is_stop_requested():
+                    log("WARNING", "[GRADING SESSION] Stop requested - remaining forms will not start")
+                    while True:
+                        try:
+                            leftover = fetch_out.get_nowait()
+                        except queue.Empty:
+                            break
+                        if leftover is None:
+                            break
+                    break
+                grading_session.wait_if_paused()
                 i = item["idx"]
                 form_id = item["form_id"]
                 title = item["title"]
@@ -1104,6 +1119,12 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
         log("INFO", "[Worker: Deterministic] START det_worker")
         force_ai_for_all = bool(cfg.get("force_ai_jury_for_all_answers", False))
         while not stop.is_set():
+            if grading_session.is_stop_requested():
+                log("INFO", "[GRADING SESSION] Stop requested - deterministic worker exiting")
+                break
+            grading_session.wait_if_paused()
+            if stop.is_set():
+                break
             try:
                 t = det_q.get(timeout=1)
             except queue.Empty:
@@ -1204,6 +1225,9 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                 started = time.perf_counter()
                 try:
                     batch_results = evaluate_question_batch_bounded(batch, provider_hint=hint_for_run)
+                except grading_session.GradingSessionStopped:
+                    log("WARNING", "[GRADING SESSION] Stop requested - batch aborted mid-jury")
+                    raise
                 except Exception as exx:
                     log("ERROR", f"[DISPATCH] batch ai worker error: {exx}")
                     batch_results = []
@@ -1248,6 +1272,14 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
                 update_runtime_state(active_task="", active_model="idle", active_since=0.0)
 
             while not stop.is_set():
+                # Session control: stop exits the lane; pause holds new work
+                # (in-flight requests may finish, nothing new starts).
+                if grading_session.is_stop_requested():
+                    _lane_log(lane_provider, "Stop requested - lane exiting", "WARNING")
+                    break
+                grading_session.wait_if_paused()
+                if stop.is_set():
+                    break
                 # Independent failure domains: an unhealthy OWN lane waits for
                 # recovery instead of stealing work from healthy lanes, but a
                 # lane failure never touches other lanes or the run itself.
@@ -1370,6 +1402,12 @@ def run_global_dispatcher(form_urls: List[str], grade_recent_only: bool, generat
             return
 
         while not stop.is_set():
+            if grading_session.is_stop_requested():
+                log("INFO", "[GRADING SESSION] Stop requested - AI worker exiting")
+                return
+            grading_session.wait_if_paused()
+            if stop.is_set():
+                return
             try:
                 t = ai_q.get(timeout=1)
             except queue.Empty:

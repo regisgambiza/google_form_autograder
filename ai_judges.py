@@ -17,6 +17,7 @@ import requests
 import ollama
 
 from evaluator_config import configured_provider_names, load_config
+import grading_session
 from logger import log, update_runtime_state
 from ollama_diagnostics import log_post_inference_gpu_probe_once
 from ollama_options import build_ollama_options
@@ -309,6 +310,19 @@ def _unavailable_model_label(role: str, requested_model: object) -> str:
 def _provider_schema(payload: Dict[str, object]) -> Optional[Dict[str, object]]:
     fmt = payload.get("format")
     return fmt if isinstance(fmt, dict) else None
+
+
+def _session_gate() -> None:
+    """Pause/Stop checkpoint for long-running jury work.
+
+    PAUSE: blocks until resumed (no work lost, current call may finish).
+    STOP : raises grading_session.GradingSessionStopped immediately.
+    """
+    if grading_session.is_stop_requested():
+        raise grading_session.GradingSessionStopped("Stop requested")
+    grading_session.wait_if_paused()
+    if grading_session.is_stop_requested():
+        raise grading_session.GradingSessionStopped("Stop requested")
 
 
 def _lane_request_metadata(
@@ -1332,6 +1346,7 @@ def run_judges_model_first(
             _model_progress_extend(actual_units - planned_units, reason=f"{role}:{batch_provider}")
         if batch_size <= 1:
             for answer in role_answers:
+                _session_gate()
                 avoid_models = avoid_models_for_chunk([answer])
                 result = call_judge_role_sync(
                     role,
@@ -1361,6 +1376,7 @@ def run_judges_model_first(
                     pass
             return completed_units
         for chunk in _chunked(role_answers, batch_size):
+            _session_gate()
             avoid_models = avoid_models_for_chunk(chunk)
             batch_results = call_judge_role_batch_sync(
                 role,
@@ -1409,6 +1425,7 @@ def run_judges_model_first(
         ))
 
         for role in primary_roles:
+            _session_gate()
             log("INFO", f"[JUDGES] Model-first role START role={role} answers={len(answers)}")
             run_role_for_answers(role, answers)
             log("INFO", f"[JUDGES] Model-first role DONE role={role}")
@@ -1433,6 +1450,7 @@ def run_judges_model_first(
                 needs_adjudication.append(answer)
 
         if needs_adjudication and adjudicator_role in roles:
+            _session_gate()
             log("INFO", f"[JUDGES] Model-first adjudicator START role={adjudicator_role} answers={len(needs_adjudication)}")
             actual_units = run_role_for_answers(adjudicator_role, needs_adjudication)
             reserved_units = len(answers)
@@ -1445,6 +1463,7 @@ def run_judges_model_first(
         return out
 
     for role in roles:
+        _session_gate()
         log("INFO", f"[JUDGES] Model-first role START role={role} answers={len(answers)}")
         run_role_for_answers(role, answers)
         log("INFO", f"[JUDGES] Model-first role DONE role={role}")
