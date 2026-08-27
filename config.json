@@ -14,8 +14,8 @@
     },
     "embedding_model": "mxbai-embed-large",
     "reasoning_model": "phi4:14b",
-    "leniency": "strict",
-    "grading_strictness": "strict",
+    "leniency": "balanced",
+    "grading_strictness": "balanced",
     "leniency_note": "options: extreme, lenient, balanced, strict",
     "evaluator": "ai_evaluator_semantic",
     "generate_report": false,
@@ -249,7 +249,7 @@
     },
     "enable_pipeline_workers": true,
     "deterministic_worker_count": 4,
-    "ai_worker_count": 1,
+    "ai_worker_count": 12,
     "worker_queue_size": 1200,
     "global_prefetch_mode": true,
     "dispatch_mode": "global",
@@ -270,7 +270,7 @@
     "adaptive_target_latency_ms": 15000,
     "adaptive_timeout_rate_threshold": 0.2,
     "adaptive_chunk_size": 12,
-    "max_concurrent_jury_answers": 1,
+    "max_concurrent_jury_answers": 12,
     "jury_semaphore_acquire_timeout_seconds": 21600,
     "enable_async_judges": false,
     "sync_judge_parallelism": 4,
@@ -363,7 +363,7 @@
     "dark_mode": false,
     "auto_run": {
         "grading_mode": "Recent Only",
-        "recency_value": 5,
+        "recency_value": 23,
         "recency_unit": "hours",
         "interval_value": 5,
         "interval_unit": "minutes",
@@ -384,5 +384,9 @@
     },
     "concurrent_forms": 1,
     "provider_timeout_circuit_failure_threshold": 18,
+    "dual_lane": {
+        "openrouter_ai_worker_count": 10,
+        "llamacpp_ai_worker_count": 2
+    },
     "rubric_timeout_seconds": 3600
 }
